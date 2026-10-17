@@ -22,6 +22,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 - `docker-compose.yml` mounts `./upgrade` for the upgrade agent.
+- Releases are automatic: merging a PR that bumps `VERSION` makes CI publish the versioned
+  image, the git tag and the GitHub Release (no manual tagging).
 - Dependabot ignores major-version bumps (and Python/Node base-image minor bumps), which are
   planned deliberately instead.
 
