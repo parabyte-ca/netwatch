@@ -179,6 +179,8 @@ class PathTester:
         self._last_auto: dict[str, float] = {}
         self._tasks: set[asyncio.Task] = set()
         self._loop_task: asyncio.Task | None = None
+        # Called (in a worker thread) with every stored result, e.g. the double-NAT check.
+        self.on_result: list[Callable[[dict], None]] = []
 
     @property
     def running(self) -> bool:
@@ -231,7 +233,13 @@ class PathTester:
                     path_changed=changed,
                     **summarise(hops),
                 )
-        return await asyncio.to_thread(self.store.insert, row)
+        stored = await asyncio.to_thread(self.store.insert, row)
+        for hook in self.on_result:
+            try:
+                await asyncio.to_thread(hook, stored)
+            except Exception:
+                log.exception("path test hook failed")
+        return stored
 
     def trigger_for_outage(self, spec: TargetSpec, event_id: int) -> None:
         """Fire-and-forget path test when a target goes down (rate-limited per host)."""

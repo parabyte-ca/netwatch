@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-10-17
+### Added
+- Passive device discovery from ARP, DHCP, mDNS and SSDP broadcasts and the host ARP cache,
+  with an in-kernel packet filter so only those packets reach NetWatch.
+- Opt-in active scanning: ARP sweep of the local private subnet (rate-limited, max /22), a
+  DHCP server probe, SSDP and mDNS queries and reverse DNS via the gateway; scheduled or on
+  demand.
+- Device inventory: vendor (offline IEEE registry), names, model, advertised services,
+  explainable type guess, IP history, online/last seen; merging of randomised MACs by
+  hostname plus manual merge/split; rename, type override, notes; one-click monitoring with a
+  ping target that follows the device's IP.
+- Anomaly events: duplicate IP, more than one DHCP server, ARP storm, gateway MAC change,
+  repeated DHCP rejoins, frequent IP changes, double NAT and carrier-grade NAT (from path
+  tests), resolver disagreement and NXDOMAIN rewriting. "New device" events after a one-hour
+  learning period.
+- Devices page and device detail page; anomaly and device events on the Timeline, with an
+  evidence section and a hint about the usual cause.
+
+### Changed
+- The CI image smoke test also checks raw packet capture with the kernel filter and the
+  vendor registry inside the hardened container.
+
 ## [0.3.0] - 2026-10-17
 ### Added
 - Outage detection with hysteresis (3 failures to declare down, 3 successes to recover) and a

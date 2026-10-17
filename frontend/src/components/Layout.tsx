@@ -26,6 +26,9 @@ export function Layout() {
             <NavLink to="/targets" className={link}>
               Targets
             </NavLink>
+            <NavLink to="/devices" className={link}>
+              Devices
+            </NavLink>
             <NavLink to="/timeline" className={link}>
               Timeline
             </NavLink>

@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     nic_interfaces: str = ""
     nic_poll_s: float = Field(default=2.0, ge=0.5, le=60)
     sysfs_root: Path = Path("/sys")
+    proc_root: Path = Path("/proc")
 
     # Path tests (mtr). Scheduled runs cover the "public" targets; 0 disables the schedule.
     path_test_interval_min: int = Field(default=15, ge=0, le=1440)
@@ -68,6 +69,23 @@ class Settings(BaseSettings):
 
     # Throughput tests (iperf3).
     throughput_retention_days: int = Field(default=365, ge=7, le=3650)
+
+    # Discovery. Passive capture (ARP/DHCP/mDNS/SSDP) is on by default; active scanning (ARP
+    # sweep, DHCP server probe, SSDP/mDNS queries, reverse DNS) only when switched on in the UI
+    # (this is the initial value). Subnets default to the capture interface's own network.
+    discovery_passive: bool = True
+    discovery_active: bool = False
+    discovery_interface: str = ""
+    discovery_subnets: str = ""
+    discovery_scan_interval_min: int = Field(default=60, ge=15, le=10080)
+    discovery_scan_rate_pps: int = Field(default=50, ge=1, le=500)
+    arp_storm_pps: int = Field(default=100, ge=10, le=100000)
+    dns_check_interval_min: int = Field(default=30, ge=0, le=1440)
+    device_retention_days: int = Field(default=365, ge=7, le=3650)
+
+    @property
+    def discovery_subnet_list(self) -> list[str]:
+        return [i.strip() for i in self.discovery_subnets.split(",") if i.strip()]
 
     @property
     def nic_interface_list(self) -> list[str]:

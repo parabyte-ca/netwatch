@@ -1,5 +1,7 @@
 import { Route, Routes } from 'react-router-dom';
 import { Layout } from './components/Layout';
+import { DeviceDetail } from './pages/DeviceDetail';
+import { Devices } from './pages/Devices';
 import { Diagnostics } from './pages/Diagnostics';
 import { EventDetail } from './pages/EventDetail';
 import { Overview } from './pages/Overview';
@@ -15,6 +17,8 @@ export function App() {
         <Route index element={<Overview />} />
         <Route path="targets" element={<Targets />} />
         <Route path="targets/:id" element={<TargetDetail />} />
+        <Route path="devices" element={<Devices />} />
+        <Route path="devices/:id" element={<DeviceDetail />} />
         <Route path="timeline" element={<Timeline />} />
         <Route path="events/:id" element={<EventDetail />} />
         <Route path="diagnostics" element={<Diagnostics />} />

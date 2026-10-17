@@ -163,7 +163,15 @@ export interface UpdateSummary {
   rollback_available: boolean;
 }
 
-export type EventKind = 'outage' | 'degraded' | 'nic_link' | 'nic_speed' | 'nic_errors' | 'monitor';
+export type EventKind =
+  | 'outage'
+  | 'degraded'
+  | 'nic_link'
+  | 'nic_speed'
+  | 'nic_errors'
+  | 'monitor'
+  | 'anomaly'
+  | 'device';
 
 export interface TimelineEvent {
   id: number;
@@ -256,6 +264,120 @@ export interface ThroughputTest {
   retransmits: number | null;
   error: string | null;
 }
+
+export type DeviceType =
+  | 'router'
+  | 'access_point'
+  | 'network'
+  | 'nas'
+  | 'server'
+  | 'computer'
+  | 'phone'
+  | 'tablet'
+  | 'tv'
+  | 'media_player'
+  | 'speaker'
+  | 'printer'
+  | 'camera'
+  | 'game_console'
+  | 'iot'
+  | 'unknown';
+
+export interface DeviceRow {
+  id: number;
+  mac: string;
+  vendor: string | null;
+  randomised: boolean;
+  name: string | null;
+  hostname: string | null;
+  mdns_name: string | null;
+  model: string | null;
+  type: DeviceType;
+  type_auto: DeviceType;
+  type_reason: string | null;
+  type_override: DeviceType | null;
+  merged_into: number | null;
+  target_id: number | null;
+  first_seen_ms: number;
+  last_seen_ms: number;
+  last_ip: string | null;
+  notes: string | null;
+  details: {
+    sources?: string[];
+    services?: string[];
+    ssdp?: string[];
+    friendly?: string;
+    ptr?: string;
+    dhcp_vendor?: string;
+    dhcp_server?: boolean;
+  };
+  label: string;
+  online: boolean;
+  macs: string[];
+}
+
+export interface DeviceMember {
+  id: number;
+  mac: string;
+  vendor: string | null;
+  randomised: boolean;
+  hostname: string | null;
+  first_seen_ms: number;
+  last_seen_ms: number;
+  last_ip: string | null;
+  merged_into: number | null;
+}
+
+export interface DeviceDetail {
+  device: DeviceRow;
+  members: DeviceMember[];
+  ips: { device_id: number; ip: string; first_seen_ms: number; last_seen_ms: number; source: string }[];
+  target: Target | null;
+  events: TimelineEvent[];
+}
+
+export interface DiscoveryScan {
+  trigger: string;
+  started_ms: number;
+  finished_ms?: number;
+  networks?: string[];
+  hosts?: number;
+  notes?: string[];
+  errors?: string[];
+  error?: string;
+  reverse_dns_names?: number;
+}
+
+export interface DiscoveryStatus {
+  interface: string | null;
+  address: string | null;
+  passive: {
+    enabled: boolean;
+    running: boolean;
+    error: string | null;
+    frames: number;
+    dropped: number;
+    packets: Record<string, number>;
+    arp_pps: number;
+  };
+  active: {
+    enabled: boolean;
+    interval_min: number;
+    rate_pps: number;
+    networks: string[];
+    notes: string[];
+    scanning: boolean;
+    unavailable: string | null;
+    last_scan: DiscoveryScan | null;
+  };
+  gateway: { ip: string | null; mac: string | null };
+  dhcp_servers: { ip: string; mac: string; vendor: string | null; last_seen_ms: number }[];
+  dns_check: { ts_ms: number; resolvers: string[]; findings: string[] } | null;
+  learning_until_ms: number | null;
+  devices: { total: number; online: number };
+}
+
+export type DeviceEdit = Partial<Pick<DeviceRow, 'name' | 'type_override' | 'notes'>>;
 
 export class ApiError extends Error {
   constructor(
@@ -354,6 +476,20 @@ export const api = {
   deleteIperfServer: (id: number) => request<void>(`/api/iperf/servers/${id}`, { method: 'DELETE' }),
   runIperf: (id: number) => request<ThroughputTest[]>(`/api/iperf/servers/${id}/run`, post()),
   iperfTests: () => request<ThroughputTest[]>('/api/iperf/tests'),
+  devices: (q?: string) =>
+    request<{ now_ms: number; devices: DeviceRow[] }>(`/api/devices${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+  device: (id: number) => request<DeviceDetail>(`/api/devices/${id}`),
+  editDevice: (id: number, body: DeviceEdit) =>
+    request<DeviceDetail>(`/api/devices/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  mergeDevice: (id: number, into: number) => request<DeviceDetail>(`/api/devices/${id}/merge`, post({ into })),
+  unmergeDevice: (id: number) => request<DeviceDetail>(`/api/devices/${id}/unmerge`, post()),
+  monitorDevice: (id: number) => request<DeviceDetail>(`/api/devices/${id}/monitor`, post()),
+  unmonitorDevice: (id: number) => request<DeviceDetail>(`/api/devices/${id}/monitor`, { method: 'DELETE' }),
+  forgetDevice: (id: number) => request<void>(`/api/devices/${id}`, { method: 'DELETE' }),
+  discovery: () => request<DiscoveryStatus>('/api/discovery'),
+  setDiscovery: (active: boolean) =>
+    request<DiscoveryStatus>('/api/discovery', { method: 'PUT', body: JSON.stringify({ active }) }),
+  scanNow: () => request<DiscoveryScan>('/api/discovery/scan', post()),
   upgradeLog: async () => {
     const res = await fetch('/api/updates/log', { credentials: 'same-origin' });
     if (!res.ok) throw new ApiError(res.status, `${res.status}`);

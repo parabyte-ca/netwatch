@@ -50,8 +50,11 @@ def test_settings(tmp_path, **over) -> Settings:
         "seed_defaults": False,
         "update_check": False,
         "sysfs_root": tmp_path / "sys",
+        "proc_root": tmp_path / "proc",
         "path_test_interval_min": 0,
         "path_test_on_outage": False,
+        "discovery_passive": False,
+        "dns_check_interval_min": 0,
         "log_format": "text",
         "flush_interval_s": 0.05,
     }

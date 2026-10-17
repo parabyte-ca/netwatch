@@ -1,5 +1,6 @@
 import { Link, useParams } from 'react-router-dom';
 import { EventRow } from '../components/EventRow';
+import { Evidence } from '../components/Evidence';
 import { HopTable } from '../components/HopTable';
 import { SmokeChart } from '../components/SmokeChart';
 import { api } from '../lib/api';
@@ -20,7 +21,12 @@ export function EventDetail() {
   if (error) return <p className="text-rose-400">{error}</p>;
   if (!data) return <p className="text-slate-500">Loading…</p>;
   const ev = data.event;
-  const details = Object.entries(ev.details).filter(([, v]) => v !== null && v !== '' && typeof v !== 'object');
+  const details = Object.entries(ev.details).filter(
+    ([k, v]) => k !== 'hint' && v !== null && v !== '' && typeof v !== 'object',
+  );
+  const structured = Object.entries(ev.details).filter(([, v]) => v !== null && typeof v === 'object');
+  const hint = typeof ev.details.hint === 'string' ? ev.details.hint : null;
+  const deviceId = typeof ev.details.device_id === 'number' ? ev.details.device_id : null;
 
   return (
     <div className="space-y-5">
@@ -37,6 +43,12 @@ export function EventDetail() {
           {ev.open ? <span className="text-rose-300">ongoing</span> : ev.end_ms === ev.start_ms ? 'instant' : fmtDurationMs(ev.duration_ms)}
           {data.target && <> · <Link to={`/targets/${data.target.id}`} className="text-sky-400 hover:underline">{data.target.name}</Link></>}
         </p>
+        {hint && <p className="mt-2 max-w-3xl rounded-md bg-slate-900 p-3 text-sm text-slate-300 ring-1 ring-slate-800">{hint}</p>}
+        {deviceId && (
+          <p className="mt-1 text-sm">
+            <Link to={`/devices/${deviceId}`} className="text-sky-400 hover:underline">Open device</Link>
+          </p>
+        )}
         {details.length > 0 && (
           <dl className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs">
             {details.map(([k, v]) => (
@@ -45,6 +57,13 @@ export function EventDetail() {
           </dl>
         )}
       </div>
+
+      {structured.length > 0 && (
+        <section className="rounded-lg bg-slate-900 p-3 ring-1 ring-slate-800" aria-label="Evidence">
+          <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-400">Evidence</h2>
+          <Evidence items={structured} />
+        </section>
+      )}
 
       {series.data && series.data.summary.count > 0 && (
         <section className="rounded-lg bg-slate-900/70 p-3 ring-1 ring-slate-800" aria-label="Latency around the event">
@@ -56,7 +75,9 @@ export function EventDetail() {
       <section className="rounded-lg bg-slate-900 p-3 ring-1 ring-slate-800" aria-label="Failing at the same time">
         <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-400">Failing at the same time (±5 min)</h2>
         {data.concurrent_failures.length ? data.concurrent_failures.map((e) => <EventRow key={e.id} ev={e} compact />) : (
-          <p className="text-sm text-slate-500">Nothing else failed: the problem is specific to this target or its path.</p>
+          <p className="text-sm text-slate-500">
+            {data.target ? 'Nothing else failed: the problem is specific to this target or its path.' : 'No outages or packet loss around this time.'}
+          </p>
         )}
       </section>
 

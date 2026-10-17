@@ -18,11 +18,13 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from . import __version__
 from .api import auth as auth_api
-from .api import health, monitoring, system, targets, updates
+from .api import devices, health, monitoring, system, targets, updates
 from .auth import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, AuthStore, LoginThrottle
 from .config import Settings, get_settings
 from .db import make_engine, run_migrations
 from .probes import Prober
+from .services.discovery.inventory import DeviceStore
+from .services.discovery.service import DiscoveryService
 from .services.events import MONITOR, EventLog, IncidentRecorder, startup_events
 from .services.metrics import Metrics
 from .services.netinfo import default_route
@@ -95,6 +97,11 @@ def create_app(
         )
         throughput_store = ThroughputStore(engine)
         throughput = ThroughputTester(throughput_store)
+        device_store = DeviceStore(engine)
+        discovery = DiscoveryService(
+            settings, store, events, device_store, on_targets_changed=monitor.reload
+        )
+        path_tester.on_result.append(discovery.anomalies.check_path)
 
         def purge_extra(now: float) -> dict:
             now_ms, day_ms = int(now * 1000), 86_400_000
@@ -105,6 +112,10 @@ def create_app(
                     now_ms - settings.throughput_retention_days * day_ms
                 ),
                 "nic_minutes": nic_store.purge(int(now) - settings.rollup_retention_days * 86400),
+                "devices": device_store.purge(now_ms - settings.device_retention_days * day_ms),
+                "device_ips": device_store.purge_ips(
+                    now_ms - settings.device_retention_days * day_ms
+                ),
             }
 
         monitor.purge_hooks.append(purge_extra)
@@ -128,6 +139,8 @@ def create_app(
         app.state.path_tester = path_tester
         app.state.throughput_store = throughput_store
         app.state.throughput = throughput
+        app.state.device_store = device_store
+        app.state.discovery = discovery
         app.state.auth = AuthStore(engine)
         app.state.login_throttle = LoginThrottle()
         app.state.updates = UpdateManager(settings, store, client=update_client)
@@ -138,12 +151,14 @@ def create_app(
         nic.start()
         path_tester.start_schedule(path_test_targets, settings.path_test_interval_min)
         throughput.start_schedule()
+        await discovery.start()
         app.state.updates.start()
         log.info("netwatch started", extra={"version": __version__, "port": settings.port})
         try:
             yield
         finally:
             await app.state.updates.stop()
+            await discovery.stop()
             await throughput.stop()
             await path_tester.stop()
             await nic.stop()
@@ -206,6 +221,7 @@ def create_app(
     app.include_router(targets.router)
     app.include_router(updates.router)
     app.include_router(monitoring.router)
+    app.include_router(devices.router)
 
     if settings.metrics_enabled:
 

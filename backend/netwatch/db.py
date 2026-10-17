@@ -201,6 +201,42 @@ throughput_tests = Table(
     Column("details", Text, nullable=False, default="{}"),
 )
 
+# Discovered devices, one row per MAC. Randomised (private) MACs of one phone are linked to a
+# primary row through merged_into. target_id is set while the device is being monitored.
+devices = Table(
+    "devices",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("mac", String(17), nullable=False, unique=True),
+    Column("vendor", String(64)),
+    Column("randomised", Boolean, nullable=False, default=False),
+    Column("name", String(64)),  # user label
+    Column("hostname", String(64)),  # DHCP option 12
+    Column("mdns_name", String(64)),
+    Column("model", String(64)),
+    Column("type", String(16), nullable=False, default="unknown"),
+    Column("type_reason", String(120)),
+    Column("type_override", String(16)),
+    Column("merged_into", Integer, ForeignKey("devices.id", ondelete="SET NULL")),
+    Column("target_id", Integer, ForeignKey("targets.id", ondelete="SET NULL")),
+    Column("first_seen_ms", Integer, nullable=False),
+    Column("last_seen_ms", Integer, nullable=False),
+    Column("last_ip", String(15)),
+    Column("notes", String(500)),
+    Column("details", Text, nullable=False, default="{}"),
+)
+
+device_ips = Table(
+    "device_ips",
+    metadata,
+    Column("device_id", Integer, ForeignKey("devices.id", ondelete="CASCADE"), primary_key=True),
+    Column("ip", String(15), primary_key=True),
+    Column("first_seen_ms", Integer, nullable=False),
+    Column("last_seen_ms", Integer, nullable=False),
+    Column("source", String(8), nullable=False),
+    sqlite_with_rowid=False,
+)
+
 Index("ix_samples_ts", samples.c.ts_ms)
 Index("ix_rollup_1m_ts", rollup_1m.c.bucket_ts)
 Index("ix_sessions_user", sessions.c.user_id)
@@ -210,6 +246,8 @@ Index("ix_nic_stats_ts", nic_stats.c.bucket_ts)
 Index("ix_path_tests_ts", path_tests.c.ts_ms)
 Index("ix_path_tests_host", path_tests.c.host)
 Index("ix_throughput_tests_ts", throughput_tests.c.ts_ms)
+Index("ix_devices_last_seen", devices.c.last_seen_ms)
+Index("ix_device_ips_ip", device_ips.c.ip)
 
 
 def _set_pragmas(dbapi_conn, _record) -> None:
