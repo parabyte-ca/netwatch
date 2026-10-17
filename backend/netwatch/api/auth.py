@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field, field_validator
 
 from ..auth import COOKIE_NAME, AuthStore, LoginThrottle, password_problem
+from ..services.events import SECURITY
 
 router = APIRouter(prefix="/api/auth")
 
@@ -45,6 +47,23 @@ def _set_cookie(request: Request, response: Response, token: str) -> None:
         samesite="strict",
         secure=s.cookie_secure,
         path="/",
+    )
+
+
+async def security_event(
+    request: Request, severity: str, title: str, details: dict | None = None
+) -> None:
+    """Record a sign-in / admin action on the timeline (kind "security")."""
+    events = getattr(request.app.state, "events", None)
+    if events is None:
+        return
+    await asyncio.to_thread(
+        events.instant,
+        SECURITY,
+        severity,
+        int(time.time() * 1000),
+        title,
+        details={"client": _client(request), **(details or {})},
     )
 
 
@@ -96,6 +115,7 @@ async def login(body: Credentials, request: Request, response: Response) -> dict
     throttle: LoginThrottle = request.app.state.login_throttle
     key = _client(request)
     if wait := throttle.retry_after(key):
+        await security_event(request, "warning", "Sign-in refused: client locked out")
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
             f"too many failed attempts; try again in {wait} s",
@@ -104,8 +124,16 @@ async def login(body: Credentials, request: Request, response: Response) -> dict
     user = await asyncio.to_thread(_store(request).authenticate, body.username, body.password)
     if user is None:
         throttle.failure(key)
+        locked = throttle.retry_after(key) > 0
+        await security_event(
+            request,
+            "warning",
+            "Failed sign-in; client locked out" if locked else "Failed sign-in",
+            {"username": body.username},
+        )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid username or password")
     throttle.success(key)
+    await security_event(request, "info", f"{user.username} signed in")
     await _new_session(request, response, user.user_id)
     return {"username": user.username}
 
@@ -130,5 +158,6 @@ async def change_password(body: PasswordChange, request: Request, response: Resp
     if problem := password_problem(body.new_password):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
     await asyncio.to_thread(store.set_password, user.user_id, body.new_password)
+    await security_event(request, "info", f"{user.username} changed their password")
     await _new_session(request, response, user.user_id)
     return {"username": user.username}

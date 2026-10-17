@@ -153,21 +153,23 @@ export function DeviceDetail() {
       </div>
 
       <Section title="IP address history">
-        <table className="w-full text-sm">
-          <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
-            <tr><th className="py-1">Address</th><th>First seen</th><th>Last seen</th><th>Learnt from</th></tr>
-          </thead>
-          <tbody>
-            {data.ips.map((ip) => (
-              <tr key={`${ip.device_id}-${ip.ip}`} className="border-t border-slate-800">
-                <td className="py-1 font-mono text-xs text-slate-200">{ip.ip}</td>
-                <td className="text-xs text-slate-400">{fmtTime(ip.first_seen_ms)}</td>
-                <td className="text-xs text-slate-400">{fmtTime(ip.last_seen_ms)}</td>
-                <td className="text-xs text-slate-500">{ip.source}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
+              <tr><th className="py-1">Address</th><th>First seen</th><th>Last seen</th><th>Learnt from</th></tr>
+            </thead>
+            <tbody>
+              {data.ips.map((ip) => (
+                <tr key={`${ip.device_id}-${ip.ip}`} className="border-t border-slate-800">
+                  <td className="py-1 font-mono text-xs text-slate-200">{ip.ip}</td>
+                  <td className="text-xs text-slate-400">{fmtTime(ip.first_seen_ms)}</td>
+                  <td className="text-xs text-slate-400">{fmtTime(ip.last_seen_ms)}</td>
+                  <td className="text-xs text-slate-500">{ip.source}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         {data.ips.length === 0 && <p className="text-sm text-slate-500">No address seen yet.</p>}
       </Section>
 

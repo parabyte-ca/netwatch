@@ -23,4 +23,8 @@
     max-width: none !important;
     padding: 0 !important;
   }
+  /* tables scroll sideways on phones; on paper they must print in full */
+  .overflow-x-auto {
+    overflow: visible !important;
+  }
 }

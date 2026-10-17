@@ -28,18 +28,20 @@ export function Evidence({ items }: { items: [string, unknown][] }) {
           return (
             <div key={k}>
               <h3 className="mb-1 text-slate-500">{label(k)}</h3>
-              <table className="w-full max-w-3xl">
-                <thead className="text-left text-slate-500">
-                  <tr>{cols.map((c) => <th key={c} className="pr-4 font-normal">{label(c)}</th>)}</tr>
-                </thead>
-                <tbody>
-                  {rows.map((r, i) => (
-                    <tr key={i} className="border-t border-slate-800 text-slate-200">
-                      {cols.map((c) => <td key={c} className="py-0.5 pr-4 font-mono"><Value k={c} v={r[c] ?? null} /></td>)}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="overflow-x-auto">
+                <table className="w-full max-w-3xl">
+                  <thead className="text-left text-slate-500">
+                    <tr>{cols.map((c) => <th key={c} className="pr-4 font-normal">{label(c)}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r, i) => (
+                      <tr key={i} className="border-t border-slate-800 text-slate-200">
+                        {cols.map((c) => <td key={c} className="py-0.5 pr-4 font-mono"><Value k={c} v={r[c] ?? null} /></td>)}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           );
         }

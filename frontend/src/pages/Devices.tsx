@@ -129,7 +129,7 @@ export function Devices() {
       {status.error && <p className="text-rose-400">{status.error}</p>}
 
       <div className="flex flex-wrap items-center gap-3">
-        <input aria-label="Search devices" placeholder="Search name, IP, MAC, vendor…" className={`${input} w-64`}
+        <input aria-label="Search devices" placeholder="Search name, IP, MAC, vendor…" className={`${input} w-full sm:w-64`}
           value={q} onChange={(e) => setQ(e.target.value)} />
         <select aria-label="Type" className={input} value={type} onChange={(e) => setType(e.target.value)}>
           <option value="">All types</option>
@@ -147,9 +147,9 @@ export function Devices() {
           <thead className="bg-slate-900 text-left text-xs uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-3 py-2">Device</th>
-              <th className="px-3 py-2">Type</th>
+              <th className="hidden px-3 py-2 sm:table-cell">Type</th>
               <th className="px-3 py-2">IP</th>
-              <th className="px-3 py-2">MAC / vendor</th>
+              <th className="hidden px-3 py-2 md:table-cell">MAC / vendor</th>
               <th className="px-3 py-2 text-right">Last seen</th>
             </tr>
           </thead>
@@ -164,12 +164,16 @@ export function Devices() {
                     {d.target_id && <span className="rounded bg-sky-900/60 px-1.5 text-[10px] text-sky-200">monitored</span>}
                   </div>
                   {names(d) && <div className="ml-4 text-xs text-slate-500">{names(d)}</div>}
+                  <div className="ml-4 text-xs text-slate-500 sm:hidden">
+                    {DEVICE_TYPE_LABEL[d.type] ?? d.type}
+                    {d.vendor ? ` · ${d.vendor}` : ''}
+                  </div>
                 </td>
-                <td className="px-3 py-2 text-slate-300" title={d.type_override ? 'set by you' : d.type_reason ?? undefined}>
+                <td className="hidden px-3 py-2 text-slate-300 sm:table-cell" title={d.type_override ? 'set by you' : d.type_reason ?? undefined}>
                   {DEVICE_TYPE_LABEL[d.type] ?? d.type}
                 </td>
                 <td className="px-3 py-2 font-mono text-xs text-slate-300">{d.last_ip ?? '—'}</td>
-                <td className="px-3 py-2 text-xs">
+                <td className="hidden px-3 py-2 text-xs md:table-cell">
                   <span className="font-mono text-slate-400">{d.macs[0]}</span>
                   {d.macs.length > 1 && <span className="text-slate-500"> +{d.macs.length - 1}</span>}
                   <div className="text-slate-500">{d.vendor ?? (d.randomised ? 'Private (randomised) address' : 'Unknown vendor')}</div>

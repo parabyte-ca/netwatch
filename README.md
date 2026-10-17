@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.5.0-blue)
+![Version](https://img.shields.io/badge/version-0.6.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -13,8 +13,8 @@ a daily update check against GitHub (which can be switched off).
 Built in phases: **v0.1** probes, storage and graphs; **v0.2** sign-in and web/automatic
 updates; **v0.3** outage detection, an event timeline, TrueNAS NIC telemetry, mtr path tests
 and iperf3 throughput tests; **v0.4** device discovery, an inventory and network anomaly
-alerts; **v0.5 (this release)** the root-cause diagnosis engine and an incident report for Bell.
-The full admin panel and the Wi-Fi client agent follow in later releases.
+alerts; **v0.5** the root-cause diagnosis engine and an incident report for Bell; **v0.6 (this
+release)** the admin panel. The optional Wi-Fi client agent follows in a later release.
 
 ## Features
 - **Probes:** ICMP (from every 1 s), DNS query latency/failures, TCP connect, and HTTP checks,
@@ -76,6 +76,18 @@ The full admin panel and the Wi-Fi client agent follow in later releases.
   with the incidents, their evidence and path tests, what was ruled out ("the Home Hub stayed
   reachable during 5 of 5 outages"), availability, latency per target and speed tests. It can be
   limited to incidents that point at Bell.
+- **Admin panel:** every tunable setting in the web UI (detection thresholds, path tests,
+  discovery subnets and rates, NIC, retention, sessions and lockout, metrics, log level), with
+  defaults and "reset to default". Values saved there override `.env`; most apply immediately,
+  the few that can't show a **Restart now** banner (NetWatch restarts itself in a few seconds).
+- **Hardened sign-in:** list of signed-in sessions with address and browser, sign out any or all
+  others, configurable lockout after failed sign-ins, and a security log (sign-ins, failures,
+  lockouts, password and settings changes, backups and restores).
+- **Backup and restore from the web page:** consistent snapshots on demand (and before every
+  update), download, delete, and restore from a stored backup or an uploaded `.db`/`.db.gz`. A
+  restore is checked (intact, a NetWatch database, not from a newer version), then applied on a
+  controlled restart after a safety copy of the current database is taken; older backups are
+  migrated forward automatically.
 - **Efficient storage:** SQLite (WAL) with raw samples kept 7 days and 1-minute rollups kept
   90 days (both configurable). Measured at about 0.6 % CPU and 60 MB RAM with 7 targets.
 - **Operations:** `/health` endpoint, structured JSON logs, optional Prometheus `/metrics`.
@@ -261,7 +273,9 @@ still works and produces the same release.
 
 ## Configuration
 Settings come from environment variables in `.env`; see `.env.example`. Re-run
-`sudo ./setup.sh` after changing them.
+`sudo ./setup.sh` after changing them. Most of them can also be changed on the **Admin** page;
+a value saved there overrides `.env` until you press "reset to default". Port, bind address
+and paths can only be set in `.env`.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -300,6 +314,8 @@ Settings come from environment variables in `.env`; see `.env.example`. Re-run
 | `NETWATCH_ARP_STORM_PPS` | `100` | ARP rate (10 s average) that opens an ARP-storm event |
 | `NETWATCH_DNS_CHECK_INTERVAL_MIN` | `30` | Resolver consistency check (0 disables). Uses your DNS targets' resolvers |
 | `NETWATCH_DEVICE_RETENTION_DAYS` | `365` | Forget devices unseen this long (named or monitored devices are kept) |
+| `NETWATCH_LOGIN_MAX_FAILURES` | `5` | Failed sign-ins (per client, within 5 min) before a lockout |
+| `NETWATCH_LOGIN_LOCKOUT_S` | `300` | Lockout duration |
 | `NETWATCH_ICMP_PRIVILEGED` | `true` | Raw-socket ICMP (needs `NET_RAW`) |
 | `NETWATCH_MAX_CONCURRENT_PROBES` | `64` | Upper bound on probes in flight |
 | `NETWATCH_MAX_TARGETS` | `200` | Maximum number of targets |
@@ -342,6 +358,12 @@ endpoints marked public, and state-changing calls need the header `X-Requested-W
 | `GET /api/diagnosis?start=&end=` | Network map with live state, diagnosed incidents (newest first) and patterns |
 | `GET /api/diagnosis/event/{id}` | The diagnosed incident containing an outage or packet-loss event |
 | `GET /api/report?start=&end=&scope=all\|isp&format=json\|md` | Incident report; `md` downloads it as Markdown |
+| `GET, PUT /api/admin/settings` | Editable settings with defaults; `{"changes": {"down_after": 4, "raw_retention_days": null}}` (null = default) |
+| `POST /api/admin/restart` | Restart NetWatch (applies restart-only settings) |
+| `GET /api/admin/sessions`, `DELETE /api/admin/sessions/{id}`, `POST /api/admin/sessions/revoke-others` | Signed-in sessions |
+| `GET /api/admin/security-log` | Sign-ins, failures, lockouts and admin actions (30 days) |
+| `GET, POST /api/admin/backups`, `GET, DELETE /api/admin/backups/{name}` | List, create, download, delete backups |
+| `POST /api/admin/backups/{name}/restore`, `POST /api/admin/restore` | Restore a stored backup, or one uploaded as the raw request body (`.db` or `.db.gz`); applied on restart |
 | `GET /api/system` | Version, default route, database size, retention |
 | `GET /api/status` | Live state per target (up / degraded / down / no data) |
 | `GET, POST /api/targets` | List or create targets |

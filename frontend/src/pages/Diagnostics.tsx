@@ -88,8 +88,8 @@ function PathSection() {
       <div className="divide-y divide-slate-800">
         {(tests.data ?? []).slice(0, 15).map((t) => (
           <div key={t.id} className="py-1.5">
-            <button onClick={() => setOpen(open === t.id ? null : t.id)} className="flex w-full items-center gap-3 text-left text-sm">
-              <span className="w-40 shrink-0 text-xs text-slate-500">{fmtTime(t.ts_ms)}</span>
+            <button onClick={() => setOpen(open === t.id ? null : t.id)} className="flex w-full flex-wrap items-center gap-x-3 gap-y-0.5 text-left text-sm">
+              <span className="w-full text-xs text-slate-500 sm:w-44 sm:shrink-0">{fmtTime(t.ts_ms)}</span>
               <span className="font-mono text-slate-200">{t.host}</span>
               <span className="text-xs text-slate-500">{t.trigger}</span>
               <span className={`ml-auto text-xs ${t.status === 'error' ? 'text-rose-300' : t.first_loss_hop ? 'text-amber-300' : 'text-emerald-300'}`}>
@@ -182,20 +182,22 @@ function ThroughputSection() {
         <button onClick={() => setForm(EMPTY_SERVER)} className={`${btn} mb-4 bg-slate-800 text-slate-200 hover:bg-slate-700`}>Add iperf3 server</button>
       )}
       {(results.data ?? []).length > 0 && (
-        <table className="w-full text-left text-sm">
-          <thead className="text-xs uppercase text-slate-500"><tr><th className="py-1">When</th><th>Server</th><th>Direction</th><th className="text-right">Throughput</th><th className="text-right">Retransmits</th></tr></thead>
-          <tbody className="divide-y divide-slate-800">
-            {(results.data ?? []).slice(0, 20).map((r) => (
-              <tr key={r.id}>
-                <td className="py-1 text-xs text-slate-500">{fmtTime(r.ts_ms)}</td>
-                <td className="text-slate-300">{name(r.server_id)} <span className="text-[11px] uppercase text-slate-500">{r.kind}</span></td>
-                <td className="text-slate-400">{r.direction}</td>
-                <td className={`text-right font-mono ${r.status === 'ok' ? 'text-slate-100' : 'text-rose-300'}`}>{r.status === 'ok' ? fmtBps(r.bits_per_second) : r.error}</td>
-                <td className="text-right text-slate-400">{r.retransmits ?? '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="text-xs uppercase text-slate-500"><tr><th className="py-1">When</th><th>Server</th><th>Direction</th><th className="text-right">Throughput</th><th className="text-right">Retransmits</th></tr></thead>
+            <tbody className="divide-y divide-slate-800">
+              {(results.data ?? []).slice(0, 20).map((r) => (
+                <tr key={r.id}>
+                  <td className="py-1 text-xs text-slate-500">{fmtTime(r.ts_ms)}</td>
+                  <td className="text-slate-300">{name(r.server_id)} <span className="text-[11px] uppercase text-slate-500">{r.kind}</span></td>
+                  <td className="text-slate-400">{r.direction}</td>
+                  <td className={`text-right font-mono ${r.status === 'ok' ? 'text-slate-100' : 'text-rose-300'}`}>{r.status === 'ok' ? fmtBps(r.bits_per_second) : r.error}</td>
+                  <td className="text-right text-slate-400">{r.retransmits ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </Section>
   );
