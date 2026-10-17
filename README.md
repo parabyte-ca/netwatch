@@ -14,7 +14,7 @@ Built in phases: **v0.1** probes, storage and graphs; **v0.2** sign-in and web/a
 updates; **v0.3** outage detection, an event timeline, TrueNAS NIC telemetry, mtr path tests
 and iperf3 throughput tests; **v0.4** device discovery, an inventory and network anomaly
 alerts; **v0.5** the root-cause diagnosis engine and an incident report for Bell; **v0.6 (this
-release)** the admin panel. The optional Wi-Fi client agent follows in a later release.
+release)** the admin panel, which completes the roadmap.
 
 ## Features
 - **Probes:** ICMP (from every 1 s), DNS query latency/failures, TCP connect, and HTTP checks,
