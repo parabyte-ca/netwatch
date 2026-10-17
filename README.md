@@ -174,7 +174,7 @@ ssh truenas "cd /mnt/shared_vol/websites/netwatch && sudo ./update.sh"
 
 Each update:
 1. Refuses to run if tracked files have local changes.
-2. Tags the running image as `:previous`.
+2. Tags the running image as `:rollback-<version>`.
 3. Takes an online, WAL-consistent database backup.
 4. Fetches the new code, then pulls or builds the image.
 5. Restarts the container and waits for `/health`.
@@ -185,6 +185,18 @@ image and database automatically, and saves the container's logs to
 
 Git commands run as the owner of the checkout, so `sudo` never leaves root-owned files in
 the repo.
+
+### Releasing a new version
+Releases are automatic. In the PR, bump `VERSION`, `backend/pyproject.toml`,
+`frontend/package.json` and the README badge, and add the `CHANGELOG.md` section
+(`tests/test_version.py` fails if they disagree). When the PR merges to `main`, CI sees a
+`VERSION` with no git tag yet and:
+1. publishes `ghcr.io/parabyte-ca/netwatch:X.Y.Z`, `:X.Y` and `:latest`;
+2. creates the `vX.Y.Z` tag and a GitHub Release with that CHANGELOG section as notes.
+
+Running instances then offer (or, for bug-fix releases, automatically install) the update.
+Merges that don't change `VERSION` only refresh `:latest`. Pushing a `vX.Y.Z` tag by hand
+still works and produces the same release.
 
 ## Configuration
 Settings come from environment variables in `.env`; see `.env.example`. Re-run
