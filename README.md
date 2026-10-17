@@ -46,8 +46,8 @@ releases.
   SSDP broadcasts devices send anyway, plus TrueNAS's own ARP cache, and never transmits
   anything in this mode. A kernel packet filter drops all other traffic before it reaches
   NetWatch, so NAS transfers cost nothing.
-- **Active scanning (opt-in):** switch on in the UI or press **Scan now**: an ARP sweep of the
-  local subnet (50 packets/s), one DHCP server probe (a DISCOVER that never takes a lease),
+- **Active scanning (on by default, hourly; switch off on the Devices page):** an ARP sweep of
+  the local subnet (50 packets/s), one DHCP server probe (a DISCOVER that never takes a lease),
   SSDP and mDNS queries, and reverse DNS through the gateway. Private subnets only, at most a
   /22.
 - **Device inventory:** vendor from the offline IEEE registry, names from DHCP, mDNS, UPnP and
@@ -279,7 +279,7 @@ Settings come from environment variables in `.env`; see `.env.example`. Re-run
 | `NETWATCH_PATH_TEST_RETENTION_DAYS` | `90` | Days of path-test results |
 | `NETWATCH_THROUGHPUT_RETENTION_DAYS` | `365` | Days of iperf3 results |
 | `NETWATCH_DISCOVERY_PASSIVE` | `true` | Listen for ARP/DHCP/mDNS/SSDP to build the device inventory (sends nothing) |
-| `NETWATCH_DISCOVERY_ACTIVE` | `false` | Initial state of scheduled active scanning (then managed on the Devices page) |
+| `NETWATCH_DISCOVERY_ACTIVE` | `true` | Initial state of scheduled active scanning (then managed on the Devices page) |
 | `NETWATCH_DISCOVERY_INTERFACE` | *(auto)* | Capture interface; default is the default-route interface |
 | `NETWATCH_DISCOVERY_SUBNETS` | *(auto)* | Comma-separated subnets to scan; default is the interface's own subnet. Private only, max /22 each |
 | `NETWATCH_DISCOVERY_SCAN_INTERVAL_MIN` | `60` | Minutes between scheduled scans (15–10080) |

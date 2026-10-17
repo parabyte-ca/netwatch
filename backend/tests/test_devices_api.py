@@ -121,7 +121,9 @@ def test_anomaly_reaches_timeline_and_device(client):
 
 def test_discovery_controls(client):
     s = client.get("/api/discovery").json()
-    assert s["active"]["enabled"] is False and s["passive"]["running"] is False
+    assert s["active"]["enabled"] is True and s["passive"]["running"] is False  # default on
+    s = client.put("/api/discovery", json={"active": False}).json()
+    assert s["active"]["enabled"] is False
     s = client.put("/api/discovery", json={"active": True}).json()
     assert s["active"]["enabled"] is True
     # no default route / interface in the test environment: scanning refuses cleanly

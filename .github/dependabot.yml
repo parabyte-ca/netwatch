@@ -1,7 +1,8 @@
 version: 2
 
-# Major-version bumps are ignored everywhere: they usually need code changes, so they are
-# done deliberately as part of a planned release rather than as automated PRs.
+# Major-version bumps are ignored for application dependencies and base images: they usually
+# need code changes, so they are done deliberately as part of a planned release. GitHub Actions
+# are the exception: their majors mostly move the runner's Node version and are safe to take.
 updates:
   - package-ecosystem: pip
     directory: /backend
@@ -24,9 +25,9 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: monthly }
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
+    groups:
+      actions:
+        patterns: ["*"]
   - package-ecosystem: docker
     directory: /
     schedule: { interval: monthly }

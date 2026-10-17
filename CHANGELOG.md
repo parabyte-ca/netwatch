@@ -8,9 +8,9 @@ All notable changes to this project are documented here. The format follows
 ### Added
 - Passive device discovery from ARP, DHCP, mDNS and SSDP broadcasts and the host ARP cache,
   with an in-kernel packet filter so only those packets reach NetWatch.
-- Opt-in active scanning: ARP sweep of the local private subnet (rate-limited, max /22), a
-  DHCP server probe, SSDP and mDNS queries and reverse DNS via the gateway; scheduled or on
-  demand.
+- Active scanning, hourly by default and switchable on the Devices page: ARP sweep of the
+  local private subnet (rate-limited, max /22), a DHCP server probe, SSDP and mDNS queries and
+  reverse DNS via the gateway; also on demand.
 - Device inventory: vendor (offline IEEE registry), names, model, advertised services,
   explainable type guess, IP history, online/last seen; merging of randomised MACs by
   hostname plus manual merge/split; rename, type override, notes; one-click monitoring with a
@@ -23,6 +23,8 @@ All notable changes to this project are documented here. The format follows
   evidence section and a hint about the usual cause.
 
 ### Changed
+- Dependabot now proposes major-version updates for GitHub Actions (still ignored for
+  application dependencies and base images).
 - The CI image smoke test also checks raw packet capture with the kernel filter and the
   vendor registry inside the hardened container.
 
