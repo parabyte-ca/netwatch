@@ -1,11 +1,10 @@
 import time
 
 from netwatch import __version__
-from netwatch.config import Settings
 from netwatch.main import create_app
 from netwatch.services.netinfo import DefaultRoute
 
-from .conftest import FakeProber
+from .conftest import FakeProber, login, test_settings
 
 GW = {"name": "Gateway", "kind": "icmp", "host": "192.168.2.1", "interval_s": 1, "group": "gateway"}
 
@@ -61,6 +60,7 @@ def test_target_limit(settings, prober):
     from fastapi.testclient import TestClient
 
     with TestClient(create_app(settings, prober=prober)) as c:
+        login(c)
         assert c.post("/api/targets", json=GW).status_code == 201
         assert c.post("/api/targets", json={**GW, "host": "192.168.2.2"}).status_code == 409
 
@@ -115,28 +115,25 @@ def test_seed_defaults_once(tmp_path, monkeypatch, caplog):
     import netwatch.main as main_mod
 
     monkeypatch.setattr(main_mod, "default_route", lambda: DefaultRoute("enp3s0", "192.168.2.1"))
-    s = Settings(data_dir=tmp_path, static_dir=tmp_path / "none", seed_defaults=True)
+    s = test_settings(tmp_path, seed_defaults=True)
     with TestClient(create_app(s, prober=FakeProber())) as c:
+        login(c)
         names = [t["name"] for t in c.get("/api/targets").json()]
         assert names[0] == "Gateway" and "DNS via Gateway" in names and len(names) == 6
         assert "seeded default targets" in caplog.text
         for t in c.get("/api/targets").json():
             c.delete(f"/api/targets/{t['id']}")
     with TestClient(create_app(s, prober=FakeProber())) as c:
+        login(c)
         assert c.get("/api/targets").json() == []
 
 
 def test_metrics_endpoint(tmp_path):
     from fastapi.testclient import TestClient
 
-    s = Settings(
-        data_dir=tmp_path,
-        static_dir=tmp_path / "none",
-        seed_defaults=False,
-        metrics_enabled=True,
-        flush_interval_s=0.05,
-    )
+    s = test_settings(tmp_path, metrics_enabled=True)
     with TestClient(create_app(s, prober=FakeProber())) as c:
+        login(c)
         c.post("/api/targets", json=GW)
         _wait(lambda: "netwatch_probe_up{" in c.get("/metrics").text)
         assert 'target="Gateway"' in c.get("/metrics").text
@@ -154,11 +151,13 @@ def test_spa_serving(tmp_path):
     (static / "index.html").write_text("<html>app</html>")
     (static / "assets" / "app.js").write_text("console.log(1)")
     (tmp_path / "secret.txt").write_text("nope")
-    s = Settings(data_dir=tmp_path / "d", static_dir=static, seed_defaults=False)
+    s = test_settings(tmp_path, static_dir=static)
     with TestClient(create_app(s, prober=FakeProber())) as c:
         assert c.get("/").text == "<html>app</html>"
         assert c.get("/targets/3").text == "<html>app</html>"
         r = c.get("/assets/app.js")
         assert r.text == "console.log(1)" and "immutable" in r.headers["cache-control"]
         assert "nope" not in c.get("/../secret.txt").text
+        assert c.get("/api/does-not-exist").status_code == 401  # API needs a session
+        login(c)
         assert c.get("/api/does-not-exist").status_code == 404

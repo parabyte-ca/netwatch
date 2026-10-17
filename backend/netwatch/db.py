@@ -87,8 +87,32 @@ kv = Table(
     Column("value", Text, nullable=False),
 )
 
+users = Table(
+    "users",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("username", String(64), nullable=False, unique=True),
+    Column("password_hash", String(255), nullable=False),
+    Column("created_at", Float, nullable=False),
+    Column("updated_at", Float, nullable=False),
+)
+
+# Server-side sessions. Only a SHA-256 of the cookie token is stored.
+sessions = Table(
+    "sessions",
+    metadata,
+    Column("token_hash", String(64), primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("created_ms", Integer, nullable=False),
+    Column("last_seen_ms", Integer, nullable=False),
+    Column("expires_ms", Integer, nullable=False),
+    Column("ip", String(64)),
+    Column("user_agent", String(200)),
+)
+
 Index("ix_samples_ts", samples.c.ts_ms)
 Index("ix_rollup_1m_ts", rollup_1m.c.bucket_ts)
+Index("ix_sessions_user", sessions.c.user_id)
 
 
 def _set_pragmas(dbapi_conn, _record) -> None:

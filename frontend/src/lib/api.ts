@@ -102,6 +102,64 @@ export interface ProbeResult {
   error: string | null;
 }
 
+export interface AuthStatus {
+  setup_required: boolean;
+  authenticated: boolean;
+  username: string | null;
+}
+
+export type UpdateMode = 'off' | 'notify' | 'patch' | 'minor';
+export type BumpKind = 'major' | 'minor' | 'patch';
+
+export interface Release {
+  version: string;
+  tag: string;
+  name: string;
+  notes: string;
+  published_at: string | null;
+  url: string | null;
+  kind: BumpKind;
+}
+
+export interface UpgradeRecord {
+  id?: string;
+  action?: 'update' | 'rollback';
+  version?: string | null;
+  state?: string;
+  started_at?: string;
+  finished_at?: string;
+  exit_code?: number;
+  rolled_back?: string;
+  from_version?: string;
+  to_version?: string;
+  requested_by?: string;
+  reason?: string;
+  error?: string;
+}
+
+export interface UpdateSummary {
+  current: string;
+  latest: string | null;
+  update_available: boolean;
+  latest_kind: BumpKind | null;
+  available: Release[];
+  auto_target: string | null;
+  checked_at: number | null;
+  check_error: string | null;
+  check_enabled: boolean;
+  policy: { mode: UpdateMode; window: string };
+  timezone: string;
+  in_app_updates: boolean;
+  helper: { connected: boolean; last_seen: string | null; agent_version?: string | null };
+  progress: {
+    state: 'idle' | 'requested' | 'running' | 'succeeded' | 'failed';
+    reason?: string;
+    request?: { id: string; action: string; version: string | null; requested_at: string };
+    status?: UpgradeRecord;
+  };
+  history: UpgradeRecord[];
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -125,11 +183,23 @@ function describe(detail: unknown): string {
   return 'request failed';
 }
 
+/** Fired when the API answers 401, so the app can show the login screen. */
+export const UNAUTHORIZED_EVENT = 'netwatch:unauthorized';
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+      // Required by the server on state-changing requests (CSRF defence).
+      'X-Requested-With': 'netwatch',
+      ...(init?.headers ?? {}),
+    },
   });
+  if (res.status === 401 && !path.startsWith('/api/auth/')) {
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  }
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
     try {
@@ -142,7 +212,34 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (res.status === 204 ? undefined : await res.json()) as T;
 }
 
+const post = (body?: unknown): RequestInit => ({
+  method: 'POST',
+  body: body === undefined ? undefined : JSON.stringify(body),
+});
+
 export const api = {
+  authStatus: () => request<AuthStatus>('/api/auth/status'),
+  setup: (username: string, password: string) =>
+    request<{ username: string }>('/api/auth/setup', post({ username, password })),
+  login: (username: string, password: string) =>
+    request<{ username: string }>('/api/auth/login', post({ username, password })),
+  logout: () => request<void>('/api/auth/logout', post()),
+  changePassword: (current_password: string, new_password: string) =>
+    request<{ username: string }>('/api/auth/password', post({ current_password, new_password })),
+  updates: () => request<UpdateSummary>('/api/updates'),
+  checkUpdates: () => request<UpdateSummary>('/api/updates/check', post()),
+  applyUpdate: (version: string) => request<unknown>('/api/updates/apply', post({ version })),
+  rollback: () => request<unknown>('/api/updates/rollback', post()),
+  setUpdatePolicy: (mode: UpdateMode, window: string) =>
+    request<{ mode: UpdateMode; window: string }>('/api/updates/policy', {
+      method: 'PUT',
+      body: JSON.stringify({ mode, window }),
+    }),
+  upgradeLog: async () => {
+    const res = await fetch('/api/updates/log', { credentials: 'same-origin' });
+    if (!res.ok) throw new ApiError(res.status, `${res.status}`);
+    return res.text();
+  },
   system: () => request<SystemInfo>('/api/system'),
   status: () => request<StatusResponse>('/api/status'),
   targets: () => request<Target[]>('/api/targets'),

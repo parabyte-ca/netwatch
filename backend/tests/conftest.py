@@ -28,15 +28,40 @@ class FakeProber:
         pass
 
 
+ADMIN = {"username": "admin", "password": "correct-horse-battery"}
+CSRF = {"X-Requested-With": "netwatch"}
+
+
+def login(client: TestClient) -> TestClient:
+    """Create the admin on first use (or sign in) and send the CSRF header by default."""
+    client.headers.update(CSRF)
+    r = client.post("/api/auth/setup", json=ADMIN)
+    if r.status_code == 409:
+        r = client.post("/api/auth/login", json=ADMIN)
+    assert r.status_code in (200, 201), r.text
+    return client
+
+
+def test_settings(tmp_path, **over) -> Settings:
+    values = {
+        "data_dir": tmp_path / "data",
+        "static_dir": tmp_path / "static",
+        "upgrade_dir": tmp_path / "upgrade",
+        "seed_defaults": False,
+        "update_check": False,
+        "log_format": "text",
+        "flush_interval_s": 0.05,
+    }
+    values.update(over)
+    return Settings(**values)
+
+
+test_settings.__test__ = False  # helper, not a test
+
+
 @pytest.fixture
 def settings(tmp_path) -> Settings:
-    return Settings(
-        data_dir=tmp_path / "data",
-        static_dir=tmp_path / "static",
-        seed_defaults=False,
-        log_format="text",
-        flush_interval_s=0.05,
-    )
+    return test_settings(tmp_path)
 
 
 @pytest.fixture
@@ -54,6 +79,13 @@ def prober() -> FakeProber:
 
 @pytest.fixture
 def client(settings, prober):
+    app = create_app(settings, prober=prober)
+    with TestClient(app) as c:
+        yield login(c)
+
+
+@pytest.fixture
+def anon_client(settings, prober):
     app = create_app(settings, prober=prober)
     with TestClient(app) as c:
         yield c

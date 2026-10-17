@@ -190,6 +190,7 @@ fi
 
 # ── Deploy and verify ──────────────────────────────────────────────────────────
 
+mkdir -p "$REPO_DIR/upgrade" && chmod 700 "$REPO_DIR/upgrade"
 info "Restarting container ..."
 compose up -d --no-build --pull never --remove-orphans || warn "docker compose up failed."
 

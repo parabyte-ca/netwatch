@@ -53,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck -x setup.sh update.sh scripts/common.sh
+      - run: shellcheck -x setup.sh update.sh scripts/common.sh scripts/upgrade-agent.sh
 
   image:
     needs: [backend, frontend, scripts]
@@ -106,3 +106,31 @@ jobs:
           build-args: APP_VERSION=${{ steps.version.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Publishing a GitHub Release (after the image is pushed) is what makes a version visible to
+  # NetWatch's in-app update check, so a release never points at an image that doesn't exist.
+  release:
+    needs: image
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if [[ ! -s notes.md ]]; then
+            echo "::error::No CHANGELOG.md section for $VERSION"
+            exit 1
+          fi
+          cat notes.md
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --title "NetWatch $GITHUB_REF_NAME" --notes-file notes.md --verify-tag

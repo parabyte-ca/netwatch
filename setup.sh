@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # setup.sh: first-run deployment of NetWatch. Idempotent; safe to re-run.
 #
-# Usage:  sudo ./setup.sh [--build]
-#   --build   Build the image locally instead of pulling it from GHCR.
+# Usage:  sudo ./setup.sh [--build] [--no-agent]
+#   --build      Build the image locally instead of pulling it from GHCR.
+#   --no-agent   Don't install the upgrade agent (disables in-app updates).
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,10 +11,12 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$REPO_DIR/scripts/common.sh"
 
 OPT_BUILD=false
+OPT_AGENT=true
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --build) OPT_BUILD=true; shift ;;
-        -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
+        --no-agent) OPT_AGENT=false; shift ;;
+        -h|--help) sed -n '2,7p' "$0"; exit 0 ;;
         *) die "Unknown option: $1" ;;
     esac
 done
@@ -38,6 +41,10 @@ mkdir -p "$REPO_DIR/data/backups"
 chown root:root "$REPO_DIR/data" "$REPO_DIR/data/backups" 2>/dev/null \
     || warn "could not chown data/ to root; the container may be unable to write to it."
 chmod 750 "$REPO_DIR/data" 2>/dev/null || true
+# Shared with the upgrade agent: only root (host agent and container) may write requests.
+mkdir -p "$REPO_DIR/upgrade"
+chown root:root "$REPO_DIR/upgrade" 2>/dev/null || true
+chmod 700 "$REPO_DIR/upgrade" 2>/dev/null || true
 
 # ── Port check ─────────────────────────────────────────────────────────────────
 if command -v ss >/dev/null 2>&1; then
@@ -62,7 +69,12 @@ info "Starting container ..."
 compose up -d --no-build --pull never --remove-orphans
 
 if wait_healthy; then
+    if [[ "$OPT_AGENT" == true ]]; then
+        bash "$REPO_DIR/scripts/upgrade-agent.sh" --install \
+            || warn "upgrade agent not installed; in-app updates will be unavailable."
+    fi
     info "$PROJECT v$VERSION is running at $(lan_url)"
+    info "First visit: create the admin account in the browser."
 else
     compose logs --tail 50 || true
     die "$PROJECT did not become healthy. See the logs above."
