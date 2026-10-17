@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.3.0-blue)
+![Version](https://img.shields.io/badge/version-0.4.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -11,9 +11,10 @@ the always-on TrueNAS host. No data leaves your network apart from the probes th
 a daily update check against GitHub (which can be switched off).
 
 Built in phases: **v0.1** probes, storage and graphs; **v0.2** sign-in and web/automatic
-updates; **v0.3 (this release)** outage detection, an event timeline, TrueNAS NIC telemetry,
-mtr path tests and iperf3 throughput tests. Discovery, the root-cause diagnosis engine and the
-Wi-Fi client agent follow in later releases.
+updates; **v0.3** outage detection, an event timeline, TrueNAS NIC telemetry, mtr path tests
+and iperf3 throughput tests; **v0.4 (this release)** device discovery, an inventory and network
+anomaly alerts. The root-cause diagnosis engine and the Wi-Fi client agent follow in later
+releases.
 
 ## Features
 - **Probes:** ICMP (from every 1 s), DNS query latency/failures, TCP connect, and HTTP checks,
@@ -41,6 +42,27 @@ Wi-Fi client agent follow in later releases.
 - **Throughput tests (iperf3):** LAN (TrueNAS → a device running `iperf3 -s`) and WAN (a public
   iperf3 server you add), download and upload, on demand or on a schedule, to separate LAN
   problems from Bell.
+- **Device discovery (passive, on by default):** NetWatch listens for the ARP, DHCP, mDNS and
+  SSDP broadcasts devices send anyway, plus TrueNAS's own ARP cache, and never transmits
+  anything in this mode. A kernel packet filter drops all other traffic before it reaches
+  NetWatch, so NAS transfers cost nothing.
+- **Active scanning (opt-in):** switch on in the UI or press **Scan now**: an ARP sweep of the
+  local subnet (50 packets/s), one DHCP server probe (a DISCOVER that never takes a lease),
+  SSDP and mDNS queries, and reverse DNS through the gateway. Private subnets only, at most a
+  /22.
+- **Device inventory:** vendor from the offline IEEE registry, names from DHCP, mDNS, UPnP and
+  reverse DNS, an explainable type guess (router, Deco access point, phone, TV, printer…), IP
+  address history, and online/last-seen. Phones' private (randomised) Wi-Fi MACs that report
+  the same hostname are merged into one device; you can merge or split by hand, rename,
+  override the type and add notes.
+- **Monitor this device:** one click creates a ping target that follows the device when its IP
+  address changes.
+- **Anomaly alerts** on the timeline, each with the evidence and the usual cause: duplicate IP
+  addresses, a second DHCP server (e.g. a Deco that fell out of AP mode), ARP storms (switching
+  loops), gateway MAC changes, devices repeatedly rejoining the network (Wi-Fi drops), IPs
+  that keep changing, double NAT and carrier-grade NAT (from path tests), resolvers that
+  disagree, and resolvers that answer for non-existent names. "New device" events start after
+  a one-hour learning period (private-MAC devices are not announced, as they rotate).
 - **Efficient storage:** SQLite (WAL) with raw samples kept 7 days and 1-minute rollups kept
   90 days (both configurable). Measured at about 0.6 % CPU and 60 MB RAM with 7 targets.
 - **Operations:** `/health` endpoint, structured JSON logs, optional Prometheus `/metrics`.
@@ -256,6 +278,15 @@ Settings come from environment variables in `.env`; see `.env.example`. Re-run
 | `NETWATCH_PATH_TEST_ON_OUTAGE` | `true` | Run mtr automatically when an outage starts (once per host per 5 min) |
 | `NETWATCH_PATH_TEST_RETENTION_DAYS` | `90` | Days of path-test results |
 | `NETWATCH_THROUGHPUT_RETENTION_DAYS` | `365` | Days of iperf3 results |
+| `NETWATCH_DISCOVERY_PASSIVE` | `true` | Listen for ARP/DHCP/mDNS/SSDP to build the device inventory (sends nothing) |
+| `NETWATCH_DISCOVERY_ACTIVE` | `false` | Initial state of scheduled active scanning (then managed on the Devices page) |
+| `NETWATCH_DISCOVERY_INTERFACE` | *(auto)* | Capture interface; default is the default-route interface |
+| `NETWATCH_DISCOVERY_SUBNETS` | *(auto)* | Comma-separated subnets to scan; default is the interface's own subnet. Private only, max /22 each |
+| `NETWATCH_DISCOVERY_SCAN_INTERVAL_MIN` | `60` | Minutes between scheduled scans (15–10080) |
+| `NETWATCH_DISCOVERY_SCAN_RATE_PPS` | `50` | ARP sweep rate, packets per second |
+| `NETWATCH_ARP_STORM_PPS` | `100` | ARP rate (10 s average) that opens an ARP-storm event |
+| `NETWATCH_DNS_CHECK_INTERVAL_MIN` | `30` | Resolver consistency check (0 disables). Uses your DNS targets' resolvers |
+| `NETWATCH_DEVICE_RETENTION_DAYS` | `365` | Forget devices unseen this long (named or monitored devices are kept) |
 | `NETWATCH_ICMP_PRIVILEGED` | `true` | Raw-socket ICMP (needs `NET_RAW`) |
 | `NETWATCH_MAX_CONCURRENT_PROBES` | `64` | Upper bound on probes in flight |
 | `NETWATCH_MAX_TARGETS` | `200` | Maximum number of targets |
@@ -289,6 +320,12 @@ endpoints marked public, and state-changing calls need the header `X-Requested-W
 | `GET, POST /api/path-tests` | List, or run mtr now: `{"target_id": 3}` or `{"host": "1.1.1.1"}` |
 | `GET, POST /api/iperf/servers`, `PUT, DELETE /api/iperf/servers/{id}` | iperf3 servers |
 | `POST /api/iperf/servers/{id}/run`, `GET /api/iperf/tests` | Run download + upload now; results |
+| `GET /api/devices?q=` | Device inventory (merged devices grouped), online first |
+| `GET, PATCH, DELETE /api/devices/{id}` | Device with IP history, member MACs, target and related events; edit `name`, `type_override`, `notes`; forget |
+| `POST /api/devices/{id}/merge`, `POST /api/devices/{id}/unmerge` | `{"into": 7}` treat as the same device; split a MAC off again |
+| `POST, DELETE /api/devices/{id}/monitor` | Start / stop monitoring the device (ping target that follows its IP) |
+| `GET, PUT /api/discovery` | Capture and scan status, DHCP servers seen; `{"active": true}` |
+| `POST /api/discovery/scan`, `POST /api/discovery/dns-check` | Run an active scan / the DNS consistency check now |
 | `GET /api/system` | Version, default route, database size, retention |
 | `GET /api/status` | Live state per target (up / degraded / down / no data) |
 | `GET, POST /api/targets` | List or create targets |

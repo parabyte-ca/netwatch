@@ -17,15 +17,17 @@ from .detector import DEGRADED, DOWN, Transition
 log = logging.getLogger(__name__)
 
 # Event kinds shown on the timeline.
-OUTAGE, LOSS, NIC_LINK, NIC_SPEED, NIC_ERRORS, MONITOR = (
+OUTAGE, LOSS, NIC_LINK, NIC_SPEED, NIC_ERRORS, MONITOR, ANOMALY, DEVICE = (
     "outage",
     "degraded",
     "nic_link",
     "nic_speed",
     "nic_errors",
     "monitor",
+    "anomaly",
+    "device",
 )
-KINDS = (OUTAGE, LOSS, NIC_LINK, NIC_SPEED, NIC_ERRORS, MONITOR)
+KINDS = (OUTAGE, LOSS, NIC_LINK, NIC_SPEED, NIC_ERRORS, MONITOR, ANOMALY, DEVICE)
 
 
 def _row(r) -> dict:

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # CI smoke test for a freshly built image (run by .github/workflows/ci.yml before pushing):
 #   1. mtr and iperf3 work inside the container with only NET_RAW/NET_ADMIN, and NetWatch's own
-#      parsers understand their real output;
+#      parsers understand their real output; raw packet capture (discovery) works with the
+#      kernel filter attached, and the offline vendor registry is present;
 #   2. the app starts healthy with the production hardening (read-only root, caps dropped).
 # Usage: scripts/ci-image-smoke.sh <image>
 set -euo pipefail
@@ -28,6 +29,25 @@ hops = parse_mtr_json(open("/tmp/mtr.json").read())
 s = summarise(hops)
 assert s["reached"] and s["first_loss_hop"] is None, (hops, s)
 print("iperf3 loopback %.1f Gb/s; mtr %d hop(s), reached" % (r["bits_per_second"] / 1e9, s["hop_count"]))
+
+import socket, time
+from netwatch.services.discovery.capture import Sniffer
+from netwatch.services.discovery.classify import vendor_for
+
+got = []
+cap = Sniffer("lo", lambda ts, frame, out: got.append(frame))
+cap.start()
+assert cap.running, cap.error
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as u:
+    u.sendto(b"dropped-by-filter", ("127.0.0.1", 9))
+    u.sendto(b"NOTIFY * HTTP/1.1\r\n\r\n", ("127.0.0.1", 1900))
+deadline = time.time() + 3
+while time.time() < deadline and not any(b"NOTIFY" in f for f in got):
+    time.sleep(0.05)
+cap.stop()
+assert any(b"NOTIFY" in f for f in got) and not any(b"dropped-by-filter" in f for f in got), got
+assert vendor_for("00:11:32:aa:bb:cc") == "Synology"
+print("raw capture with kernel filter: ok; vendor registry: ok")
 PY
 '
 

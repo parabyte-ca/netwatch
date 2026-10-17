@@ -101,6 +101,27 @@ export const EVENT_LABEL: Record<string, string> = {
   nic_speed: 'NIC speed',
   nic_errors: 'NIC errors',
   monitor: 'NetWatch',
+  anomaly: 'Anomaly',
+  device: 'Device',
+};
+
+export const DEVICE_TYPE_LABEL: Record<string, string> = {
+  router: 'Router',
+  access_point: 'Access point',
+  network: 'Network gear',
+  nas: 'NAS',
+  server: 'Server',
+  computer: 'Computer',
+  phone: 'Phone',
+  tablet: 'Tablet',
+  tv: 'TV',
+  media_player: 'Media player',
+  speaker: 'Speaker',
+  printer: 'Printer',
+  camera: 'Camera',
+  game_console: 'Game console',
+  iot: 'Smart home',
+  unknown: 'Unknown',
 };
 
 export const SEVERITY_DOT: Record<string, string> = {
