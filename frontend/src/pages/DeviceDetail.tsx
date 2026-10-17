@@ -102,6 +102,8 @@ export function DeviceDetail() {
             <Row k="mDNS name" v={d.mdns_name} />
             <Row k="Reverse DNS" v={det.ptr} />
             <Row k="Model" v={d.model} />
+            <Row k="Deco app name" v={det.app_name} />
+            <Row k="Connected to" v={det.deco_name ? `Deco ${det.deco_name}${det.connection ? ` (${det.connection})` : ''}` : null} />
             <Row k="Advertises" v={det.services?.join(', ')} />
             <Row k="UPnP" v={det.ssdp?.join(' · ')} />
             <Row k="DHCP client" v={det.dhcp_vendor} />

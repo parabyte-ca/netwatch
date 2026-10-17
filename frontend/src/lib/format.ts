@@ -104,6 +104,7 @@ export const EVENT_LABEL: Record<string, string> = {
   anomaly: 'Anomaly',
   device: 'Device',
   security: 'Security',
+  wifi: 'Wi-Fi',
 };
 
 export const DEVICE_TYPE_LABEL: Record<string, string> = {

@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from .events import ANOMALY, LOSS, NIC_ERRORS, NIC_LINK, NIC_SPEED, OUTAGE, EventLog
+from .events import ANOMALY, LOSS, NIC_ERRORS, NIC_LINK, NIC_SPEED, OUTAGE, WIFI, EventLog
 from .netinfo import DefaultRoute
 from .pathtest import PathStore
 from .stats import aggregate, loss_pct, merge
@@ -98,6 +98,7 @@ class Incident:
     nic_events: list[dict] = field(default_factory=list)
     anomalies: list[dict] = field(default_factory=list)
     path_tests: list[dict] = field(default_factory=list)
+    wifi_events: list[dict] = field(default_factory=list)
     causes: list[Cause] = field(default_factory=list)
 
     @property
@@ -124,6 +125,7 @@ class Incident:
             "failing_layers": sorted(self.layers(self.failing)),
             "nic_events": [_brief(e) for e in self.nic_events],
             "anomalies": [_brief(e) for e in self.anomalies],
+            "wifi_events": [_brief(e) for e in self.wifi_events],
             "path_tests": [
                 {k: t.get(k) for k in ("id", "ts_ms", "host", "first_loss_hop", "reached")}
                 for t in self.path_tests
@@ -152,6 +154,7 @@ class Diagnoser:
         gateway: Callable[[], DefaultRoute | None],
         raw_retention_days: int = 7,
         tz: str = "America/Toronto",
+        devices=None,
     ) -> None:
         self.store = store
         self.events = events
@@ -159,6 +162,7 @@ class Diagnoser:
         self.gateway = gateway
         self.raw_retention_days = raw_retention_days
         self.tz = ZoneInfo(tz)
+        self.devices = devices  # DeviceStore: which Deco a monitored device was on
 
     # ── incidents ────────────────────────────────────────────────────────────
 
@@ -186,7 +190,7 @@ class Diagnoser:
         ctx_events = self.events.list(
             groups[0].start_ms - ANOMALY_PAD_MS,
             max((g.end_ms or now) for g in groups) + ANOMALY_PAD_MS,
-            kinds=[NIC_LINK, NIC_SPEED, NIC_ERRORS, ANOMALY],
+            kinds=[NIC_LINK, NIC_SPEED, NIC_ERRORS, ANOMALY, WIFI],
             limit=5000,
         )
         for inc in groups:
@@ -208,6 +212,8 @@ class Diagnoser:
             )
             if ev["kind"] not in entry["kinds"]:
                 entry["kinds"].append(ev["kind"])
+            if "macs" not in entry:
+                entry.update(self._wifi_info(t["id"]))
         for t in targets.values():
             if t["id"] in inc.failing:
                 continue
@@ -219,13 +225,14 @@ class Diagnoser:
                     "host": t["host"],
                     "layer": target_layer(t, gw),
                     "loss_pct": lp,
+                    "deco_mac": self._wifi_info(t["id"])["deco_mac"],
                 }
         for e in ctx_events:
             if e["kind"] == ANOMALY:
                 if _overlaps(e, start - ANOMALY_PAD_MS, end + ANOMALY_PAD_MS):
                     inc.anomalies.append(e)
             elif _overlaps(e, start - CONTEXT_PAD_MS, end + CONTEXT_PAD_MS):
-                inc.nic_events.append(e)
+                (inc.wifi_events if e["kind"] == WIFI else inc.nic_events).append(e)
         tests = self.paths.list(start_ms=start - 60_000, end_ms=end + CONTEXT_PAD_MS, limit=20)
         linked = {t["id"] for t in tests}
         for ev in inc.events:
@@ -234,6 +241,19 @@ class Diagnoser:
                     tests.append(t)
                     linked.add(t["id"])
         inc.path_tests = [t for t in tests if t["status"] == "ok"]
+
+    def _wifi_info(self, target_id: int) -> dict:
+        """MACs of the device behind a target, and the Deco it was last seen on."""
+        dev = self.devices.by_target(target_id) if self.devices else None
+        if dev is None:
+            return {"macs": [], "deco_mac": None, "deco_name": None}
+        rows = [dev, *self.devices.members(dev["id"])]
+        on = next((r["details"] for r in rows if (r.get("details") or {}).get("deco_mac")), {})
+        return {
+            "macs": [r["mac"] for r in rows],
+            "deco_mac": on.get("deco_mac"),
+            "deco_name": on.get("deco_name"),
+        }
 
     def window_stats(self, target_id: int, start_ms: int, end_ms: int, now_ms: int) -> dict:
         """Probe statistics over a window: raw samples where they are kept, 1-minute rollups
@@ -547,6 +567,86 @@ def diagnose(inc: Incident, now_ms: int) -> list[Cause]:
                     [
                         "Look for a common Deco: devices on the same unit dropping together point "
                         "at that unit's radio or backhaul."
+                    ],
+                )
+            )
+
+    # Deco API: units going offline, devices sharing a Deco, Wi-Fi drops and roaming.
+    wifi = inc.wifi_events
+    for e in wifi:
+        if e["details"].get("type") == "deco_offline":
+            name = e["details"].get("deco") or "A Deco"
+            causes.append(
+                Cause(
+                    "deco_offline",
+                    f"Deco {name} went offline (power, restart or lost backhaul)",
+                    MESH,
+                    92,
+                    [e["title"], f"Failing at the same time: {_names(inc.failing)}."],
+                    [
+                        "Check that unit's power and, if it has a wired backhaul, its cable to "
+                        "the switch.",
+                        "In the Deco app, look at that unit's recent restarts and firmware "
+                        "updates.",
+                    ],
+                )
+            )
+    wifi_fail = {k: v for k, v in inc.failing.items() if v.get("deco_mac")}
+    by_deco: dict[str, list[str]] = {}
+    for v in wifi_fail.values():
+        by_deco.setdefault(v["deco_mac"], []).append(v["name"])
+    other_ok = {v.get("deco_mac") for v in inc.healthy.values()} - {None}
+    if GATEWAY not in fail:
+        for mac, names in by_deco.items():
+            if len(names) >= 2 and len(by_deco) == 1:
+                deco = next(v["deco_name"] for v in wifi_fail.values() if v["deco_mac"] == mac)
+                evidence = [f"All on Deco {deco or mac}: {', '.join(names)}."]
+                if other_ok - {mac}:
+                    evidence.append("Devices on other Decos kept working.")
+                causes.append(
+                    Cause(
+                        "deco_shared",
+                        f"Deco {deco or mac} (every failing device was connected to it)",
+                        MESH,
+                        85 if other_ok - {mac} else 78,
+                        evidence,
+                        [
+                            "Restart that Deco and watch whether the drops follow it.",
+                            "Check its backhaul (wire it if possible) and its placement.",
+                        ],
+                    )
+                )
+    failing_macs = {m: v["name"] for v in inc.failing.values() for m in v.get("macs") or []}
+    for e in wifi:
+        typ, mac = e["details"].get("type"), e["details"].get("mac")
+        if typ not in ("disconnect", "roam") or mac not in failing_macs:
+            continue
+        name = failing_macs[mac]
+        if typ == "disconnect":
+            causes.append(
+                Cause(
+                    "wifi_disconnect",
+                    f"{name} dropped off Wi-Fi",
+                    DEVICE,
+                    80,
+                    [e["title"]],
+                    [
+                        "Check the device's Wi-Fi power saving and its signal where it sits.",
+                        "If it is stationary, wire it or pin it to the nearest Deco.",
+                    ],
+                )
+            )
+        else:
+            causes.append(
+                Cause(
+                    "wifi_roam",
+                    f"{name} roamed between Decos as it failed",
+                    DEVICE,
+                    70,
+                    [e["title"]],
+                    [
+                        "Roaming hiccups are usually short; if they recur for a stationary "
+                        "device it sits between two Decos — move one or wire the device.",
                     ],
                 )
             )

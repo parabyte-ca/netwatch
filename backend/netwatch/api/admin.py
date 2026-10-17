@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
+import re
 import time
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from .. import __version__
 from ..auth import COOKIE_NAME, token_hash
@@ -260,3 +262,89 @@ async def restore_upload(request: Request) -> dict:
         upload.unlink(missing_ok=True)
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"bad upload: {exc}") from exc
     return await _stage_and_restart(request, candidate, "an uploaded file")
+
+
+# ── Deco mesh ─────────────────────────────────────────────────────────────────
+
+_LABEL = r"[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?"
+_HOSTNAME = re.compile(rf"^(?=.{{1,253}}$){_LABEL}(\.{_LABEL})*$")
+
+
+def _deco_host(host: str) -> str:
+    """A LAN address or name only: the owner password must never leave the network."""
+    h = host.strip().lower()
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        if not _HOSTNAME.match(h) or h.rsplit(".", 1)[-1].isdigit():
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "enter the main Deco's IP address"
+            ) from None
+        return h
+    if not ip.is_private or ip.is_loopback:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "the Deco must be on your LAN")
+    return h
+
+
+def _deco_body(request: Request) -> dict:
+    st = request.app.state
+    now = int(time.time() * 1000)
+    suggestions = [
+        {"ip": d["last_ip"], "label": d["label"]}
+        for d in st.discovery.inventory.listing(now)
+        if d.get("last_ip")
+        and d["online"]
+        and (d["type"] == "access_point" or "tp-link" in (d.get("vendor") or "").lower())
+    ]
+    return {**st.deco.status(), "suggestions": suggestions[:10]}
+
+
+@router.get("/deco")
+async def get_deco(request: Request) -> dict:
+    return await asyncio.to_thread(_deco_body, request)
+
+
+class DecoIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    host: str = Field(max_length=253)
+    enabled: bool
+    password: str | None = Field(default=None, max_length=128)
+    forget_password: bool = False
+
+
+@router.put("/deco")
+async def put_deco(body: DecoIn, request: Request) -> dict:
+    deco = request.app.state.deco
+    host = _deco_host(body.host) if body.host.strip() else ""
+    if body.enabled and not host:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "enter the main Deco's address")
+    before = await asyncio.to_thread(deco.status)
+    await asyncio.to_thread(deco.save, host, body.enabled, body.password or None)
+    if body.forget_password:
+        await asyncio.to_thread(deco.forget_password)
+    what = []
+    if (before["host"], before["enabled"]) != (host, body.enabled):
+        what.append(f"{'on' if body.enabled else 'off'}, {host or 'no address'}")
+    if body.password:
+        what.append("owner password saved")
+    if body.forget_password:
+        what.append("owner password forgotten")
+    if what:
+        await security_event(request, "info", "Deco integration changed: " + "; ".join(what))
+    deco.kick()
+    return await asyncio.to_thread(_deco_body, request)
+
+
+class DecoTestIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    host: str = Field(max_length=253)
+    password: str | None = Field(default=None, max_length=128)
+
+
+@router.post("/deco/test")
+async def test_deco(body: DecoTestIn, request: Request) -> dict:
+    deco = request.app.state.deco
+    password = body.password or await asyncio.to_thread(deco.password)
+    if not password:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "enter the owner password")
+    return await deco.test(_deco_host(body.host), password)

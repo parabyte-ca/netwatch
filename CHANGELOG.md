@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-10-17
+### Added
+- Network map page: interactive, automatically laid out map (Internet, Bell, Home Hub, switch,
+  TrueNAS, Decos, key devices and per-Deco groups of the rest) with link latency and loss,
+  wired/Wi-Fi/logical links, a details panel, and drag-to-arrange with saved positions and reset.
+- Incident replay on the map: time slider and incident picker, with the likely cause and failing
+  nodes highlighted; "Show on map" links from Diagnosis and event pages.
+- Deco mesh integration (Admin → Deco mesh): reads the Decos' local API (owner account; use a
+  manager account in the Deco app) for units, backhaul and which device is on which Deco/band.
+  The password is encrypted with a key file (`data/.secret_key`) kept outside the database.
+- Wi-Fi events on the timeline: Deco offline/online, backhaul changes, roaming and Wi-Fi
+  disconnects longer than a minute for monitored devices.
+- Diagnosis causes from the Deco data: a Deco went offline, all failing devices on one Deco,
+  a monitored device dropped off Wi-Fi or roamed.
+- Device pages show the Deco, band and Deco app name.
+
 ## [0.6.0] - 2026-10-17
 ### Added
 - Admin page: all tunable settings editable in the web UI with defaults and reset; values

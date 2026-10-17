@@ -32,6 +32,8 @@ def device_label(d: dict) -> str:
     det = d.get("details") or {}
     return (
         d.get("name")
+        or det.get("app_name")
+        or (f"Deco {det['deco_name']}" if det.get("is_deco") and det.get("deco_name") else None)
         or det.get("friendly")
         or d.get("mdns_name")
         or d.get("hostname")
@@ -289,6 +291,20 @@ class Inventory:
             add_to("ssdp", [info.get("server"), info.get("type")])
         elif obs.proto == "rdns" and info.get("ptr") and det.get("ptr") != info["ptr"]:
             det["ptr"] = info["ptr"]
+        elif obs.proto == "deco":
+            # From the Deco API: which Deco and band, and the name given in the Deco app.
+            for key, src in (
+                ("deco_mac", "deco_mac"),
+                ("deco_name", "deco_name"),
+                ("connection", "connection"),
+                ("app_name", "app_name"),
+            ):
+                if info.get(src) and det.get(key) != info[src]:
+                    det[key] = info[src]
+            if info.get("is_deco") and not det.get("is_deco"):
+                det["is_deco"] = True
+            if info.get("model") and info["model"] != row.get("model"):
+                upd["model"] = str(info["model"])[:64]
         if det != (row.get("details") or {}):
             upd["details"] = det
 
@@ -335,8 +351,10 @@ class Inventory:
 
     def _classify(self, d: dict) -> tuple[str, str]:
         det = d.get("details") or {}
-        names = [n for n in (det.get("friendly"), d.get("mdns_name"), d.get("hostname"),
-                             det.get("ptr"), d.get("model")) if n]  # fmt: skip
+        if det.get("is_deco"):
+            return "access_point", "Deco (from the Deco API)"
+        names = [n for n in (det.get("app_name"), det.get("friendly"), d.get("mdns_name"),
+                             d.get("hostname"), det.get("ptr"), d.get("model")) if n]  # fmt: skip
         gw = self.gateway_ip()
         return classify(
             vendor=d.get("vendor"),

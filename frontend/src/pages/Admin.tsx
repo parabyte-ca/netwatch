@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { EventRow } from '../components/EventRow';
-import { api, type SettingField, type SettingsResponse } from '../lib/api';
+import { api, type DecoStatus, type DecoTestResult, type SettingField, type SettingsResponse } from '../lib/api';
 import { fmtAgo, fmtBytes, fmtTime } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
 
@@ -282,6 +282,113 @@ function BackupsCard({ onRestart }: { onRestart: () => void }) {
   );
 }
 
+function DecoCard() {
+  const [st, setSt] = useState<DecoStatus | null>(null);
+  const [host, setHost] = useState('');
+  const [enabled, setEnabled] = useState(false);
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [test, setTest] = useState<DecoTestResult | null>(null);
+
+  const apply = (d: DecoStatus) => {
+    setSt(d);
+    setHost(d.host);
+    setEnabled(d.enabled);
+  };
+  useEffect(() => {
+    api.deco().then(apply, (e) => setError(err(e)));
+  }, []);
+
+  async function run(fn: () => Promise<void>) {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setError(err(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const save = (extra: { forget_password?: boolean } = {}) =>
+    run(async () => {
+      apply(await api.saveDeco({ host, enabled, password: password || undefined, ...extra }));
+      setPassword('');
+    });
+  const testNow = () =>
+    run(async () => {
+      setTest(null);
+      setTest(await api.testDeco(host, password || undefined));
+    });
+
+  if (!st) return <Card title="Deco mesh">{error ? <p className="text-sm text-rose-400">{error}</p> : null}</Card>;
+  return (
+    <Card title="Deco mesh">
+      <div className="space-y-3 text-sm">
+        <p className="text-xs text-slate-400">
+          Reads the Deco units, their backhaul and which device is on which Deco, for the network map, Wi-Fi events and
+          diagnosis. Deco only lets the <strong>owner</strong> account sign in locally, so use the owner password here and a
+          manager account in the Deco app (an owner sign-in in the app signs NetWatch out until its next poll). The password
+          is encrypted with a key kept outside the database, so backups never contain it.
+        </p>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-400">Main Deco address</span>
+            <input aria-label="Main Deco address" className={`${input} w-44`} value={host} list="deco-hosts"
+              placeholder="192.168.2.x" onChange={(e) => setHost(e.target.value)} />
+            <datalist id="deco-hosts">
+              {st.suggestions.map((s) => <option key={s.ip} value={s.ip}>{s.label}</option>)}
+            </datalist>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-400">Owner password {st.password_set && '(saved)'}</span>
+            <input aria-label="Owner password" type="password" className={`${input} w-48`} value={password}
+              autoComplete="new-password" placeholder={st.password_set ? '•••••••• (unchanged)' : 'not set'}
+              onChange={(e) => setPassword(e.target.value)} />
+          </label>
+          <label className="flex items-center gap-2 pb-1">
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            Poll every 30 s
+          </label>
+        </div>
+        {st.suggestions.length > 0 && !host && (
+          <p className="text-xs text-slate-500">
+            Likely Decos: {st.suggestions.map((s) => (
+              <button key={s.ip} className="mr-2 text-sky-400 hover:underline" onClick={() => setHost(s.ip)}>{s.ip}</button>
+            ))}
+          </p>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <button className={`${btn} bg-sky-600 text-white hover:bg-sky-500`} disabled={busy} onClick={() => void save()}>Save</button>
+          <button className={`${btn} text-slate-200 ring-1 ring-slate-700 hover:bg-slate-800`}
+            disabled={busy || !host || (!password && !st.password_set)} onClick={() => void testNow()}>
+            {busy ? 'Working…' : 'Test connection'}
+          </button>
+          {st.password_set && (
+            <button className={`${btn} text-rose-300 ring-1 ring-slate-700 hover:bg-slate-800`} disabled={busy}
+              onClick={() => window.confirm('Forget the stored Deco owner password?') && void save({ forget_password: true })}>
+              Forget password
+            </button>
+          )}
+        </div>
+        {error && <p className="text-rose-400">{error}</p>}
+        {test && (test.ok ? (
+          <p className="text-emerald-300">
+            Connected: {test.decos?.map((d) => `${d.name} (${d.role}, ${d.backhaul})`).join(', ')} · {test.clients} clients.
+          </p>
+        ) : (
+          <p className="text-rose-300">Test failed: {test.error}</p>
+        ))}
+        <p className="text-xs text-slate-400">
+          {st.last_ok_ms ? `Last read ${fmtAgo(st.last_ok_ms, Date.now())}: ${st.decos.length} Decos, ${st.clients} clients.` : 'Not read yet.'}
+          {st.error && <span className="text-rose-300"> Last poll failed: {st.error}</span>}
+        </p>
+      </div>
+    </Card>
+  );
+}
+
 function SecurityLogCard() {
   const { data } = usePolling(api.securityLog, 60_000);
   return (
@@ -332,6 +439,7 @@ export function Admin() {
       )}
       {error && <p className="text-rose-400">{error}</p>}
       {settings && <SettingsCard data={settings} onSaved={setSettings} />}
+      <DecoCard />
       <SessionsCard />
       <BackupsCard onRestart={() => void waitForRestart(setNote)} />
       <SecurityLogCard />

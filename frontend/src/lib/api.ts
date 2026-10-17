@@ -172,7 +172,8 @@ export type EventKind =
   | 'monitor'
   | 'anomaly'
   | 'device'
-  | 'security';
+  | 'security'
+  | 'wifi';
 
 export interface TimelineEvent {
   id: number;
@@ -311,6 +312,11 @@ export interface DeviceRow {
     ptr?: string;
     dhcp_vendor?: string;
     dhcp_server?: boolean;
+    deco_mac?: string;
+    deco_name?: string;
+    connection?: string;
+    app_name?: string;
+    is_deco?: boolean;
   };
   label: string;
   online: boolean;
@@ -430,8 +436,112 @@ export interface Incident {
   failing_layers: string[];
   nic_events: BriefEvent[];
   anomalies: BriefEvent[];
+  wifi_events?: BriefEvent[];
   path_tests: { id: number; ts_ms: number; host: string; first_loss_hop: number | null; reached: boolean | null }[];
   causes: Cause[];
+}
+
+export type MapNodeKind = 'internet' | 'isp' | 'hub' | 'switch' | 'host' | 'deco' | 'device' | 'group';
+
+export interface MapMember {
+  target_id: number;
+  name: string;
+  host: string;
+  state?: State;
+  median_ms?: number | null;
+  loss_pct?: number | null;
+}
+
+export interface MapGroupDevice {
+  device_id: number;
+  label: string;
+  ip: string | null;
+  type: string;
+  connection?: string | null;
+}
+
+export interface MapNode {
+  id: string;
+  kind: MapNodeKind;
+  label: string;
+  state: State;
+  inferred: boolean;
+  members: MapMember[];
+  info: {
+    ip?: string | null;
+    mac?: string;
+    model?: string | null;
+    role?: 'main' | 'satellite';
+    backhaul?: string;
+    firmware?: string | null;
+    device_id?: number | null;
+    type?: string;
+    vendor?: string | null;
+    connection?: string | null;
+    online?: boolean;
+    count?: number;
+    devices?: MapGroupDevice[];
+    interfaces?: { name: string; speed: number | null; state: string | null }[];
+  };
+}
+
+export interface MapEdge {
+  id: string;
+  source: string;
+  target: string;
+  medium: 'wired' | 'wireless' | 'logical';
+  median_ms: number | null;
+  loss_pct: number | null;
+  label: string | null;
+}
+
+export interface MapHighlight {
+  incident_id: string;
+  start_ms: number;
+  cause: Cause | null;
+  cause_nodes: string[];
+  failing_nodes: string[];
+}
+
+export interface NetworkMapResponse {
+  generated_ms: number;
+  at_ms: number | null;
+  deco_api: boolean;
+  nodes: MapNode[];
+  edges: MapEdge[];
+  highlight?: MapHighlight;
+}
+
+export type MapPositions = Record<string, { x: number; y: number }>;
+
+export interface DecoUnit {
+  mac: string;
+  name: string;
+  ip: string | null;
+  model: string | null;
+  firmware: string | null;
+  role: 'main' | 'satellite';
+  online: boolean;
+  backhaul: string;
+}
+
+export interface DecoStatus {
+  host: string;
+  enabled: boolean;
+  password_set: boolean;
+  last_poll_ms: number | null;
+  last_ok_ms: number | null;
+  error: string | null;
+  decos: DecoUnit[];
+  clients: number;
+  suggestions: { ip: string; label: string }[];
+}
+
+export interface DecoTestResult {
+  ok: boolean;
+  error?: string;
+  decos?: { name: string; role: string; model: string | null; online: boolean; backhaul: string }[];
+  clients?: number;
 }
 
 export interface Pattern {
@@ -633,6 +743,22 @@ export const api = {
   diagnosisForEvent: (eventId: number) => request<Incident>(`/api/diagnosis/event/${eventId}`),
   report: (start: number, scope: 'all' | 'isp') => request<Report>(`/api/report?start=${start}&scope=${scope}`),
   reportMarkdownUrl: (start: number, scope: 'all' | 'isp') => `/api/report?start=${start}&scope=${scope}&format=md`,
+  map: (params: { at?: number; incident?: string; event?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.at) q.set('at', String(params.at));
+    if (params.incident) q.set('incident', params.incident);
+    if (params.event) q.set('event', String(params.event));
+    const qs = q.toString();
+    return request<NetworkMapResponse>(`/api/map${qs ? `?${qs}` : ''}`);
+  },
+  mapLayout: () => request<{ positions: MapPositions }>('/api/map/layout'),
+  saveMapLayout: (positions: MapPositions) =>
+    request<{ positions: MapPositions }>('/api/map/layout', { method: 'PUT', body: JSON.stringify({ positions }) }),
+  resetMapLayout: () => request<void>('/api/map/layout', { method: 'DELETE' }),
+  deco: () => request<DecoStatus>('/api/admin/deco'),
+  saveDeco: (body: { host: string; enabled: boolean; password?: string; forget_password?: boolean }) =>
+    request<DecoStatus>('/api/admin/deco', { method: 'PUT', body: JSON.stringify(body) }),
+  testDeco: (host: string, password?: string) => request<DecoTestResult>('/api/admin/deco/test', post({ host, password })),
   adminSettings: () => request<SettingsResponse>('/api/admin/settings'),
   saveSettings: (changes: Record<string, unknown>) =>
     request<SettingsResponse>('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ changes }) }),
