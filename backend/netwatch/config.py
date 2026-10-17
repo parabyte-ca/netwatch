@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="NETWATCH_", extra="ignore")
 
     bind: str = "0.0.0.0"
-    port: int = Field(default=8085, ge=1, le=65535)
+    port: int = Field(default=8090, ge=1, le=65535)
     data_dir: Path = Path("/data")
     static_dir: Path = Path("/app/static")
 

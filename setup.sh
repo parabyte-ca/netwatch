@@ -29,7 +29,7 @@ if [[ ! -f "$REPO_DIR/.env" ]]; then
     chown --reference="$REPO_DIR" "$REPO_DIR/.env" 2>/dev/null || true  # editable without sudo
     info "Created .env from .env.example (review it, then re-run if you change anything)."
 fi
-PORT="$(env_value NETWATCH_PORT 8085)"
+PORT="$(env_value NETWATCH_PORT 8090)"
 
 # ── Persistent data (bind mount) ───────────────────────────────────────────────
 # The container runs as root with every capability except NET_RAW/NET_ADMIN dropped, so it

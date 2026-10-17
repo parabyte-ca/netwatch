@@ -86,7 +86,7 @@ wait_healthy() {
 
 lan_url() {
     local port bind ip
-    port="$(env_value NETWATCH_PORT 8085)"
+    port="$(env_value NETWATCH_PORT 8090)"
     bind="$(env_value NETWATCH_BIND 0.0.0.0)"
     if [[ "$bind" == "0.0.0.0" || -z "$bind" ]]; then
         ip="$(hostname -I 2>/dev/null | awk '{print $1}')"

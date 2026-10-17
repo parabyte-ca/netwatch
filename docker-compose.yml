@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
 
     # Host networking is required for ARP, mDNS, SSDP and for probing from the host's real
-    # interface. The web UI listens on NETWATCH_PORT (default 8085) directly on the host.
+    # interface. The web UI listens on NETWATCH_PORT (default 8090) directly on the host.
     network_mode: host
 
     # Least privilege: drop everything, add back only raw sockets (ICMP, packet capture) and

@@ -33,7 +33,7 @@ in-app updates, and the Wi-Fi client agent follow in later releases.
 - TrueNAS SCALE 24.10 (Electric Eel) or later, or any Linux host with Docker Engine 25+ and
   the Docker Compose plugin 2.24+
 - `git` on the host
-- Port **8085** free on the host (registered in the dev-sop port registry)
+- Port **8090** free on the host (registered in the dev-sop port registry; check with `sudo ss -tlnp | grep 8090`)
 
 ## Setup
 `setup.sh` is the first-run script. It is idempotent, so it is safe to re-run.
@@ -47,7 +47,7 @@ cd netwatch
 sudo ./setup.sh            # pulls ghcr.io/parabyte-ca/netwatch, falls back to a local build
 # or: sudo ./setup.sh --build   to always build locally
 ```
-Then open `http://192.168.2.15:8085`.
+Then open `http://192.168.2.15:8090`.
 
 What `setup.sh` does:
 1. Creates `.env` from `.env.example` if it doesn't exist.
@@ -93,7 +93,7 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e "backend[dev]"
 NETWATCH_DATA_DIR=./data NETWATCH_ICMP_PRIVILEGED=false NETWATCH_LOG_FORMAT=text python -m netwatch
 
-cd frontend && npm ci && npm run dev    # http://localhost:5173, proxies /api to :8085
+cd frontend && npm ci && npm run dev    # http://localhost:5173, proxies /api to :8090
 ```
 Checks (the same ones CI runs): `ruff check . && ruff format --check . && pytest` in
 `backend/`, `npm run typecheck && npm test && npm run build` in `frontend/`, and
@@ -135,7 +135,7 @@ Settings come from environment variables in `.env`; see `.env.example`. Re-run
 
 | Variable | Default | Description |
 |---|---|---|
-| `NETWATCH_PORT` | `8085` | Web UI / API port on the host |
+| `NETWATCH_PORT` | `8090` | Web UI / API port on the host |
 | `NETWATCH_BIND` | `0.0.0.0` | Bind address; set to the LAN IP to restrict access |
 | `NETWATCH_RAW_RETENTION_DAYS` | `7` | Days of raw per-probe samples (1–90) |
 | `NETWATCH_ROLLUP_RETENTION_DAYS` | `90` | Days of 1-minute rollups (7–730) |

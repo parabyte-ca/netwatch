@@ -30,7 +30,7 @@ RUN pip install /tmp/backend && rm -rf /tmp/backend
 COPY --from=frontend /build/dist /app/static
 
 # Informational only: the container uses host networking and binds NETWATCH_PORT.
-EXPOSE 8085
+EXPOSE 8090
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --start-interval=2s --retries=3 \
     CMD ["python", "-m", "netwatch.healthcheck"]

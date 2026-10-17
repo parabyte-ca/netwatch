@@ -2,7 +2,7 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
-const api = process.env.NETWATCH_API ?? 'http://127.0.0.1:8085';
+const api = process.env.NETWATCH_API ?? 'http://127.0.0.1:8090';
 
 export default defineConfig({
   plugins: [react()],
