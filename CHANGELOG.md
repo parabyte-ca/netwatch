@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-10-17
+### Added
+- Diagnosis engine: overlapping failures are grouped into incidents and each is explained by
+  ranked, explainable causes with confidence, evidence and next steps, using what failed versus
+  what kept working along the network map (TrueNAS link, switch, Home Hub, Bell, internet,
+  Decos, devices), NIC events, network anomalies and path tests.
+- Pattern detection: failures repeating at a fixed interval or clustering at a time of day.
+- Diagnosis page with a live network map (the likely cause's layer highlighted), incidents and
+  patterns; the most likely cause on every outage and packet-loss event page.
+- Incident report for Bell: printable (save as PDF from the browser) or Markdown download, with
+  incidents, evidence, path tests, what was ruled out, per-target measurements and speed tests;
+  optionally limited to incidents pointing at Bell.
+
 ## [0.4.1] - 2026-10-17
 ### Changed
 - Active scanning is now on by default (hourly). Switch it off on the Devices page; existing

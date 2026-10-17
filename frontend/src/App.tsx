@@ -2,9 +2,11 @@ import { Route, Routes } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { DeviceDetail } from './pages/DeviceDetail';
 import { Devices } from './pages/Devices';
+import { Diagnosis } from './pages/Diagnosis';
 import { Diagnostics } from './pages/Diagnostics';
 import { EventDetail } from './pages/EventDetail';
 import { Overview } from './pages/Overview';
+import { Report } from './pages/Report';
 import { System } from './pages/System';
 import { TargetDetail } from './pages/TargetDetail';
 import { Targets } from './pages/Targets';
@@ -21,6 +23,8 @@ export function App() {
         <Route path="devices/:id" element={<DeviceDetail />} />
         <Route path="timeline" element={<Timeline />} />
         <Route path="events/:id" element={<EventDetail />} />
+        <Route path="diagnosis" element={<Diagnosis />} />
+        <Route path="report" element={<Report />} />
         <Route path="diagnostics" element={<Diagnostics />} />
         <Route path="system" element={<System />} />
         <Route path="*" element={<p className="text-slate-400">Page not found.</p>} />

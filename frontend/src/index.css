@@ -9,3 +9,18 @@
   color: rgb(203 213 225);
   font-size: 12px;
 }
+
+@media print {
+  :root {
+    color-scheme: light;
+  }
+  html,
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+}

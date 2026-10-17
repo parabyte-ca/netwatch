@@ -13,7 +13,7 @@ export function Layout() {
   const busy = upd && (upd.progress.state === 'requested' || upd.progress.state === 'running');
   return (
     <div className="min-h-screen">
-      <header className="border-b border-slate-800 bg-slate-900/60">
+      <header className="border-b border-slate-800 bg-slate-900/60 print:hidden">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
           <div className="flex items-center gap-2">
             <img src="/favicon.svg" alt="" className="h-6 w-6" />
@@ -31,6 +31,9 @@ export function Layout() {
             </NavLink>
             <NavLink to="/timeline" className={link}>
               Timeline
+            </NavLink>
+            <NavLink to="/diagnosis" className={link}>
+              Diagnosis
             </NavLink>
             <NavLink to="/diagnostics" className={link}>
               Diagnostics

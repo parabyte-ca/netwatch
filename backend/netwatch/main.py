@@ -18,11 +18,12 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from . import __version__
 from .api import auth as auth_api
-from .api import devices, health, monitoring, system, targets, updates
+from .api import devices, diagnosis, health, monitoring, system, targets, updates
 from .auth import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, AuthStore, LoginThrottle
 from .config import Settings, get_settings
 from .db import make_engine, run_migrations
 from .probes import Prober
+from .services.diagnosis import Diagnoser
 from .services.discovery.inventory import DeviceStore
 from .services.discovery.service import DiscoveryService
 from .services.events import MONITOR, EventLog, IncidentRecorder, startup_events
@@ -140,6 +141,14 @@ def create_app(
         app.state.throughput_store = throughput_store
         app.state.throughput = throughput
         app.state.device_store = device_store
+        app.state.diagnoser = Diagnoser(
+            store,
+            events,
+            path_store,
+            gateway=default_route,
+            raw_retention_days=settings.raw_retention_days,
+            tz=settings.tz,
+        )
         app.state.discovery = discovery
         app.state.auth = AuthStore(engine)
         app.state.login_throttle = LoginThrottle()
@@ -222,6 +231,7 @@ def create_app(
     app.include_router(updates.router)
     app.include_router(monitoring.router)
     app.include_router(devices.router)
+    app.include_router(diagnosis.router)
 
     if settings.metrics_enabled:
 
