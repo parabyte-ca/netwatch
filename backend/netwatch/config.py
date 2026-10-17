@@ -70,11 +70,12 @@ class Settings(BaseSettings):
     # Throughput tests (iperf3).
     throughput_retention_days: int = Field(default=365, ge=7, le=3650)
 
-    # Discovery. Passive capture (ARP/DHCP/mDNS/SSDP) is on by default; active scanning (ARP
-    # sweep, DHCP server probe, SSDP/mDNS queries, reverse DNS) only when switched on in the UI
-    # (this is the initial value). Subnets default to the capture interface's own network.
+    # Discovery. Passive capture (ARP/DHCP/mDNS/SSDP) and scheduled active scanning (ARP sweep,
+    # DHCP server probe, SSDP/mDNS queries, reverse DNS) are both on by default; active scanning
+    # can be switched off in the UI (this is only the initial value). Subnets default to the
+    # capture interface's own network.
     discovery_passive: bool = True
-    discovery_active: bool = False
+    discovery_active: bool = True
     discovery_interface: str = ""
     discovery_subnets: str = ""
     discovery_scan_interval_min: int = Field(default=60, ge=15, le=10080)

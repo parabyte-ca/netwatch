@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-10-17
+### Changed
+- Active scanning is now on by default (hourly). Switch it off on the Devices page; existing
+  installs that never touched the toggle pick up the new default.
+- Dependabot now proposes major-version updates for GitHub Actions, grouped into one PR (still
+  ignored for application dependencies and base images).
+
 ## [0.4.0] - 2026-10-17
 ### Added
 - Passive device discovery from ARP, DHCP, mDNS and SSDP broadcasts and the host ARP cache,
