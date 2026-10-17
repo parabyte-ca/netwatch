@@ -246,7 +246,7 @@ export function System() {
           title="History"
           actions={
             <button
-              disabled={busy || active || !data.helper.connected || !data.history.some((h) => h.action === 'update' && h.state === 'succeeded')}
+              disabled={busy || active || !data.helper.connected || !data.rollback_available}
               onClick={() => {
                 if (window.confirm('Roll back to the version before the last update? This also restores the database backup taken before it, so data recorded since then is lost.')) {
                   void act(api.rollback, 'Rollback requested.');
@@ -270,7 +270,7 @@ export function System() {
                   <tr key={h.id ?? i}>
                     <td className="py-1.5 text-slate-400">{fmtWhen(h.finished_at ?? h.started_at)}</td>
                     <td className="font-mono text-xs text-slate-200">
-                      {h.action === 'rollback' ? 'rollback' : `v${h.from_version} → v${h.to_version}`}
+                      {h.action === 'rollback' ? `rollback v${h.from_version} → v${h.to_version}` : `v${h.from_version} → v${h.version ?? h.to_version}`}
                     </td>
                     <td className={h.state === 'succeeded' ? 'text-emerald-300' : 'text-rose-300'}>
                       {h.state === 'succeeded' ? 'OK' : h.rolled_back === 'yes' ? 'Failed, rolled back' : 'Failed'}

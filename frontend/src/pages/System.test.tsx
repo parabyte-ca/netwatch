@@ -25,6 +25,7 @@ const base: UpdateSummary = {
   helper: { connected: true, last_seen: '2026-10-17T12:00:00Z' },
   progress: { state: 'idle' },
   history: [],
+  rollback_available: false,
 };
 
 function json(body: unknown, status = 200) {

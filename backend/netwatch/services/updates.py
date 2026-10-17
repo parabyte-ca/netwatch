@@ -332,7 +332,12 @@ class UpdateManager:
             "helper": self._helper(now),
             "progress": self.folder.state(now) if self.folder else {"state": "idle"},
             "history": self.folder.history() if self.folder else [],
+            "rollback_available": self.rollback_available(),
         }
+
+    def rollback_available(self) -> bool:
+        """update.sh keeps a record of the last successful update until it is rolled back."""
+        return (self.settings.backup_dir / "last-update.state").is_file()
 
     def _helper(self, now: float) -> dict:
         if self.folder is None:
@@ -379,6 +384,8 @@ class UpdateManager:
         return req
 
     def request_rollback(self, *, by: str) -> dict:
+        if not self.rollback_available():
+            raise UpdateError("there is no completed update to roll back")
         req = self._ensure_ready(time.time()).write_request("rollback", None, "manual", by)
         log.info("rollback requested", extra={"by": by})
         return req

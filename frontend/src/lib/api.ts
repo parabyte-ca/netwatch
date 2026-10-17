@@ -158,6 +158,7 @@ export interface UpdateSummary {
     status?: UpgradeRecord;
   };
   history: UpgradeRecord[];
+  rollback_available: boolean;
 }
 
 export class ApiError extends Error {

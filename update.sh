@@ -18,7 +18,11 @@ source "$REPO_DIR/scripts/common.sh"
 BRANCH="main"
 DATA_DIR="$REPO_DIR/data"
 BACKUP_DIR="$DATA_DIR/backups"
+# Describes the last *successful* update, so --rollback (and the UI's Roll back button) can
+# undo it. A new attempt writes PENDING_FILE and only promotes it to STATE_FILE on success,
+# so a failed attempt never destroys the record of the last good update.
 STATE_FILE="$BACKUP_DIR/last-update.state"
+PENDING_FILE="$BACKUP_DIR/pending-update.state"
 KEEP_BACKUPS=10
 
 OPT_VERSION=""
@@ -97,7 +101,7 @@ restore_code() {
 }
 
 rollback() {
-    local ref="$1" rev="$2" image="$3" backup="$4"
+    local ref="$1" rev="$2" image="$3" backup="$4" consumed="$5"
     warn "Rolling back ..."
     compose logs --no-color --tail 200 > "$BACKUP_DIR/rollback-$(date +%Y%m%d-%H%M%S).log" 2>&1 || true
     compose stop || true
@@ -111,7 +115,7 @@ rollback() {
     fi
     compose up -d --no-build --pull never --remove-orphans || true
     if wait_healthy; then
-        rm -f "$STATE_FILE"  # nothing left to undo
+        rm -f "$consumed"  # this record has been undone
         info "Rollback complete: running $(cat VERSION) again."
         return 0
     fi
@@ -127,7 +131,7 @@ if [[ "$OPT_ROLLBACK" == true ]]; then
     PREV_REV="$(sed -n 's/^PREV_REV=//p' "$STATE_FILE")"
     PREV_IMAGE="$(sed -n 's/^PREV_IMAGE=//p' "$STATE_FILE")"
     BACKUP="$(sed -n 's/^BACKUP=//p' "$STATE_FILE")"
-    rollback "$PREV_REF" "$PREV_REV" "$PREV_IMAGE" "$BACKUP"
+    rollback "$PREV_REF" "$PREV_REV" "$PREV_IMAGE" "$BACKUP" "$STATE_FILE"
     exit 0
 fi
 
@@ -143,8 +147,9 @@ PREV_VERSION="$(cat VERSION)"
 # Keep the running image under a stable tag so a rollback never depends on a dangling image.
 PREV_IMAGE=""
 if CURRENT_IMAGE="$(docker inspect -f '{{.Image}}' "$CONTAINER_NAME" 2>/dev/null)"; then
-    docker tag "$CURRENT_IMAGE" "$IMAGE:previous"
-    PREV_IMAGE="$IMAGE:previous"
+    # Per-version tag: a later failed attempt must not overwrite what a rollback restores.
+    docker tag "$CURRENT_IMAGE" "$IMAGE:rollback-$PREV_VERSION"
+    PREV_IMAGE="$IMAGE:rollback-$PREV_VERSION"
 fi
 
 info "Current: v$PREV_VERSION (${PREV_REF:-detached} @ ${PREV_REV:0:12})"
@@ -155,7 +160,7 @@ BACKUP="$(backup_db "pre-update-$(date +%Y%m%d-%H%M%S)-v$PREV_VERSION.db")"
 [[ -n "$BACKUP" ]] && info "Database backed up to $BACKUP"
 prune_backups
 
-cat > "$STATE_FILE" <<STATE
+cat > "$PENDING_FILE" <<STATE
 PREV_REF=$PREV_REF
 PREV_REV=$PREV_REV
 PREV_IMAGE=$PREV_IMAGE
@@ -182,10 +187,10 @@ info "Deploying v$NEW_VERSION"
 # ── Get the image ──────────────────────────────────────────────────────────────
 
 if [[ "$OPT_BUILD" == true ]]; then
-    build_image || rollback "$PREV_REF" "$PREV_REV" "$PREV_IMAGE" "$BACKUP"
+    build_image || rollback "$PREV_REF" "$PREV_REV" "$PREV_IMAGE" "$BACKUP" "$PENDING_FILE"
 elif ! pull_image "${OPT_VERSION:-latest}"; then
     warn "Pull failed; building locally instead."
-    build_image || rollback "$PREV_REF" "$PREV_REV" "$PREV_IMAGE" "$BACKUP"
+    build_image || rollback "$PREV_REF" "$PREV_REV" "$PREV_IMAGE" "$BACKUP" "$PENDING_FILE"
 fi
 
 # ── Deploy and verify ──────────────────────────────────────────────────────────
@@ -195,6 +200,11 @@ info "Restarting container ..."
 compose up -d --no-build --pull never --remove-orphans || warn "docker compose up failed."
 
 if wait_healthy; then
+    mv -f "$PENDING_FILE" "$STATE_FILE"
+    # Only the newest rollback image is still referenced (by STATE_FILE); drop older ones.
+    docker images --format '{{.Repository}}:{{.Tag}}' "$IMAGE" \
+        | grep -F "$IMAGE:rollback-" | grep -vxF "$PREV_IMAGE" \
+        | xargs -r docker rmi >/dev/null 2>&1 || true
     info "Update complete: v$PREV_VERSION -> v$NEW_VERSION. Rollback with: sudo ./update.sh --rollback"
     # Remove superseded, untagged NetWatch images older than a week.
     docker image prune -f --filter "label=org.opencontainers.image.source=https://github.com/parabyte-ca/netwatch" \
@@ -202,5 +212,5 @@ if wait_healthy; then
     exit 0
 fi
 
-rollback "$PREV_REF" "$PREV_REV" "$PREV_IMAGE" "$BACKUP"
+rollback "$PREV_REF" "$PREV_REV" "$PREV_IMAGE" "$BACKUP" "$PENDING_FILE"
 exit 1

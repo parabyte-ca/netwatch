@@ -198,6 +198,11 @@ async def test_request_update_rules(tmp_path, store):
     req = m.request_update("0.3.0", reason="manual", by="admin")
     on_disk = json.loads((m.folder.path / "request.json").read_text())
     assert on_disk == req and req["action"] == "update" and req["version"] == "0.3.0"
+    with pytest.raises(UpdateError, match="no completed update"):
+        m.request_rollback(by="admin")
+    m.settings.backup_dir.mkdir(parents=True)
+    (m.settings.backup_dir / "last-update.state").write_text("PREV_REV=abc\n")
+    assert m.summary()["rollback_available"] is True
     with pytest.raises(UpdateError, match="already in progress"):
         m.request_rollback(by="admin")
 
