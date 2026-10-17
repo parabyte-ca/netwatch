@@ -1,4 +1,5 @@
 import { Link, useParams } from 'react-router-dom';
+import { CauseList } from '../components/CauseList';
 import { EventRow } from '../components/EventRow';
 import { Evidence } from '../components/Evidence';
 import { HopTable } from '../components/HopTable';
@@ -17,6 +18,9 @@ export function EventDetail() {
     30_000,
     [targetId, win?.start_ms, win?.end_ms],
   );
+
+  const failure = data && (data.event.kind === 'outage' || data.event.kind === 'degraded');
+  const diag = usePolling(() => (failure ? api.diagnosisForEvent(id) : Promise.resolve(null)), 30_000, [id, failure]);
 
   if (error) return <p className="text-rose-400">{error}</p>;
   if (!data) return <p className="text-slate-500">Loading…</p>;
@@ -57,6 +61,13 @@ export function EventDetail() {
           </dl>
         )}
       </div>
+
+      {diag.data && (
+        <section className="rounded-lg bg-slate-900 p-3 ring-1 ring-slate-800" aria-label="Diagnosis">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Most likely cause</h2>
+          <CauseList causes={diag.data.causes} />
+        </section>
+      )}
 
       {structured.length > 0 && (
         <section className="rounded-lg bg-slate-900 p-3 ring-1 ring-slate-800" aria-label="Evidence">

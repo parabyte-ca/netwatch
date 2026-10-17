@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.4.1-blue)
+![Version](https://img.shields.io/badge/version-0.5.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -12,9 +12,9 @@ a daily update check against GitHub (which can be switched off).
 
 Built in phases: **v0.1** probes, storage and graphs; **v0.2** sign-in and web/automatic
 updates; **v0.3** outage detection, an event timeline, TrueNAS NIC telemetry, mtr path tests
-and iperf3 throughput tests; **v0.4 (this release)** device discovery, an inventory and network
-anomaly alerts. The root-cause diagnosis engine and the Wi-Fi client agent follow in later
-releases.
+and iperf3 throughput tests; **v0.4** device discovery, an inventory and network anomaly
+alerts; **v0.5 (this release)** the root-cause diagnosis engine and an incident report for Bell.
+The full admin panel and the Wi-Fi client agent follow in later releases.
 
 ## Features
 - **Probes:** ICMP (from every 1 s), DNS query latency/failures, TCP connect, and HTTP checks,
@@ -63,6 +63,19 @@ releases.
   that keep changing, double NAT and carrier-grade NAT (from path tests), resolvers that
   disagree, and resolvers that answer for non-existent names. "New device" events start after
   a one-hour learning period (private-MAC devices are not announced, as they rotate).
+- **Diagnosis engine:** failures that overlap are grouped into incidents, and each incident is
+  explained by small, explainable rules that compare what failed with what kept working, along a
+  map of the network (TrueNAS link → switch → Home Hub → Bell → internet, with the Decos and
+  devices behind the Hub). Every likely cause has a confidence, the evidence it used and next
+  steps: TrueNAS link problems, the switch/cabling or a Hub restart, a Bell outage (strengthened
+  when a path test shows loss starting beyond the Hub), one destination only, Home Hub DNS, a
+  single Deco or the whole mesh, one device, IP conflicts, switching loops and rogue DHCP.
+- **Patterns:** failures that repeat at a fixed interval (e.g. every 6 h) or cluster at a time of
+  day are called out, since both point at something scheduled.
+- **Incident report for Bell:** a printable report (Print / save as PDF, or download Markdown)
+  with the incidents, their evidence and path tests, what was ruled out ("the Home Hub stayed
+  reachable during 5 of 5 outages"), availability, latency per target and speed tests. It can be
+  limited to incidents that point at Bell.
 - **Efficient storage:** SQLite (WAL) with raw samples kept 7 days and 1-minute rollups kept
   90 days (both configurable). Measured at about 0.6 % CPU and 60 MB RAM with 7 targets.
 - **Operations:** `/health` endpoint, structured JSON logs, optional Prometheus `/metrics`.
@@ -326,6 +339,9 @@ endpoints marked public, and state-changing calls need the header `X-Requested-W
 | `POST, DELETE /api/devices/{id}/monitor` | Start / stop monitoring the device (ping target that follows its IP) |
 | `GET, PUT /api/discovery` | Capture and scan status, DHCP servers seen; `{"active": true}` |
 | `POST /api/discovery/scan`, `POST /api/discovery/dns-check` | Run an active scan / the DNS consistency check now |
+| `GET /api/diagnosis?start=&end=` | Network map with live state, diagnosed incidents (newest first) and patterns |
+| `GET /api/diagnosis/event/{id}` | The diagnosed incident containing an outage or packet-loss event |
+| `GET /api/report?start=&end=&scope=all\|isp&format=json\|md` | Incident report; `md` downloads it as Markdown |
 | `GET /api/system` | Version, default route, database size, retention |
 | `GET /api/status` | Live state per target (up / degraded / down / no data) |
 | `GET, POST /api/targets` | List or create targets |

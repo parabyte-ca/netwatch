@@ -379,6 +379,103 @@ export interface DiscoveryStatus {
 
 export type DeviceEdit = Partial<Pick<DeviceRow, 'name' | 'type_override' | 'notes'>>;
 
+export interface TopologyNode {
+  layer: string;
+  parent: string | null;
+  label: string;
+  state: State;
+  inferred: boolean;
+  members: { target_id?: number; name: string; host?: string; state: State | 'up' | 'down' }[];
+}
+
+export interface Cause {
+  id: string;
+  title: string;
+  layer: string;
+  confidence: number;
+  evidence: string[];
+  next_steps: string[];
+}
+
+export interface IncidentTarget {
+  target_id: number;
+  name: string;
+  host: string;
+  layer: string;
+  kinds?: string[];
+  loss_pct?: number;
+}
+
+export interface BriefEvent {
+  id: number;
+  kind: EventKind;
+  severity: string;
+  start_ms: number;
+  end_ms: number | null;
+  title: string;
+  type: string | null;
+}
+
+export interface Incident {
+  id: string;
+  start_ms: number;
+  end_ms: number | null;
+  open: boolean;
+  duration_ms: number;
+  event_ids: number[];
+  severity: 'critical' | 'warning';
+  failing: IncidentTarget[];
+  healthy: IncidentTarget[];
+  failing_layers: string[];
+  nic_events: BriefEvent[];
+  anomalies: BriefEvent[];
+  path_tests: { id: number; ts_ms: number; host: string; first_loss_hop: number | null; reached: boolean | null }[];
+  causes: Cause[];
+}
+
+export interface Pattern {
+  kind: 'interval' | 'time_of_day';
+  title: string;
+  hint: string;
+}
+
+export interface DiagnosisResponse {
+  now_ms: number;
+  topology: TopologyNode[];
+  patterns: Pattern[];
+  incidents: Incident[];
+}
+
+export interface ReportIncident extends Incident {
+  start: string;
+  end: string;
+  duration: string;
+  cause: string;
+  confidence: number;
+  path_hops: { host: string; ts: string; first_loss_hop: number | null; hops: { hop: number; host: string | null; loss_pct: number; avg: number | null }[] }[];
+}
+
+export interface Report {
+  generated_at: string;
+  version: string;
+  period: { start: string; end: string; start_ms: number; end_ms: number };
+  scope: 'all' | 'isp';
+  gateway: string | null;
+  summary: {
+    incidents: number;
+    isp_incidents: number;
+    isp_downtime: string;
+    isp_availability_pct: number;
+    longest: string;
+  };
+  patterns: Pattern[];
+  targets: { name: string; host: string; layer_label: string; probes: number; loss_pct: number | null; median_ms: number | null; p95_ms: number | null }[];
+  speeds: { kind: string; direction: string; tests: number; avg_bps: number; min_bps: number; max_bps: number }[];
+  ruled_out: string[];
+  incidents: ReportIncident[];
+  markdown: string;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -490,6 +587,11 @@ export const api = {
   setDiscovery: (active: boolean) =>
     request<DiscoveryStatus>('/api/discovery', { method: 'PUT', body: JSON.stringify({ active }) }),
   scanNow: () => request<DiscoveryScan>('/api/discovery/scan', post()),
+  diagnosis: (start?: number) =>
+    request<DiagnosisResponse>(`/api/diagnosis${start ? `?start=${start}` : ''}`),
+  diagnosisForEvent: (eventId: number) => request<Incident>(`/api/diagnosis/event/${eventId}`),
+  report: (start: number, scope: 'all' | 'isp') => request<Report>(`/api/report?start=${start}&scope=${scope}`),
+  reportMarkdownUrl: (start: number, scope: 'all' | 'isp') => `/api/report?start=${start}&scope=${scope}&format=md`,
   upgradeLog: async () => {
     const res = await fetch('/api/updates/log', { credentials: 'same-origin' });
     if (!res.ok) throw new ApiError(res.status, `${res.status}`);
