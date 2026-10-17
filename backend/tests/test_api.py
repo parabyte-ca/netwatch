@@ -103,8 +103,14 @@ def test_system(client):
     assert body["retention"] == {"raw_days": 7, "rollup_days": 90}
 
 
-def test_seed_defaults_once(tmp_path, monkeypatch):
+def test_seed_defaults_once(tmp_path, monkeypatch, caplog):
+    import logging
+
     from fastapi.testclient import TestClient
+
+    # INFO must be enabled: a log `extra` key colliding with a LogRecord attribute only
+    # raises when the record is actually built.
+    caplog.set_level(logging.INFO)
 
     import netwatch.main as main_mod
 
@@ -113,6 +119,7 @@ def test_seed_defaults_once(tmp_path, monkeypatch):
     with TestClient(create_app(s, prober=FakeProber())) as c:
         names = [t["name"] for t in c.get("/api/targets").json()]
         assert names[0] == "Gateway" and "DNS via Gateway" in names and len(names) == 6
+        assert "seeded default targets" in caplog.text
         for t in c.get("/api/targets").json():
             c.delete(f"/api/targets/{t['id']}")
     with TestClient(create_app(s, prober=FakeProber())) as c:

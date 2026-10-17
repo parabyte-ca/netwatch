@@ -26,6 +26,7 @@ require_docker
 if [[ ! -f "$REPO_DIR/.env" ]]; then
     cp "$REPO_DIR/.env.example" "$REPO_DIR/.env"
     chmod 600 "$REPO_DIR/.env"
+    chown --reference="$REPO_DIR" "$REPO_DIR/.env" 2>/dev/null || true  # editable without sudo
     info "Created .env from .env.example (review it, then re-run if you change anything)."
 fi
 PORT="$(env_value NETWATCH_PORT 8085)"

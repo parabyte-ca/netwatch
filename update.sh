@@ -111,6 +111,7 @@ rollback() {
     fi
     compose up -d --no-build --pull never --remove-orphans || true
     if wait_healthy; then
+        rm -f "$STATE_FILE"  # nothing left to undo
         info "Rollback complete: running $(cat VERSION) again."
         return 0
     fi
@@ -127,7 +128,6 @@ if [[ "$OPT_ROLLBACK" == true ]]; then
     PREV_IMAGE="$(sed -n 's/^PREV_IMAGE=//p' "$STATE_FILE")"
     BACKUP="$(sed -n 's/^BACKUP=//p' "$STATE_FILE")"
     rollback "$PREV_REF" "$PREV_REV" "$PREV_IMAGE" "$BACKUP"
-    rm -f "$STATE_FILE"
     exit 0
 fi
 

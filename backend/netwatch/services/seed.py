@@ -70,5 +70,5 @@ def seed_defaults(store: Store, route: DefaultRoute | None) -> int:
             store.create_target(values)
             created += 1
     store.kv_set(SEEDED_KEY, True)
-    log.info("seeded default targets", extra={"created": created})
+    log.info("seeded default targets", extra={"targets_created": created})
     return created
