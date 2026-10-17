@@ -16,7 +16,7 @@ dependencies = [
     "pydantic>=2.9,<3.0",
     "pydantic-settings>=2.6,<3.0",
     "icmplib>=3.0.4,<4.0",
-    "dnspython>=2.7,<3.0",
+    "dnspython>=2.9.0,<3.0",
     "httpx>=0.28,<1.0",
     "prometheus-client>=0.21,<1.0",
 ]
