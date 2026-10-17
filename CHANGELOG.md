@@ -22,6 +22,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 - `docker-compose.yml` mounts `./upgrade` for the upgrade agent.
+- Dependabot ignores major-version bumps (and Python/Node base-image minor bumps), which are
+  planned deliberately instead.
 
 ## [0.1.0] - 2026-10-17
 ### Added
