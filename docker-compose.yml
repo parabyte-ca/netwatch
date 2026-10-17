@@ -1,0 +1,47 @@
+name: netwatch
+
+services:
+  netwatch:
+    image: ghcr.io/parabyte-ca/netwatch:latest
+    build:
+      context: .
+      args:
+        APP_VERSION: ${APP_VERSION:-0.0.0-dev}
+    container_name: netwatch
+    restart: unless-stopped
+
+    # Host networking is required for ARP, mDNS, SSDP and for probing from the host's real
+    # interface. The web UI listens on NETWATCH_PORT (default 8090) directly on the host.
+    network_mode: host
+
+    # Least privilege: drop everything, add back only raw sockets (ICMP, packet capture) and
+    # network administration (interface statistics). No privilege escalation, read-only root.
+    cap_drop: [ALL]
+    cap_add: [NET_RAW, NET_ADMIN]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NETWATCH_DATA_DIR: /data
+
+    volumes:
+      - ./data:/data
+
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "python", "-m", "netwatch.healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
