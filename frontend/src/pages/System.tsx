@@ -299,7 +299,7 @@ function ProgressLine({ summary }: { summary: UpdateSummary }) {
     case 'running':
       return <p className="text-sm text-sky-200">{what} in progress. NetWatch will restart; this page reconnects automatically.</p>;
     case 'succeeded':
-      return <p className="text-sm text-emerald-300">{what} completed {fmtWhen(p.status?.finished_at)}.</p>;
+      return <p className="text-sm text-emerald-300">{what} completed ({fmtWhen(p.status?.finished_at)})</p>;
     case 'failed':
       return (
         <p className="text-sm text-rose-300">
