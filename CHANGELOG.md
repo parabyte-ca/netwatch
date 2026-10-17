@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-10-17
+### Added
+- Sign-in for everything: first-run admin setup, scrypt password hashes, server-side
+  sessions in HttpOnly SameSite=Strict cookies, login lockout after 5 failures, CSRF header
+  check, password change, and `python -m netwatch.reset_password` for recovery.
+- In-app updates: System page with running/latest version, release notes, Install button,
+  live update log, update history and Roll back.
+- Automatic updates with a policy (off, notify, patch, minor) and a nightly maintenance window;
+  bug-fix releases install automatically by default, larger releases wait for a click. Failed
+  automatic updates are rolled back and not retried.
+- Host-side upgrade agent (`scripts/upgrade-agent.sh`), installed by `setup.sh` as a TrueNAS
+  cron job through the middleware so it survives TrueNAS upgrades.
+- CI publishes a GitHub Release (notes from this changelog) for every version tag, after the
+  image is pushed; the update check reads those releases.
+- Optional bearer token for Prometheus scraping of `/metrics`.
+
+### Changed
+- `docker-compose.yml` mounts `./upgrade` for the upgrade agent.
+- Dependabot ignores major-version bumps (and Python/Node base-image minor bumps), which are
+  planned deliberately instead.
+
 ## [0.1.0] - 2026-10-17
 ### Added
 - Phase 1 scaffold: FastAPI (Python 3.12) backend, React + Vite + TypeScript frontend,

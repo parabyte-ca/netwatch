@@ -29,7 +29,22 @@ class Settings(BaseSettings):
     flush_interval_s: float = Field(default=2.0, gt=0, le=30)
 
     metrics_enabled: bool = False
+    # Bearer token Prometheus uses for /metrics (every other path requires a login session).
+    metrics_token: str = ""
     seed_defaults: bool = True
+
+    # Authentication.
+    session_days: int = Field(default=30, ge=1, le=365)
+    cookie_secure: bool = False  # set true when served over HTTPS (reverse proxy)
+
+    # In-app updates. upgrade_dir is shared with the host-side upgrade agent; empty disables.
+    upgrade_dir: Path | None = Path("/upgrade")
+    update_check: bool = True
+    update_repo: str = Field(default="parabyte-ca/netwatch", pattern=r"^[\w.-]+/[\w.-]+$")
+    # Defaults for the automatic-update policy (editable in the UI afterwards).
+    auto_update: Literal["off", "notify", "patch", "minor"] = "patch"
+    auto_update_window: str = Field(default="03:30", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    tz: str = Field(default="America/Toronto", validation_alias="TZ")
 
     @property
     def db_path(self) -> Path:

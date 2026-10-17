@@ -1,9 +1,15 @@
 version: 2
+
+# Major-version bumps are ignored everywhere: they usually need code changes, so they are
+# done deliberately as part of a planned release rather than as automated PRs.
 updates:
   - package-ecosystem: pip
     directory: /backend
     schedule: { interval: monthly }
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: /frontend
     schedule: { interval: monthly }
@@ -12,9 +18,23 @@ updates:
       frontend:
         patterns: ["*"]
         update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: monthly }
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: docker
     directory: /
     schedule: { interval: monthly }
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      # Base images are pinned to Python 3.12 and Node 22 LTS; move them on purpose.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "node"
+        update-types: ["version-update:semver-minor"]

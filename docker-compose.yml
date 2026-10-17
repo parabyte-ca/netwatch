@@ -28,9 +28,12 @@ services:
         required: false
     environment:
       NETWATCH_DATA_DIR: /data
+      NETWATCH_UPGRADE_DIR: /upgrade
 
     volumes:
       - ./data:/data
+      # Shared with the host-side upgrade agent (scripts/upgrade-agent.sh) for in-app updates.
+      - ./upgrade:/upgrade
 
     mem_limit: 512m
     healthcheck:
