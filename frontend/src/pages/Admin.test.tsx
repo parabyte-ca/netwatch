@@ -41,6 +41,12 @@ function mockApi(calls: { url: string; method: string; body?: unknown }[]) {
       return json({ backups: [{ name: 'netwatch-20261017-v0.5.0.db', bytes: 1048576, modified: 1792270000 }], restore_pending: false, database_bytes: 2097152 });
     }
     if (url === '/api/admin/security-log') return json([]);
+    if (url === '/api/admin/deco/test') return json({ ok: false, error: 'wrong owner password (9 attempts left before lockout)' });
+    if (url === '/api/admin/deco') {
+      const saved = method === 'PUT' ? JSON.parse(String(init?.body)) : { host: '', enabled: false };
+      return json({ host: saved.host, enabled: saved.enabled, password_set: method === 'PUT', last_poll_ms: null, last_ok_ms: null,
+        error: null, decos: [], clients: 0, suggestions: [{ ip: '192.168.2.10', label: 'Deco Living Room' }] });
+    }
     if (url === '/api/admin/restart') return json({ restarting: true }, 202);
     return json({});
   });
@@ -84,5 +90,22 @@ describe('Admin', () => {
     expect(within(backups).getByRole('link', { name: 'Download' }).getAttribute('href')).toBe(
       '/api/admin/backups/netwatch-20261017-v0.5.0.db',
     );
+  });
+
+  it('connects the Deco mesh without echoing the password', async () => {
+    const calls: { url: string; method: string; body?: unknown }[] = [];
+    mockApi(calls);
+    render(<MemoryRouter><Admin /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: '192.168.2.10' }));
+    fireEvent.change(screen.getByLabelText('Owner password'), { target: { value: 'pw' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
+    expect(await screen.findByText(/Test failed: wrong owner password/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Poll every 30 s'));
+    fireEvent.click(within(screen.getByRole('region', { name: 'Deco mesh' })).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/admin/deco' && c.method === 'PUT')).toBe(true));
+    const put = calls.find((c) => c.url === '/api/admin/deco' && c.method === 'PUT')!;
+    expect(JSON.parse(String(put.body))).toEqual({ host: '192.168.2.10', enabled: true, password: 'pw' });
+    expect(await screen.findByText(/Owner password \(saved\)/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Owner password')).toHaveValue('');
   });
 });

@@ -19,23 +19,26 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from . import __version__
-from .api import admin, devices, diagnosis, health, monitoring, system, targets, updates
+from .api import admin, devices, diagnosis, health, monitoring, netmap, system, targets, updates
 from .api import auth as auth_api
 from .auth import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, AuthStore, LoginThrottle
 from .config import Settings, get_settings
 from .db import make_engine, run_migrations
 from .probes import Prober
+from .services.deco.service import DecoService
 from .services.diagnosis import Diagnoser
 from .services.discovery.inventory import DeviceStore
 from .services.discovery.service import DiscoveryService
 from .services.events import MONITOR, SECURITY, EventLog, IncidentRecorder, startup_events
 from .services.metrics import Metrics
 from .services.netinfo import default_route
+from .services.netmap import NetMap
 from .services.nic import NicMonitor, NicStore, interfaces_to_watch
 from .services.pathtest import PATH_TEST_KINDS, PathStore, PathTester
 from .services.restore import apply_pending_restore
 from .services.runtime_settings import OVERRIDES_KEY, apply_values, load_overrides
 from .services.scheduler import Monitor
+from .services.secrets import SecretBox
 from .services.seed import seed_defaults
 from .services.storage import Store
 from .services.throughput import ThroughputStore, ThroughputTester
@@ -169,8 +172,13 @@ def create_app(
             gateway=default_route,
             raw_retention_days=settings.raw_retention_days,
             tz=settings.tz,
+            devices=device_store,
         )
         app.state.discovery = discovery
+        app.state.deco = DecoService(
+            store, events, device_store, discovery.inventory, SecretBox(settings.data_dir)
+        )
+        app.state.netmap = NetMap(app.state)
         app.state.auth = AuthStore(engine)
         app.state.login_throttle = LoginThrottle(
             max_failures=settings.login_max_failures, lockout_s=settings.login_lockout_s
@@ -187,12 +195,14 @@ def create_app(
         path_tester.start_schedule(path_test_targets, settings.path_test_interval_min)
         throughput.start_schedule()
         await discovery.start()
+        app.state.deco.start()
         app.state.updates.start()
         log.info("netwatch started", extra={"version": __version__, "port": settings.port})
         try:
             yield
         finally:
             await app.state.updates.stop()
+            await app.state.deco.stop()
             await discovery.stop()
             await throughput.stop()
             await path_tester.stop()
@@ -259,6 +269,7 @@ def create_app(
     app.include_router(devices.router)
     app.include_router(diagnosis.router)
     app.include_router(admin.router)
+    app.include_router(netmap.router)
 
     @app.get("/metrics", include_in_schema=False)
     def metrics_endpoint(request: Request) -> Response:

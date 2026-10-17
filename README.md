@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.6.0-blue)
+![Version](https://img.shields.io/badge/version-0.7.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -13,8 +13,9 @@ a daily update check against GitHub (which can be switched off).
 Built in phases: **v0.1** probes, storage and graphs; **v0.2** sign-in and web/automatic
 updates; **v0.3** outage detection, an event timeline, TrueNAS NIC telemetry, mtr path tests
 and iperf3 throughput tests; **v0.4** device discovery, an inventory and network anomaly
-alerts; **v0.5** the root-cause diagnosis engine and an incident report for Bell; **v0.6 (this
-release)** the admin panel, which completes the roadmap.
+alerts; **v0.5** the root-cause diagnosis engine and an incident report for Bell; **v0.6** the
+admin panel; **v0.7 (this release)** the network map with incident replay and the Deco mesh
+integration.
 
 ## Features
 - **Probes:** ICMP (from every 1 s), DNS query latency/failures, TCP connect, and HTTP checks,
@@ -70,6 +71,19 @@ release)** the admin panel, which completes the roadmap.
   steps: TrueNAS link problems, the switch/cabling or a Hub restart, a Bell outage (strengthened
   when a path test shows loss starting beyond the Hub), one destination only, Home Hub DNS, a
   single Deco or the whole mesh, one device, IP conflicts, switching loops and rogue DHCP.
+- **Network map:** an interactive map of the home network (Internet → Bell → Home Hub → switch
+  → TrueNAS, the main Deco and its satellites, and the devices on each Deco). Monitored and
+  named devices are nodes; the rest are counted per Deco and listed when you tap the group.
+  Links show median latency and are coloured by packet loss, Wi-Fi links are dashed, and tapping
+  a node opens its details. The layout is automatic; drag nodes to tidy it (saved, with a reset).
+- **Incident replay:** move a time slider or pick an incident to see the map as it was, with the
+  likely cause and the failing nodes highlighted ("Show on map" from Diagnosis and events).
+- **Deco mesh integration (optional):** reads the Decos' local API with the owner password to
+  learn each unit's state and backhaul and which device is on which Deco and band. It adds
+  Wi-Fi events to the timeline (Deco offline/online, backhaul changes, roaming and Wi-Fi
+  disconnects over a minute for monitored devices) and diagnosis causes (a Deco went offline,
+  every failing device was on one Deco, a device dropped off Wi-Fi). The password is encrypted
+  with a key file kept outside the database, so backups never contain it.
 - **Patterns:** failures that repeat at a fixed interval (e.g. every 6 h) or cluster at a time of
   day are called out, since both point at something scheduled.
 - **Incident report for Bell:** a printable report (Print / save as PDF, or download Markdown)
@@ -138,6 +152,7 @@ What `setup.sh` does:
 | `/mnt/shared_vol/websites/netwatch/` | Git checkout, `docker-compose.yml`, `.env` |
 | `/mnt/shared_vol/websites/netwatch/data/netwatch.db` | SQLite database (bind-mounted at `/data`) |
 | `/mnt/shared_vol/websites/netwatch/data/backups/` | Pre-update database backups (last 10 kept) |
+| `/mnt/shared_vol/websites/netwatch/data/.secret_key` | Key for stored credentials (Deco password); not in backups, so if it is lost just enter the password again |
 | `/mnt/shared_vol/websites/netwatch/upgrade/` | Shared with the upgrade agent: requests, status, update log, history |
 
 **Container security model**
@@ -179,6 +194,16 @@ To measure the LAN, run an iperf3 server on the device at the far end and add it
 
 A wired PC that tests fast while Wi-Fi devices test slow points at the mesh; a slow wired test
 points at the switch or cabling; a fast LAN with a slow WAN test points at Bell.
+
+### Deco mesh
+Under **Admin → Deco mesh**, enter the main Deco's IP address and the Deco **owner** password,
+press **Test connection**, then tick **Poll every 30 s** and **Save**.
+
+Deco only lets the owner account sign in locally, and an owner sign-in in the Deco app signs
+NetWatch out (it signs in again on its next poll). To avoid that tug-of-war, invite a second
+account as a **manager** in the Deco app (Me → Managers) and use that one on your phone; leave
+the owner account to NetWatch. Only LAN addresses are accepted, so the password never leaves
+the network.
 
 ### Local development
 ```bash

@@ -61,6 +61,7 @@ function IncidentCard({ inc, selected, onSelect }: { inc: Incident; selected: bo
                 Event {i + 1}
               </Link>
             ))}
+            <Link to={`/map?incident=${inc.id}`} className="text-sky-400 hover:underline">Show on map</Link>
           </p>
         </div>
       )}

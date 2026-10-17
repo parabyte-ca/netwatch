@@ -48,11 +48,12 @@ export function EventDetail() {
           {data.target && <> · <Link to={`/targets/${data.target.id}`} className="text-sky-400 hover:underline">{data.target.name}</Link></>}
         </p>
         {hint && <p className="mt-2 max-w-3xl rounded-md bg-slate-900 p-3 text-sm text-slate-300 ring-1 ring-slate-800">{hint}</p>}
-        {deviceId && (
-          <p className="mt-1 text-sm">
-            <Link to={`/devices/${deviceId}`} className="text-sky-400 hover:underline">Open device</Link>
-          </p>
-        )}
+        <p className="mt-1 flex flex-wrap gap-4 text-sm">
+          {deviceId && <Link to={`/devices/${deviceId}`} className="text-sky-400 hover:underline">Open device</Link>}
+          <Link to={failure ? `/map?event=${ev.id}` : `/map?at=${ev.start_ms}`} className="text-sky-400 hover:underline">
+            Show on map
+          </Link>
+        </p>
         {details.length > 0 && (
           <dl className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs">
             {details.map(([k, v]) => (
