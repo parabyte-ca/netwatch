@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-10-17
+### Added
+- Admin page: all tunable settings editable in the web UI with defaults and reset; values
+  override `.env`, apply immediately where possible, and a restart banner covers the rest.
+- Restart NetWatch from the web UI (Docker's restart policy brings it back).
+- Signed-in sessions list with sign-out of one or all other sessions.
+- Configurable sign-in lockout (`NETWATCH_LOGIN_MAX_FAILURES`, `NETWATCH_LOGIN_LOCKOUT_S`).
+- Security log: sign-ins, failures, lockouts, password and settings changes, backups,
+  restores and restarts (also on the Timeline as "Security", hidden by default).
+- Database backup and restore from the web page: create, download, delete, restore a stored or
+  uploaded (`.db`/`.db.gz`) backup; validated, then applied on restart after a safety copy.
+
+### Changed
+- `/metrics` is always routed and answers 404 while disabled, so it can be switched on from
+  the UI.
+
 ## [0.5.0] - 2026-10-17
 ### Added
 - Diagnosis engine: overlapping failures are grouped into incidents and each is explained by

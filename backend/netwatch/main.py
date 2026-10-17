@@ -6,6 +6,8 @@ import asyncio
 import contextlib
 import hmac
 import logging
+import os
+import signal
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,8 +19,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from . import __version__
+from .api import admin, devices, diagnosis, health, monitoring, system, targets, updates
 from .api import auth as auth_api
-from .api import devices, diagnosis, health, monitoring, system, targets, updates
 from .auth import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, AuthStore, LoginThrottle
 from .config import Settings, get_settings
 from .db import make_engine, run_migrations
@@ -26,11 +28,13 @@ from .probes import Prober
 from .services.diagnosis import Diagnoser
 from .services.discovery.inventory import DeviceStore
 from .services.discovery.service import DiscoveryService
-from .services.events import MONITOR, EventLog, IncidentRecorder, startup_events
+from .services.events import MONITOR, SECURITY, EventLog, IncidentRecorder, startup_events
 from .services.metrics import Metrics
 from .services.netinfo import default_route
 from .services.nic import NicMonitor, NicStore, interfaces_to_watch
 from .services.pathtest import PATH_TEST_KINDS, PathStore, PathTester
+from .services.restore import apply_pending_restore
+from .services.runtime_settings import OVERRIDES_KEY, apply_values, load_overrides
 from .services.scheduler import Monitor
 from .services.seed import seed_defaults
 from .services.storage import Store
@@ -61,15 +65,32 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         settings.data_dir.mkdir(parents=True, exist_ok=True)
+        restored_from = await asyncio.to_thread(
+            apply_pending_restore, settings.db_path, settings.backup_dir
+        )
         engine = make_engine(settings.db_path)
         await asyncio.to_thread(run_migrations, engine)
         store = Store(engine)
+        # Values saved in the web UI override the environment.
+        base = settings.model_copy()
+        overrides = load_overrides(await asyncio.to_thread(store.kv_get, OVERRIDES_KEY, {}))
+        apply_values(settings, overrides, base)
+        logging.getLogger().setLevel(settings.log_level.upper())
         if settings.seed_defaults:
             await asyncio.to_thread(seed_defaults, store, default_route())
         metrics = Metrics() if settings.metrics_enabled else None
 
         events = EventLog(engine)
         await asyncio.to_thread(startup_events, events)
+        if restored_from is not None:
+            await asyncio.to_thread(
+                events.instant,
+                SECURITY,
+                "warning",
+                int(time.time() * 1000),
+                "Database restored from a backup",
+                details={"safety_copy": restored_from.name},
+            )
         path_store = PathStore(engine)
         path_tester = PathTester(
             path_store, cycles=settings.path_test_cycles, cooldown_s=settings.path_test_cooldown_s
@@ -151,7 +172,12 @@ def create_app(
         )
         app.state.discovery = discovery
         app.state.auth = AuthStore(engine)
-        app.state.login_throttle = LoginThrottle()
+        app.state.login_throttle = LoginThrottle(
+            max_failures=settings.login_max_failures, lockout_s=settings.login_lockout_s
+        )
+        app.state.settings_base = base
+        app.state.restart_pending = set()
+        app.state.restart = _restart_process
         app.state.updates = UpdateManager(settings, store, client=update_client)
         await asyncio.to_thread(app.state.auth.purge_sessions)
 
@@ -232,16 +258,23 @@ def create_app(
     app.include_router(monitoring.router)
     app.include_router(devices.router)
     app.include_router(diagnosis.router)
+    app.include_router(admin.router)
 
-    if settings.metrics_enabled:
-
-        @app.get("/metrics", include_in_schema=False)
-        def metrics_endpoint(request: Request) -> Response:
-            registry = request.app.state.metrics.registry
-            return Response(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
+    @app.get("/metrics", include_in_schema=False)
+    def metrics_endpoint(request: Request) -> Response:
+        # Registered always: whether it is enabled can be changed from the UI (after restart).
+        m = getattr(request.app.state, "metrics", None)
+        if m is None:
+            raise HTTPException(404)
+        return Response(generate_latest(m.registry), media_type=CONTENT_TYPE_LATEST)
 
     _mount_spa(app, settings.static_dir)
     return app
+
+
+def _restart_process(delay_s: float = 1.0) -> None:
+    """Stop gracefully after the response is sent; Docker's restart policy starts us again."""
+    asyncio.get_running_loop().call_later(delay_s, os.kill, os.getpid(), signal.SIGTERM)
 
 
 def _mount_spa(app: FastAPI, static_dir: Path) -> None:

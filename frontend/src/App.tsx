@@ -1,5 +1,6 @@
 import { Route, Routes } from 'react-router-dom';
 import { Layout } from './components/Layout';
+import { Admin } from './pages/Admin';
 import { DeviceDetail } from './pages/DeviceDetail';
 import { Devices } from './pages/Devices';
 import { Diagnosis } from './pages/Diagnosis';
@@ -27,6 +28,7 @@ export function App() {
         <Route path="report" element={<Report />} />
         <Route path="diagnostics" element={<Diagnostics />} />
         <Route path="system" element={<System />} />
+        <Route path="admin" element={<Admin />} />
         <Route path="*" element={<p className="text-slate-400">Page not found.</p>} />
       </Route>
     </Routes>

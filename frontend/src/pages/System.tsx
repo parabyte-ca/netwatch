@@ -261,25 +261,27 @@ export function System() {
           {data.history.length === 0 ? (
             <p className="text-sm text-slate-500">No updates yet.</p>
           ) : (
-            <table className="w-full text-left text-sm">
-              <thead className="text-xs uppercase text-slate-500">
-                <tr><th className="py-1">When</th><th>Change</th><th>Result</th><th>By</th></tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800">
-                {data.history.map((h, i) => (
-                  <tr key={h.id ?? i}>
-                    <td className="py-1.5 text-slate-400">{fmtWhen(h.finished_at ?? h.started_at)}</td>
-                    <td className="font-mono text-xs text-slate-200">
-                      {h.action === 'rollback' ? `rollback v${h.from_version} → v${h.to_version}` : `v${h.from_version} → v${h.version ?? h.to_version}`}
-                    </td>
-                    <td className={h.state === 'succeeded' ? 'text-emerald-300' : 'text-rose-300'}>
-                      {h.state === 'succeeded' ? 'OK' : h.rolled_back === 'yes' ? 'Failed, rolled back' : 'Failed'}
-                    </td>
-                    <td className="text-slate-400">{h.reason === 'auto' ? 'auto' : h.requested_by}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="text-xs uppercase text-slate-500">
+                  <tr><th className="py-1">When</th><th>Change</th><th>Result</th><th>By</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800">
+                  {data.history.map((h, i) => (
+                    <tr key={h.id ?? i}>
+                      <td className="py-1.5 text-slate-400">{fmtWhen(h.finished_at ?? h.started_at)}</td>
+                      <td className="font-mono text-xs text-slate-200">
+                        {h.action === 'rollback' ? `rollback v${h.from_version} → v${h.to_version}` : `v${h.from_version} → v${h.version ?? h.to_version}`}
+                      </td>
+                      <td className={h.state === 'succeeded' ? 'text-emerald-300' : 'text-rose-300'}>
+                        {h.state === 'succeeded' ? 'OK' : h.rolled_back === 'yes' ? 'Failed, rolled back' : 'Failed'}
+                      </td>
+                      <td className="text-slate-400">{h.reason === 'auto' ? 'auto' : h.requested_by}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </Card>
       </div>

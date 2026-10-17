@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     # Authentication.
     session_days: int = Field(default=30, ge=1, le=365)
     cookie_secure: bool = False  # set true when served over HTTPS (reverse proxy)
+    login_max_failures: int = Field(default=5, ge=3, le=50)
+    login_lockout_s: int = Field(default=300, ge=30, le=86400)
 
     # In-app updates. upgrade_dir is shared with the host-side upgrade agent; empty disables.
     upgrade_dir: Path | None = Path("/upgrade")

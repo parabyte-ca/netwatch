@@ -171,7 +171,8 @@ export type EventKind =
   | 'nic_errors'
   | 'monitor'
   | 'anomaly'
-  | 'device';
+  | 'device'
+  | 'security';
 
 export interface TimelineEvent {
   id: number;
@@ -476,6 +477,46 @@ export interface Report {
   markdown: string;
 }
 
+export interface SettingField {
+  name: string;
+  group: string;
+  group_label: string;
+  label: string;
+  help: string;
+  unit: string;
+  live: boolean;
+  type: 'int' | 'float' | 'bool' | 'str' | 'choice';
+  value: number | boolean | string;
+  default: number | boolean | string;
+  overridden: boolean;
+  min?: number;
+  max?: number;
+  choices?: string[];
+  secret?: boolean;
+}
+
+export interface SettingsResponse {
+  fields: SettingField[];
+  restart_pending: string[];
+}
+
+export interface SessionInfo {
+  id: string;
+  username: string;
+  created_ms: number;
+  last_seen_ms: number;
+  expires_ms: number;
+  ip: string;
+  user_agent: string;
+  current: boolean;
+}
+
+export interface BackupFile {
+  name: string;
+  bytes: number;
+  modified: number;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -592,6 +633,25 @@ export const api = {
   diagnosisForEvent: (eventId: number) => request<Incident>(`/api/diagnosis/event/${eventId}`),
   report: (start: number, scope: 'all' | 'isp') => request<Report>(`/api/report?start=${start}&scope=${scope}`),
   reportMarkdownUrl: (start: number, scope: 'all' | 'isp') => `/api/report?start=${start}&scope=${scope}&format=md`,
+  adminSettings: () => request<SettingsResponse>('/api/admin/settings'),
+  saveSettings: (changes: Record<string, unknown>) =>
+    request<SettingsResponse>('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ changes }) }),
+  restart: () => request<{ restarting: boolean }>('/api/admin/restart', post()),
+  sessions: () => request<SessionInfo[]>('/api/admin/sessions'),
+  revokeSession: (id: string) => request<void>(`/api/admin/sessions/${id}`, { method: 'DELETE' }),
+  revokeOtherSessions: () => request<{ revoked: number }>('/api/admin/sessions/revoke-others', post()),
+  securityLog: () => request<TimelineEvent[]>('/api/admin/security-log'),
+  backups: () => request<{ backups: BackupFile[]; restore_pending: boolean; database_bytes: number }>('/api/admin/backups'),
+  createBackup: () => request<BackupFile>('/api/admin/backups', post()),
+  deleteBackup: (name: string) => request<void>(`/api/admin/backups/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  backupUrl: (name: string) => `/api/admin/backups/${encodeURIComponent(name)}`,
+  restoreBackup: (name: string) => request<{ restarting: boolean }>(`/api/admin/backups/${encodeURIComponent(name)}/restore`, post()),
+  restoreUpload: (file: Blob) =>
+    request<{ restarting: boolean; targets: number; users: number }>('/api/admin/restore', {
+      method: 'POST',
+      body: file,
+      headers: { 'Content-Type': 'application/octet-stream' },
+    }),
   upgradeLog: async () => {
     const res = await fetch('/api/updates/log', { credentials: 'same-origin' });
     if (!res.ok) throw new ApiError(res.status, `${res.status}`);

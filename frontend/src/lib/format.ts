@@ -103,6 +103,7 @@ export const EVENT_LABEL: Record<string, string> = {
   monitor: 'NetWatch',
   anomaly: 'Anomaly',
   device: 'Device',
+  security: 'Security',
 };
 
 export const DEVICE_TYPE_LABEL: Record<string, string> = {

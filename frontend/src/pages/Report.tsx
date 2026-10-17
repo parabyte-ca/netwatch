@@ -75,19 +75,21 @@ export function Report() {
           <section aria-label="Incidents">
             <h2 className="mb-1 text-base font-semibold text-white print:text-black">Incidents</h2>
             {r.incidents.length === 0 ? <p className="text-slate-400">None in this period.</p> : (
-              <table className="w-full text-xs">
-                <thead><tr><th className={th}>Start</th><th className={th}>End</th><th className={th}>Duration</th>
-                  <th className={th}>Affected</th><th className={th}>Most likely cause</th><th className={th}>Confidence</th></tr></thead>
-                <tbody>
-                  {r.incidents.map((i) => (
-                    <tr key={i.id}>
-                      <td className={td}>{i.start}</td><td className={td}>{i.end}</td><td className={td}>{i.duration}</td>
-                      <td className={td}>{i.failing.map((f) => f.name).join(', ')}</td>
-                      <td className={td}>{i.cause}</td><td className={td}>{i.confidence} %</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead><tr><th className={th}>Start</th><th className={th}>End</th><th className={th}>Duration</th>
+                    <th className={th}>Affected</th><th className={th}>Most likely cause</th><th className={th}>Confidence</th></tr></thead>
+                  <tbody>
+                    {r.incidents.map((i) => (
+                      <tr key={i.id}>
+                        <td className={td}>{i.start}</td><td className={td}>{i.end}</td><td className={td}>{i.duration}</td>
+                        <td className={td}>{i.failing.map((f) => f.name).join(', ')}</td>
+                        <td className={td}>{i.cause}</td><td className={td}>{i.confidence} %</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </section>
 
@@ -109,17 +111,19 @@ export function Report() {
                   {i.path_hops.map((p) => (
                     <div key={p.ts + p.host} className="mt-2">
                       <p className="text-xs text-slate-400 print:text-black">Path test to {p.host} at {p.ts}</p>
-                      <table className="text-xs">
-                        <thead><tr><th className={th}>Hop</th><th className={th}>Host</th><th className={th}>Loss</th><th className={th}>Avg</th></tr></thead>
-                        <tbody>
-                          {p.hops.map((h) => (
-                            <tr key={h.hop} className={p.first_loss_hop === h.hop ? 'text-rose-300 print:font-bold print:text-black' : ''}>
-                              <td className={td}>{h.hop}</td><td className={td}>{h.host ?? '???'}</td>
-                              <td className={td}>{h.loss_pct} %</td><td className={td}>{fmtMs(h.avg)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                      <div className="overflow-x-auto">
+                        <table className="text-xs">
+                          <thead><tr><th className={th}>Hop</th><th className={th}>Host</th><th className={th}>Loss</th><th className={th}>Avg</th></tr></thead>
+                          <tbody>
+                            {p.hops.map((h) => (
+                              <tr key={h.hop} className={p.first_loss_hop === h.hop ? 'text-rose-300 print:font-bold print:text-black' : ''}>
+                                <td className={td}>{h.hop}</td><td className={td}>{h.host ?? '???'}</td>
+                                <td className={td}>{h.loss_pct} %</td><td className={td}>{fmtMs(h.avg)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -130,37 +134,41 @@ export function Report() {
           {r.targets.length > 0 && (
             <section aria-label="Measurements" className="break-inside-avoid">
               <h2 className="mb-1 text-base font-semibold text-white print:text-black">Measurements for the whole period</h2>
-              <table className="w-full text-xs">
-                <thead><tr><th className={th}>Target</th><th className={th}>Address</th><th className={th}>Layer</th>
-                  <th className={th}>Probes</th><th className={th}>Loss</th><th className={th}>Median</th><th className={th}>95th pct</th></tr></thead>
-                <tbody>
-                  {r.targets.map((t) => (
-                    <tr key={t.name + t.host}>
-                      <td className={td}>{t.name}</td><td className={td}>{t.host}</td><td className={td}>{t.layer_label}</td>
-                      <td className={td}>{t.probes}</td><td className={td}>{t.loss_pct ?? '—'} %</td>
-                      <td className={td}>{fmtMs(t.median_ms)}</td><td className={td}>{fmtMs(t.p95_ms)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead><tr><th className={th}>Target</th><th className={th}>Address</th><th className={th}>Layer</th>
+                    <th className={th}>Probes</th><th className={th}>Loss</th><th className={th}>Median</th><th className={th}>95th pct</th></tr></thead>
+                  <tbody>
+                    {r.targets.map((t) => (
+                      <tr key={t.name + t.host}>
+                        <td className={td}>{t.name}</td><td className={td}>{t.host}</td><td className={td}>{t.layer_label}</td>
+                        <td className={td}>{t.probes}</td><td className={td}>{t.loss_pct ?? '—'} %</td>
+                        <td className={td}>{fmtMs(t.median_ms)}</td><td className={td}>{fmtMs(t.p95_ms)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </section>
           )}
 
           {r.speeds.length > 0 && (
             <section aria-label="Speed tests" className="break-inside-avoid">
               <h2 className="mb-1 text-base font-semibold text-white print:text-black">Speed tests (iperf3)</h2>
-              <table className="text-xs">
-                <thead><tr><th className={th}>Type</th><th className={th}>Direction</th><th className={th}>Tests</th>
-                  <th className={th}>Average</th><th className={th}>Min</th><th className={th}>Max</th></tr></thead>
-                <tbody>
-                  {r.speeds.map((s) => (
-                    <tr key={s.kind + s.direction}>
-                      <td className={td}>{s.kind.toUpperCase()}</td><td className={td}>{s.direction}</td><td className={td}>{s.tests}</td>
-                      <td className={td}>{fmtBps(s.avg_bps)}</td><td className={td}>{fmtBps(s.min_bps)}</td><td className={td}>{fmtBps(s.max_bps)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="overflow-x-auto">
+                <table className="text-xs">
+                  <thead><tr><th className={th}>Type</th><th className={th}>Direction</th><th className={th}>Tests</th>
+                    <th className={th}>Average</th><th className={th}>Min</th><th className={th}>Max</th></tr></thead>
+                  <tbody>
+                    {r.speeds.map((s) => (
+                      <tr key={s.kind + s.direction}>
+                        <td className={td}>{s.kind.toUpperCase()}</td><td className={td}>{s.direction}</td><td className={td}>{s.tests}</td>
+                        <td className={td}>{fmtBps(s.avg_bps)}</td><td className={td}>{fmtBps(s.min_bps)}</td><td className={td}>{fmtBps(s.max_bps)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </section>
           )}
         </article>

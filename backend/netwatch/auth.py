@@ -49,6 +49,10 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(dk, expected)
 
 
+def token_hash(token: str) -> str:
+    return _token_hash(token)
+
+
 def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
@@ -172,6 +176,30 @@ class AuthStore:
     def delete_session(self, token: str) -> None:
         with self.engine.begin() as conn:
             conn.execute(delete(sessions).where(sessions.c.token_hash == _token_hash(token)))
+
+    def list_sessions(self) -> list[dict]:
+        now = int(time.time() * 1000)
+        stmt = (
+            select(sessions, users.c.username)
+            .join(users, users.c.id == sessions.c.user_id)
+            .where(sessions.c.expires_ms > now)
+            .order_by(sessions.c.last_seen_ms.desc())
+        )
+        with self.engine.connect() as conn:
+            return [dict(r._mapping) for r in conn.execute(stmt)]
+
+    def delete_session_hash(self, token_hash: str) -> bool:
+        with self.engine.begin() as conn:
+            return (
+                conn.execute(delete(sessions).where(sessions.c.token_hash == token_hash)).rowcount
+                > 0
+            )
+
+    def delete_other_sessions(self, keep_token: str) -> int:
+        with self.engine.begin() as conn:
+            return conn.execute(
+                delete(sessions).where(sessions.c.token_hash != _token_hash(keep_token))
+            ).rowcount
 
     def purge_sessions(self) -> int:
         now = int(time.time() * 1000)
