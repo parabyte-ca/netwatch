@@ -7,7 +7,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # ── Stage 2: Python runtime ───────────────────────────────────────────────────
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 ARG APP_VERSION=0.0.0-dev
 LABEL org.opencontainers.image.source="https://github.com/parabyte-ca/netwatch" \
