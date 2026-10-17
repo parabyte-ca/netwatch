@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { StatusResponse, Target } from '../lib/api';
+import type { StatusResponse, Target, TimelineEvent } from '../lib/api';
 import { Overview } from './Overview';
 
 const base: Omit<Target, 'id' | 'name' | 'host' | 'group'> = {
@@ -13,10 +13,13 @@ const targets: Target[] = [
   { ...base, id: 2, name: 'Cloudflare', host: '1.1.1.1', group: 'public' },
 ];
 
-function mockApi(status: StatusResponse) {
+let events: TimelineEvent[] = [];
+
+function mockApi(status: StatusResponse, ev: TimelineEvent[] = []) {
+  events = ev;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = String(input);
-    const body = url.startsWith('/api/status') ? status : targets;
+    const body = url.startsWith('/api/status') ? status : url.startsWith('/api/events') ? events : targets;
     return new Response(JSON.stringify(body), { status: 200 });
   });
 }
@@ -53,5 +56,17 @@ describe('Overview', () => {
     expect(await screen.findByText('1 target down')).toBeInTheDocument();
     expect(screen.getAllByText('Cloudflare').length).toBeGreaterThan(0);
     expect(await screen.findByText('timeout')).toBeInTheDocument();
+  });
+
+  it('lists active incidents', async () => {
+    const outage: TimelineEvent = {
+      id: 7, kind: 'outage', severity: 'critical', target_id: 2, iface: null, start_ms: Date.now() - 90_000,
+      end_ms: null, duration_ms: null, open: true, title: 'Cloudflare unreachable', details: {},
+    };
+    mockApi({ now_ms: 10_000, targets: [] }, [outage]);
+    render(<MemoryRouter><Overview /></MemoryRouter>);
+    const region = await screen.findByRole('region', { name: 'Active incidents' });
+    expect(region).toHaveTextContent('Cloudflare unreachable');
+    expect(region).toHaveTextContent(/ongoing · 1 min/);
   });
 });

@@ -7,9 +7,13 @@ import contextlib
 import logging
 import random
 import time
+from collections.abc import Callable
 
 from ..config import Settings
 from ..probes import Prober, ProbeResult, TargetSpec
+from ..probes.base import now_ms
+from .detector import UNKNOWN, DetectorConfig, OutageDetector
+from .events import IncidentRecorder
 from .live import LiveState
 from .metrics import Metrics
 from .storage import Store
@@ -27,12 +31,24 @@ class Monitor:
         *,
         prober: Prober | None = None,
         metrics: Metrics | None = None,
+        recorder: IncidentRecorder | None = None,
     ) -> None:
         self.store = store
         self.settings = settings
         self.prober = prober or Prober(icmp_privileged=settings.icmp_privileged)
         self.metrics = metrics
         self.live = LiveState()
+        self.detector = OutageDetector(
+            DetectorConfig(
+                down_after=settings.down_after,
+                up_after=settings.up_after,
+                degraded_enter_pct=settings.degraded_enter_pct,
+                degraded_exit_pct=settings.degraded_exit_pct,
+            )
+        )
+        self.recorder = recorder
+        # Extra retention jobs (events, path tests, ...) run by the hourly purge: fn(now) -> dict.
+        self.purge_hooks: list[Callable[[float], dict]] = []
         self._sem = asyncio.Semaphore(settings.max_concurrent_probes)
         self._specs: dict[int, TargetSpec] = {}
         self._tasks: dict[int, asyncio.Task] = {}
@@ -79,18 +95,29 @@ class Monitor:
             rows = await asyncio.to_thread(self.store.list_targets, enabled_only=True)
             wanted = {r["id"]: TargetSpec.from_row(r) for r in rows}
             for tid in list(self._tasks):
-                if tid not in wanted or wanted[tid] != self._specs.get(tid):
+                old = self._specs.get(tid)
+                if tid not in wanted or wanted[tid] != old:
                     self._tasks.pop(tid).cancel()
                     self._specs.pop(tid, None)
-                    if tid not in wanted:
+                    # A different host or probe is a different thing to watch: start afresh.
+                    moved = (
+                        tid in wanted
+                        and old is not None
+                        and (wanted[tid].host != old.host or wanted[tid].kind != old.kind)
+                    )
+                    if tid not in wanted or moved:
                         self.live.forget(tid)
-                        if self.metrics:
-                            self.metrics.forget(tid)
+                        self.detector.forget(tid)
+                        if self.recorder:
+                            self.recorder.target_removed(tid, now_ms())
+                    if tid not in wanted and self.metrics:
+                        self.metrics.forget(tid)
             for tid, spec in wanted.items():
                 if tid in self._tasks:
                     continue
                 self._specs[tid] = spec
                 self.live.track(tid, spec.interval_s)
+                self.detector.track(tid, spec.interval_s)
                 if self.metrics:
                     self.metrics.track(spec)
                 self._tasks[tid] = asyncio.create_task(self._run_target(spec), name=f"probe-{tid}")
@@ -99,11 +126,24 @@ class Monitor:
 
     def _record(self, r: ProbeResult) -> None:
         self.live.record(r)
+        transition = self.detector.observe(r)
+        if transition is not None and self.recorder is not None:
+            spec = self._specs.get(r.target_id)
+            if spec is not None:
+                self.recorder.submit(transition, spec)
         if self.metrics:
             self.metrics.record(r)
         self._buffer.append(r)
         if len(self._buffer) > _MAX_BUFFER:
             del self._buffer[: len(self._buffer) - _MAX_BUFFER]
+
+    def target_status(self, target_id: int, now: int) -> dict:
+        """Live stats plus the detector's (hysteresis) state; stale data reads as unknown."""
+        st = self.live.status(target_id, now)
+        if st["state"] != UNKNOWN:
+            st["state"] = self.detector.state(target_id)
+            st["since_ms"] = self.detector.since_ms(target_id)
+        return st
 
     async def run_once(self, spec: TargetSpec) -> ProbeResult:
         async with self._sem:
@@ -158,6 +198,8 @@ class Monitor:
             removed = await asyncio.to_thread(
                 self.store.purge, now, s.raw_retention_days, s.rollup_retention_days
             )
+            for hook in self.purge_hooks:
+                removed.update(await asyncio.to_thread(hook, now))
             log.info("retention purge", extra=removed)
 
     async def _maintenance_loop(self) -> None:

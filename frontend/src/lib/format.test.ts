@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fmtAgo, fmtAxisMs, fmtBytes, fmtDuration, fmtMs, fmtPct, lossColour } from './format';
+import { fmtAgo, fmtAxisMs, fmtBps, fmtBytes, fmtDuration, fmtDurationMs, fmtMs, fmtPct, lossColour } from './format';
 import { findRange, windowFor } from './ranges';
 
 describe('format', () => {
@@ -28,6 +28,18 @@ describe('format', () => {
     expect(fmtDuration(7200)).toBe('2h');
     expect(fmtAgo(0, 5_000)).toBe('5s ago');
     expect(fmtAgo(0, 7_200_000)).toBe('2h ago');
+  });
+
+  it('formats event durations and throughput', () => {
+    expect(fmtDurationMs(null)).toBe('ongoing');
+    expect(fmtDurationMs(45_000)).toBe('45 s');
+    expect(fmtDurationMs(12 * 60_000)).toBe('12 min');
+    expect(fmtDurationMs(185 * 60_000)).toBe('3 h 05 min');
+    expect(fmtDurationMs(52 * 3_600_000)).toBe('2 d 4 h');
+    expect(fmtBps(941_000_000)).toBe('941 Mb/s');
+    expect(fmtBps(2_350_000_000)).toBe('2.35 Gb/s');
+    expect(fmtBps(45_600_000)).toBe('45.6 Mb/s');
+    expect(fmtBps(null)).toBe('—');
   });
 
   it('colours loss like SmokePing', () => {

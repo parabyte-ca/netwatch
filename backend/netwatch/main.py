@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -16,16 +18,20 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from . import __version__
 from .api import auth as auth_api
-from .api import health, system, targets, updates
+from .api import health, monitoring, system, targets, updates
 from .auth import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, AuthStore, LoginThrottle
 from .config import Settings, get_settings
 from .db import make_engine, run_migrations
 from .probes import Prober
+from .services.events import MONITOR, EventLog, IncidentRecorder, startup_events
 from .services.metrics import Metrics
 from .services.netinfo import default_route
+from .services.nic import NicMonitor, NicStore, interfaces_to_watch
+from .services.pathtest import PATH_TEST_KINDS, PathStore, PathTester
 from .services.scheduler import Monitor
 from .services.seed import seed_defaults
 from .services.storage import Store
+from .services.throughput import ThroughputStore, ThroughputTester
 from .services.updates import UpdateManager
 
 log = logging.getLogger(__name__)
@@ -58,23 +64,95 @@ def create_app(
         if settings.seed_defaults:
             await asyncio.to_thread(seed_defaults, store, default_route())
         metrics = Metrics() if settings.metrics_enabled else None
-        monitor = Monitor(store, settings, prober=prober, metrics=metrics)
+
+        events = EventLog(engine)
+        await asyncio.to_thread(startup_events, events)
+        path_store = PathStore(engine)
+        path_tester = PathTester(
+            path_store, cycles=settings.path_test_cycles, cooldown_s=settings.path_test_cooldown_s
+        )
+
+        async def on_outage(spec, event_id: int) -> None:
+            if settings.path_test_on_outage:
+                path_tester.trigger_for_outage(spec, event_id)
+
+        recorder = IncidentRecorder(events, on_outage=on_outage)
+        monitor = Monitor(store, settings, prober=prober, metrics=metrics, recorder=recorder)
+
+        def watched_interfaces() -> list[str]:
+            route = default_route()
+            return interfaces_to_watch(
+                settings.sysfs_root, settings.nic_interface_list, route.interface if route else None
+            )
+
+        nic_store = NicStore(engine)
+        nic = NicMonitor(
+            events,
+            nic_store,
+            sys_root=settings.sysfs_root,
+            interfaces=watched_interfaces,
+            poll_s=settings.nic_poll_s,
+        )
+        throughput_store = ThroughputStore(engine)
+        throughput = ThroughputTester(throughput_store)
+
+        def purge_extra(now: float) -> dict:
+            now_ms, day_ms = int(now * 1000), 86_400_000
+            return {
+                "events": events.purge(now_ms - settings.event_retention_days * day_ms),
+                "path_tests": path_store.purge(now_ms - settings.path_test_retention_days * day_ms),
+                "throughput_tests": throughput_store.purge(
+                    now_ms - settings.throughput_retention_days * day_ms
+                ),
+                "nic_minutes": nic_store.purge(int(now) - settings.rollup_retention_days * 86400),
+            }
+
+        monitor.purge_hooks.append(purge_extra)
+
+        def path_test_targets() -> list[dict]:
+            return [
+                t
+                for t in store.list_targets(enabled_only=True)
+                if t["group"] == "public" and t["kind"] in PATH_TEST_KINDS
+            ]
+
         app.state.settings = settings
         app.state.store = store
         app.state.monitor = monitor
         app.state.metrics = metrics
+        app.state.events = events
+        app.state.recorder = recorder
+        app.state.nic = nic
+        app.state.nic_store = nic_store
+        app.state.path_store = path_store
+        app.state.path_tester = path_tester
+        app.state.throughput_store = throughput_store
+        app.state.throughput = throughput
         app.state.auth = AuthStore(engine)
         app.state.login_throttle = LoginThrottle()
         app.state.updates = UpdateManager(settings, store, client=update_client)
         await asyncio.to_thread(app.state.auth.purge_sessions)
+
+        recorder.start()
         await monitor.start()
+        nic.start()
+        path_tester.start_schedule(path_test_targets, settings.path_test_interval_min)
+        throughput.start_schedule()
         app.state.updates.start()
         log.info("netwatch started", extra={"version": __version__, "port": settings.port})
         try:
             yield
         finally:
             await app.state.updates.stop()
+            await throughput.stop()
+            await path_tester.stop()
+            await nic.stop()
             await monitor.stop()
+            await recorder.stop()
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(
+                    events.instant, MONITOR, "info", int(time.time() * 1000), "NetWatch stopped"
+                )
             engine.dispose()
 
     app = FastAPI(
@@ -127,6 +205,7 @@ def create_app(
     app.include_router(system.router)
     app.include_router(targets.router)
     app.include_router(updates.router)
+    app.include_router(monitoring.router)
 
     if settings.metrics_enabled:
 

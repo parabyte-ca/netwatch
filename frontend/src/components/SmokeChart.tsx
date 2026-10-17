@@ -63,6 +63,25 @@ export function SmokeChart({ data, height = 320 }: { data: SeriesResponse; heigh
         { series: [2, 4], fill: 'rgba(148,163,184,0.32)' },
       ],
       legend: { live: true },
+      hooks: {
+        // Shade outage (red) and packet-loss (amber) periods behind the data.
+        drawClear: [
+          (u) => {
+            const ctx = u.ctx;
+            for (const ev of data.events ?? []) {
+              const startS = Math.max(ev.start_ms / 1000, data.start);
+              const endS = Math.min((ev.end_ms ?? Date.now()) / 1000, data.end);
+              if (endS <= startS) continue;
+              const x0 = u.valToPos(startS, 'x', true);
+              const x1 = u.valToPos(endS, 'x', true);
+              ctx.save();
+              ctx.fillStyle = ev.kind === 'outage' ? 'rgba(239,68,68,0.18)' : 'rgba(245,158,11,0.14)';
+              ctx.fillRect(x0, u.bbox.top, Math.max(x1 - x0, 2), u.bbox.height);
+              ctx.restore();
+            }
+          },
+        ],
+      },
     };
 
     plot.current?.destroy();

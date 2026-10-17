@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { EventRow } from '../components/EventRow';
 import { StatusBadge } from '../components/StatusBadge';
 import { api, type State, type Target, type TargetStatus } from '../lib/api';
 import { fmtAgo, fmtMs, fmtPct, GROUP_LABEL, GROUP_ORDER, STATE_STYLE } from '../lib/format';
@@ -45,6 +46,8 @@ function Tile({ t, s, now }: { t: Target; s: TargetStatus | undefined; now: numb
 export function Overview() {
   const targets = usePolling(api.targets, 30_000);
   const status = usePolling(api.status, 3_000);
+  const active = usePolling(api.activeEvents, 5_000);
+  const recent = usePolling(() => api.events({ start: Math.floor(Date.now() / 1000) - 86_400, limit: 6, kind: ['outage', 'degraded', 'nic_link', 'nic_speed', 'nic_errors'] }), 30_000);
 
   if (targets.error) return <p className="text-rose-400">Could not load targets: {targets.error}</p>;
   if (!targets.data) return <p className="text-slate-500">Loading…</p>;
@@ -80,10 +83,17 @@ export function Overview() {
         </div>
         <div className="mt-1 text-sm text-slate-400">
           {[...down, ...degraded].map((t) => t.name).join(', ') ||
-            `${enabled.length} targets monitored. Root-cause diagnosis arrives in a later release.`}
+            `${enabled.length} targets monitored.`}
         </div>
         {status.error && <div className="mt-1 text-sm text-rose-400">Live status unavailable: {status.error}</div>}
       </section>
+
+      {(active.data?.length ?? 0) > 0 && (
+        <section aria-label="Active incidents" className="rounded-lg bg-slate-900 p-2 ring-1 ring-rose-900/60">
+          <h2 className="px-2 pb-1 text-xs font-semibold uppercase tracking-wide text-rose-300">Active incidents</h2>
+          {active.data!.map((ev) => <EventRow key={ev.id} ev={ev} />)}
+        </section>
+      )}
 
       {GROUP_ORDER.map((g) => {
         const items = enabled.filter((t) => t.group === g);
@@ -99,6 +109,15 @@ export function Overview() {
           </section>
         );
       })}
+      <section aria-label="Recent events" className="rounded-lg bg-slate-900 p-2 ring-1 ring-slate-800">
+        <div className="flex items-center justify-between px-2 pb-1">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Last 24 hours</h2>
+          <Link to="/timeline" className="text-xs text-sky-400 hover:underline">Timeline →</Link>
+        </div>
+        {recent.data?.length ? recent.data.map((ev) => <EventRow key={ev.id} ev={ev} />) : (
+          <p className="px-2 py-1 text-sm text-slate-500">No outages, packet loss or NIC problems.</p>
+        )}
+      </section>
     </div>
   );
 }

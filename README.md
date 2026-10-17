@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.2.0-blue)
+![Version](https://img.shields.io/badge/version-0.3.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -10,9 +10,10 @@ drops can be pinned to a time and a network layer. It runs as a single Docker co
 the always-on TrueNAS host. No data leaves your network apart from the probes themselves and
 a daily update check against GitHub (which can be switched off).
 
-Built in phases. **v0.1** delivered probes, storage and graphs; **v0.2 (this release)** adds
-sign-in and one-click / automatic updates from the web UI. Outage detection, path tests,
-discovery, the root-cause diagnosis engine and the Wi-Fi client agent follow in later releases.
+Built in phases: **v0.1** probes, storage and graphs; **v0.2** sign-in and web/automatic
+updates; **v0.3 (this release)** outage detection, an event timeline, TrueNAS NIC telemetry,
+mtr path tests and iperf3 throughput tests. Discovery, the root-cause diagnosis engine and the
+Wi-Fi client agent follow in later releases.
 
 ## Features
 - **Probes:** ICMP (from every 1 s), DNS query latency/failures, TCP connect, and HTTP checks,
@@ -24,6 +25,22 @@ discovery, the root-cause diagnosis engine and the Wi-Fi client agent follow in 
 - **Live overview:** health summary and status tiles grouped as gateway, mesh, internet,
   DNS, devices and custom.
 - **Run test now** for any target, plus CSV/JSON export of raw samples.
+- **Outage detection with hysteresis:** a target is *down* after 3 consecutive failed probes and
+  only recovers after 3 consecutive successes, so single lost pings never open an outage;
+  intermittent loss above 5 % (clearing at 1 %) is *packet loss*. Outages are timestamped from
+  the first failure to the first success, and shaded on the latency graphs.
+- **Event timeline:** outages, packet loss, NIC problems and NetWatch restarts by day, each with
+  a detail page showing the evidence: latency around the event, what else failed at the same
+  time (±5 min), TrueNAS NIC events, and path tests.
+- **TrueNAS NIC telemetry:** link down/up, flaps too short to see between polls (from the
+  kernel's carrier-change counter), speed/duplex renegotiation and error/CRC counters, on the
+  default-route interface and the physical ports under a bridge, bond or VLAN.
+- **Path tests (mtr):** public targets are traced every 15 minutes and automatically when an
+  outage starts; the result shows the first hop from which loss persists to the destination
+  (ignoring silent hops and ICMP rate-limiting) and flags route changes.
+- **Throughput tests (iperf3):** LAN (TrueNAS → a device running `iperf3 -s`) and WAN (a public
+  iperf3 server you add), download and upload, on demand or on a schedule, to separate LAN
+  problems from Bell.
 - **Efficient storage:** SQLite (WAL) with raw samples kept 7 days and 1-minute rollups kept
   90 days (both configurable). Measured at about 0.6 % CPU and 60 MB RAM with 7 targets.
 - **Operations:** `/health` endpoint, structured JSON logs, optional Prometheus `/metrics`.
@@ -106,6 +123,15 @@ sudo docker exec -it netwatch python -m netwatch.reset_password admin
 `ghcr.io/parabyte-ca/netwatch` public (GitHub → Packages → netwatch → Settings), run
 `docker login ghcr.io` on TrueNAS with a read-only token, or simply let the scripts build
 locally.
+
+### LAN throughput tests
+To measure the LAN, run an iperf3 server on the device at the far end and add it under
+**Diagnostics → Throughput**:
+- Windows PC: download iperf3, then `iperf3.exe -s` (allow it through the firewall, TCP 5201).
+- Phone: an iperf3 app in server mode (e.g. "iPerf3" / "Magic iPerf"), connected to a Deco.
+
+A wired PC that tests fast while Wi-Fi devices test slow points at the mesh; a slow wired test
+points at the switch or cabling; a fast LAN with a slow WAN test points at Bell.
 
 ### Local development
 ```bash
@@ -218,6 +244,18 @@ Settings come from environment variables in `.env`; see `.env.example`. Re-run
 | `NETWATCH_UPDATE_REPO` | `parabyte-ca/netwatch` | Repository whose releases are offered |
 | `NETWATCH_AUTO_UPDATE` | `patch` | Initial policy: `off`, `notify`, `patch`, `minor` (then managed in the UI) |
 | `NETWATCH_AUTO_UPDATE_WINDOW` | `03:30` | Initial maintenance window start, local time (then managed in the UI) |
+| `NETWATCH_DOWN_AFTER` | `3` | Consecutive failed probes before a target is declared down |
+| `NETWATCH_UP_AFTER` | `3` | Consecutive successful probes before it is declared recovered |
+| `NETWATCH_DEGRADED_ENTER_PCT` | `5` | Loss % (over max(60 s, 10 probes)) that starts a packet-loss event |
+| `NETWATCH_DEGRADED_EXIT_PCT` | `1` | Loss % at or below which it ends |
+| `NETWATCH_EVENT_RETENTION_DAYS` | `365` | Days of timeline events |
+| `NETWATCH_NIC_INTERFACES` | *(auto)* | Comma-separated interfaces to watch; default is the default-route interface plus its physical ports |
+| `NETWATCH_NIC_POLL_S` | `2` | NIC polling interval |
+| `NETWATCH_PATH_TEST_INTERVAL_MIN` | `15` | Scheduled mtr runs to public targets (0 disables) |
+| `NETWATCH_PATH_TEST_CYCLES` | `10` | Probes per hop per mtr run |
+| `NETWATCH_PATH_TEST_ON_OUTAGE` | `true` | Run mtr automatically when an outage starts (once per host per 5 min) |
+| `NETWATCH_PATH_TEST_RETENTION_DAYS` | `90` | Days of path-test results |
+| `NETWATCH_THROUGHPUT_RETENTION_DAYS` | `365` | Days of iperf3 results |
 | `NETWATCH_ICMP_PRIVILEGED` | `true` | Raw-socket ICMP (needs `NET_RAW`) |
 | `NETWATCH_MAX_CONCURRENT_PROBES` | `64` | Upper bound on probes in flight |
 | `NETWATCH_MAX_TARGETS` | `200` | Maximum number of targets |
@@ -244,6 +282,13 @@ endpoints marked public, and state-changing calls need the header `X-Requested-W
 | `POST /api/updates/rollback` | Undo the last update |
 | `PUT /api/updates/policy` | `{"mode": "patch", "window": "03:30"}` |
 | `GET /api/updates/log` | Tail of the current/last update log |
+| `GET /api/events?start=&end=&kind=&target_id=` | Timeline events (overlapping the range) |
+| `GET /api/events/active` | Events still open (ongoing outages, link down) |
+| `GET /api/events/{id}` | Event plus evidence: concurrent failures, NIC events, path tests |
+| `GET /api/nic`, `GET /api/nic/{iface}/history` | NIC state and counters; per-minute history |
+| `GET, POST /api/path-tests` | List, or run mtr now: `{"target_id": 3}` or `{"host": "1.1.1.1"}` |
+| `GET, POST /api/iperf/servers`, `PUT, DELETE /api/iperf/servers/{id}` | iperf3 servers |
+| `POST /api/iperf/servers/{id}/run`, `GET /api/iperf/tests` | Run download + upload now; results |
 | `GET /api/system` | Version, default route, database size, retention |
 | `GET /api/status` | Live state per target (up / degraded / down / no data) |
 | `GET, POST /api/targets` | List or create targets |

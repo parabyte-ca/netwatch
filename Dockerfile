@@ -25,6 +25,10 @@ ENV APP_VERSION=${APP_VERSION} \
     NETWATCH_STATIC_DIR=/app/static
 
 WORKDIR /app
+# mtr (path tests) and iperf3 (throughput tests); both run as root with only NET_RAW/NET_ADMIN.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends mtr-tiny iperf3 \
+    && rm -rf /var/lib/apt/lists/*
 COPY backend/ /tmp/backend/
 RUN pip install /tmp/backend && rm -rf /tmp/backend
 COPY --from=frontend /build/dist /app/static

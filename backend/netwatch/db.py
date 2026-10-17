@@ -110,9 +110,106 @@ sessions = Table(
     Column("user_agent", String(200)),
 )
 
+# Timeline: outages, degradations, NIC link events, monitor lifecycle. end_ms is NULL while open.
+events = Table(
+    "events",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("kind", String(16), nullable=False),
+    Column("severity", String(8), nullable=False),
+    Column("target_id", Integer, ForeignKey("targets.id", ondelete="SET NULL")),
+    Column("iface", String(32)),
+    Column("start_ms", Integer, nullable=False),
+    Column("end_ms", Integer),
+    Column("title", String(200), nullable=False),
+    Column("details", Text, nullable=False, default="{}"),
+)
+
+# Host NIC counters, one row per interface per minute (deltas, plus the link state snapshot).
+nic_stats = Table(
+    "nic_stats",
+    metadata,
+    Column("iface", String(32), primary_key=True),
+    Column("bucket_ts", Integer, primary_key=True),
+    Column("operstate", String(16)),
+    Column("speed", Integer),
+    Column("duplex", String(8)),
+    Column("carrier_changes", Integer, nullable=False, default=0),
+    Column("rx_bytes", Integer, nullable=False, default=0),
+    Column("tx_bytes", Integer, nullable=False, default=0),
+    Column("rx_packets", Integer, nullable=False, default=0),
+    Column("tx_packets", Integer, nullable=False, default=0),
+    Column("rx_errors", Integer, nullable=False, default=0),
+    Column("tx_errors", Integer, nullable=False, default=0),
+    Column("rx_dropped", Integer, nullable=False, default=0),
+    Column("tx_dropped", Integer, nullable=False, default=0),
+    Column("rx_crc_errors", Integer, nullable=False, default=0),
+    sqlite_with_rowid=False,
+)
+
+path_tests = Table(
+    "path_tests",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("ts_ms", Integer, nullable=False),
+    Column("target_id", Integer, ForeignKey("targets.id", ondelete="SET NULL")),
+    Column("event_id", Integer, ForeignKey("events.id", ondelete="SET NULL")),
+    Column("host", String(253), nullable=False),
+    Column("trigger", String(16), nullable=False),  # scheduled | outage | manual
+    Column("status", String(8), nullable=False),  # ok | error
+    Column("duration_ms", Integer),
+    Column("hop_count", Integer),
+    Column("reached", Boolean),
+    Column("first_loss_hop", Integer),
+    Column("path_changed", Boolean),
+    Column("hops", Text, nullable=False, default="[]"),
+    Column("error", String(200)),
+)
+
+iperf_servers = Table(
+    "iperf_servers",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("name", String(64), nullable=False),
+    Column("host", String(253), nullable=False),
+    Column("port", Integer, nullable=False),
+    Column("kind", String(8), nullable=False),  # lan | wan
+    Column("duration_s", Integer, nullable=False),
+    Column("parallel", Integer, nullable=False),
+    Column("interval_min", Integer, nullable=False),  # 0 = manual only
+    Column("enabled", Boolean, nullable=False),
+    Column("created_at", Float, nullable=False),
+    Column("updated_at", Float, nullable=False),
+)
+
+throughput_tests = Table(
+    "throughput_tests",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("ts_ms", Integer, nullable=False),
+    Column("server_id", Integer, ForeignKey("iperf_servers.id", ondelete="SET NULL")),
+    Column("host", String(253), nullable=False),
+    Column("port", Integer, nullable=False),
+    Column("kind", String(8), nullable=False),
+    Column("direction", String(8), nullable=False),  # download | upload
+    Column("trigger", String(16), nullable=False),
+    Column("status", String(8), nullable=False),
+    Column("duration_s", Float),
+    Column("bits_per_second", Float),
+    Column("retransmits", Integer),
+    Column("error", String(200)),
+    Column("details", Text, nullable=False, default="{}"),
+)
+
 Index("ix_samples_ts", samples.c.ts_ms)
 Index("ix_rollup_1m_ts", rollup_1m.c.bucket_ts)
 Index("ix_sessions_user", sessions.c.user_id)
+Index("ix_events_start", events.c.start_ms)
+Index("ix_events_target", events.c.target_id)
+Index("ix_nic_stats_ts", nic_stats.c.bucket_ts)
+Index("ix_path_tests_ts", path_tests.c.ts_ms)
+Index("ix_path_tests_host", path_tests.c.host)
+Index("ix_throughput_tests_ts", throughput_tests.c.ts_ms)
 
 
 def _set_pragmas(dbapi_conn, _record) -> None:
