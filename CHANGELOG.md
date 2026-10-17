@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-10-17
+### Added
+- Outage detection with hysteresis (3 failures to declare down, 3 successes to recover) and a
+  separate packet-loss state for intermittent loss; outage times run from first failure to
+  first success.
+- Event timeline (outages, packet loss, NIC link/speed/errors, NetWatch start/stop) with an
+  event detail page: latency around the event, concurrent failures, NIC events, path tests.
+- Active incidents and last-24-hours events on the Overview; outage and loss periods shaded
+  on latency graphs.
+- TrueNAS NIC telemetry from sysfs: link down/up, sub-poll flaps via carrier changes,
+  speed/duplex renegotiation, error and CRC counters, per-minute counter history; watches
+  the physical ports beneath a bridge, bond or VLAN.
+- Path tests with mtr: scheduled for public targets, automatic when an outage starts, and on
+  demand; reports the first hop of persistent loss (ignoring silent hops) and route changes.
+- Throughput tests with iperf3 (LAN and WAN servers, download and upload, manual or
+  scheduled).
+- Diagnostics page (NIC status, path tests, throughput servers and results).
+
+### Changed
+- The container image now includes `mtr-tiny` and `iperf3`.
+- `/health` also checks the incident recorder and NIC monitor.
+
 ## [0.2.0] - 2026-10-17
 ### Added
 - Sign-in for everything: first-run admin setup, scrypt password hashes, server-side

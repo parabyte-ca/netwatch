@@ -21,7 +21,7 @@ def test_health_ok(client):
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok" and body["version"] == __version__
-    assert body["checks"] == {"database": True, "scheduler": True, "writer": True}
+    assert body["checks"] == {"database": True, "scheduler": True, "writer": True, "monitors": True}
 
 
 def test_health_reports_writer_failure(client):

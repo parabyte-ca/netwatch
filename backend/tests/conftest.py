@@ -49,6 +49,9 @@ def test_settings(tmp_path, **over) -> Settings:
         "upgrade_dir": tmp_path / "upgrade",
         "seed_defaults": False,
         "update_check": False,
+        "sysfs_root": tmp_path / "sys",
+        "path_test_interval_min": 0,
+        "path_test_on_outage": False,
         "log_format": "text",
         "flush_interval_s": 0.05,
     }

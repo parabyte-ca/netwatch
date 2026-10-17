@@ -23,6 +23,7 @@ async def health(request: Request) -> JSONResponse:
         "database": db_ok,
         "scheduler": monitor.running,
         "writer": monitor.last_flush_error is None,
+        "monitors": request.app.state.recorder.running and request.app.state.nic.running,
     }
     healthy = all(checks.values())
     body = {

@@ -46,6 +46,33 @@ class Settings(BaseSettings):
     auto_update_window: str = Field(default="03:30", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     tz: str = Field(default="America/Toronto", validation_alias="TZ")
 
+    # Outage detection (hysteresis): consecutive failures to declare down, consecutive successes
+    # to recover, and loss thresholds to enter/leave the degraded state over a sliding window.
+    down_after: int = Field(default=3, ge=1, le=100)
+    up_after: int = Field(default=3, ge=1, le=100)
+    degraded_enter_pct: float = Field(default=5.0, gt=0, le=100)
+    degraded_exit_pct: float = Field(default=1.0, ge=0, le=100)
+    event_retention_days: int = Field(default=365, ge=7, le=3650)
+
+    # Host NIC telemetry. Empty = the default-route interface plus its physical members.
+    nic_interfaces: str = ""
+    nic_poll_s: float = Field(default=2.0, ge=0.5, le=60)
+    sysfs_root: Path = Path("/sys")
+
+    # Path tests (mtr). Scheduled runs cover the "public" targets; 0 disables the schedule.
+    path_test_interval_min: int = Field(default=15, ge=0, le=1440)
+    path_test_cycles: int = Field(default=10, ge=1, le=100)
+    path_test_on_outage: bool = True
+    path_test_cooldown_s: int = Field(default=300, ge=0, le=86400)
+    path_test_retention_days: int = Field(default=90, ge=1, le=730)
+
+    # Throughput tests (iperf3).
+    throughput_retention_days: int = Field(default=365, ge=7, le=3650)
+
+    @property
+    def nic_interface_list(self) -> list[str]:
+        return [i.strip() for i in self.nic_interfaces.split(",") if i.strip()]
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "netwatch.db"

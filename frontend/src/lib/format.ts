@@ -70,3 +70,41 @@ export const GROUP_LABEL: Record<string, string> = {
 };
 
 export const GROUP_ORDER = ['gateway', 'mesh', 'public', 'dns', 'device', 'custom'];
+
+/** Human duration from milliseconds: "45 s", "12 min", "3 h 05 min", "2 d 4 h". */
+export function fmtDurationMs(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return 'ongoing';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} h ${String(m % 60).padStart(2, '0')} min`;
+  return `${Math.floor(h / 24)} d ${h % 24} h`;
+}
+
+export function fmtBps(bps: number | null | undefined): string {
+  if (bps === null || bps === undefined) return '—';
+  if (bps >= 1e9) return `${(bps / 1e9).toFixed(2)} Gb/s`;
+  if (bps >= 1e6) return `${(bps / 1e6).toFixed(bps >= 1e8 ? 0 : 1)} Mb/s`;
+  return `${(bps / 1e3).toFixed(0)} kb/s`;
+}
+
+export function fmtTime(ms: number): string {
+  return new Date(ms).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'medium' });
+}
+
+export const EVENT_LABEL: Record<string, string> = {
+  outage: 'Outage',
+  degraded: 'Packet loss',
+  nic_link: 'NIC link',
+  nic_speed: 'NIC speed',
+  nic_errors: 'NIC errors',
+  monitor: 'NetWatch',
+};
+
+export const SEVERITY_DOT: Record<string, string> = {
+  critical: 'bg-rose-500',
+  warning: 'bg-amber-400',
+  info: 'bg-sky-400',
+};

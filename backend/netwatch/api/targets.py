@@ -8,13 +8,14 @@ import time
 from collections.abc import Iterator
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 
 from ..config import Settings
 from ..probes import TargetSpec
 from ..probes.base import now_ms
 from ..schemas import ProbeResultOut, TargetIn, TargetOut
+from ..services.events import LOSS, OUTAGE
 from ..services.scheduler import Monitor
 from ..services.series import build_series
 from ..services.storage import Store
@@ -106,7 +107,7 @@ def live_status(store: Store = Depends(get_store), monitor: Monitor = Depends(ge
     return {
         "now_ms": now,
         "targets": [
-            {"id": t["id"], "enabled": t["enabled"], **monitor.live.status(t["id"], now)}
+            {"id": t["id"], "enabled": t["enabled"], **monitor.target_status(t["id"], now)}
             for t in store.list_targets()
         ],
     }
@@ -114,6 +115,7 @@ def live_status(store: Store = Depends(get_store), monitor: Monitor = Depends(ge
 
 @router.get("/targets/{target_id}/series")
 def series(
+    request: Request,
     target_id: int,
     start: int | None = Query(default=None, description="epoch seconds"),
     end: int | None = Query(default=None, description="epoch seconds"),
@@ -123,7 +125,7 @@ def series(
 ) -> dict:
     target = _require(store, target_id)
     start, end = _time_range(start, end, 3600)
-    return build_series(
+    out = build_series(
         store,
         target,
         start,
@@ -132,6 +134,14 @@ def series(
         raw_retention_days=settings.raw_retention_days,
         points=points,
     )
+    incidents = request.app.state.events.list(
+        start * 1000, end * 1000, kinds=[OUTAGE, LOSS], target_id=target_id
+    )
+    out["events"] = [
+        {"id": e["id"], "kind": e["kind"], "start_ms": e["start_ms"], "end_ms": e["end_ms"]}
+        for e in incidents
+    ]
+    return out
 
 
 @router.get("/targets/{target_id}/export")
