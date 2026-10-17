@@ -99,7 +99,7 @@ restore_code() {
 rollback() {
     local ref="$1" rev="$2" image="$3" backup="$4"
     warn "Rolling back ..."
-    compose logs --no-color --tail 200 > "$BACKUP_DIR/failed-update-$(date +%Y%m%d-%H%M%S).log" 2>&1 || true
+    compose logs --no-color --tail 200 > "$BACKUP_DIR/rollback-$(date +%Y%m%d-%H%M%S).log" 2>&1 || true
     compose stop || true
     restore_db "$backup"
     restore_code "$ref" "$rev"

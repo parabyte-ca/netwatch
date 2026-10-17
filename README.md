@@ -123,8 +123,8 @@ Each update:
 5. Restarts the container and waits for `/health`.
 
 If the new version isn't healthy within 3 minutes, `update.sh` restores the previous code,
-image and database automatically. It also saves the failed container's logs to
-`data/backups/`.
+image and database automatically, and saves the container's logs to
+`data/backups/rollback-<timestamp>.log`.
 
 Git commands run as the owner of the checkout, so `sudo` never leaves root-owned files in
 the repo.
