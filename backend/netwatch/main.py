@@ -82,6 +82,52 @@ _LARGE_BODY = frozenset({"/api/admin/restore"})
 _LOCAL_NAMES = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
+class BodyLimit:
+    """Caps request bodies on the API also when they arrive chunked (no Content-Length), as
+    they do through some reverse proxies and HTTP/2 hops. Such a body is read up front, at most
+    ``limit`` bytes, then handed on; declared lengths are checked in ``auth_gate``."""
+
+    def __init__(self, app, limit: int = MAX_BODY_BYTES) -> None:
+        self.app = app
+        self.limit = limit
+
+    async def __call__(self, scope, receive, send) -> None:
+        path = scope.get("path", "")
+        headers = dict(scope.get("headers") or [])
+        if (
+            scope["type"] != "http"
+            or not path.startswith("/api/")
+            or scope.get("method") in _SAFE_METHODS
+            or path in _LARGE_BODY
+            or b"content-length" in headers
+        ):
+            await self.app(scope, receive, send)
+            return
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            body += message.get("body", b"")
+            if len(body) > self.limit:
+                await JSONResponse({"detail": "request body too large"}, status_code=413)(
+                    scope, receive, send
+                )
+                return
+            if not message.get("more_body", False):
+                break
+        sent = False
+
+        async def replay():
+            nonlocal sent
+            if sent:
+                return await receive()  # disconnect notifications after the body
+            sent = True
+            return {"type": "http.request", "body": bytes(body), "more_body": False}
+
+        await self.app(scope, replay, send)
+
+
 def _host_name(header: str) -> str:
     """The host part of a Host header, without the port or IPv6 brackets."""
     h = header.strip().lower()
@@ -366,9 +412,8 @@ def create_app(
                 status_code=421,
             )
         if is_api and request.method not in _SAFE_METHODS and path not in _LARGE_BODY:
+            # A declared length is checked up front; chunked bodies are capped by BodyLimit.
             length = request.headers.get("content-length")
-            if length is None and request.headers.get("transfer-encoding"):
-                return JSONResponse({"detail": "length required"}, status_code=411)
             if length is not None and (not length.isdigit() or int(length) > MAX_BODY_BYTES):
                 return JSONResponse({"detail": "request body too large"}, status_code=413)
         if is_api and request.method not in _SAFE_METHODS:
@@ -410,6 +455,7 @@ def create_app(
             response.headers.setdefault("Cache-Control", "no-store")
         return response
 
+    app.add_middleware(BodyLimit)
     app.include_router(health.router)
     app.include_router(auth_api.router)
     app.include_router(system.router)

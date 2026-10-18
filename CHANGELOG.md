@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.1] - 2026-10-18
+### Fixed
+- Requests that reach NetWatch without a `Content-Length` header (chunked, as some reverse
+  proxies and HTTP/2 connections send them) were refused with "length required", which broke
+  Install, Roll back and other buttons. They are now accepted, still capped at 256 KB.
+
 ## [0.9.0] - 2026-10-18
 ### Added
 - Exposure scan (new **Exposure** page): a nightly (40 minutes after the update window, setting

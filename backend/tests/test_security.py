@@ -311,3 +311,24 @@ def test_untrusted_deco_strings_are_cleaned():
     assert "‮" not in d["name"] and len(d["name"]) <= 63
     assert normalize_client({"mac": "aa:bb:cc:dd:ee", "name": "x"}, "m")["mac"] == ""
     assert asyncio.iscoroutinefunction(DecoClient.list_decos)
+
+
+def test_chunked_bodies_are_accepted_but_capped(client):
+    """A reverse proxy or HTTP/2 hop can forward a request chunked, without Content-Length."""
+
+    def chunks(data: bytes):
+        yield from (data[i : i + 1000] for i in range(0, len(data), 1000))
+
+    body = b'{"username": "admin", "password": "wrong-password-here"}'
+    r = client.post(
+        "/api/auth/login",
+        content=chunks(body),
+        headers={"Content-Type": "application/json"},
+    )
+    assert r.status_code == 401  # reached the endpoint (not 411)
+    r = client.post(
+        "/api/auth/login",
+        content=chunks(b"x" * (300 * 1024)),
+        headers={"Content-Type": "application/json"},
+    )
+    assert r.status_code == 413
