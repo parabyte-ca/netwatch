@@ -1,23 +1,25 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.8.0-blue)
+![Version](https://img.shields.io/badge/version-0.9.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
 stores the results locally, and graphs latency and loss SmokePing-style so intermittent
 drops can be pinned to a time and a network layer. It runs as a single Docker container on
 the always-on TrueNAS host. No data leaves your network apart from the probes themselves, the
-nightly bufferbloat test's download and upload to Cloudflare's speed-test servers, and a daily
-update check against GitHub (both can be switched off).
+nightly bufferbloat test's download and upload to Cloudflare's speed-test servers, a daily
+update check against GitHub (both can be switched off), and, only if you turn on Ask NetWatch
+with your own Anthropic API key, the data Claude looks up to answer your questions.
 
 Built in phases: **v0.1** probes, storage and graphs; **v0.2** sign-in and web/automatic
 updates; **v0.3** outage detection, an event timeline, TrueNAS NIC telemetry, mtr path tests
 and iperf3 throughput tests; **v0.4** device discovery, an inventory and network anomaly
 alerts; **v0.5** the root-cause diagnosis engine and an incident report for Bell; **v0.6** the
 admin panel; **v0.7** the network map with incident replay and the Deco mesh integration;
-**v0.8 (this release)** live per-device bandwidth, the bufferbloat grade and the Home Hub
-integration. See the [Roadmap](#roadmap) for what's next.
+**v0.8** live per-device bandwidth, the bufferbloat grade and the Home Hub integration;
+**v0.9 (this release)** the exposure scan, the network health score with weekly reports, and Ask
+NetWatch. See the [Roadmap](#roadmap) for what's next.
 
 ## Features
 - **Probes:** ICMP (from every 1 s), DNS query latency/failures, TCP connect, and HTTP checks,
@@ -100,6 +102,25 @@ integration. See the [Roadmap](#roadmap) for what's next.
   become timeline events and top-confidence diagnosis causes, and the Bell incident report gains
   a "Bell line" section. Read-only; an advanced explorer shows the Hub's raw data with
   passwords hidden.
+- **Exposure scan:** every night (and on demand) NetWatch checks about 30 well-known ports on
+  each LAN device with a plain TCP connection and reads the Home Hub's port forwards, UPnP
+  mappings and DMZ. Findings are ranked: a risky service forwarded to the internet (RDP, SMB,
+  Telnet…) or an open DMZ is critical; Telnet, an open Docker API, Redis and similar are flagged
+  even on the LAN. New open services and new port forwards (including ones a device opened
+  itself through UPnP) appear on the timeline. Each device page lists its open services.
+- **Network health score (0-100):** one number for the last 24 hours, 7 or 30 days, built from
+  internet uptime, connection quality, latency under load, the home network, the fibre line
+  and exposure, with what is dragging it down. Shown on the Overview and its own Health page.
+  Areas without data (no Home Hub, no test yet) are left out rather than counted against you.
+- **Weekly health report:** written every Monday morning for the week before, with the score
+  and how it changed, highlights, the breakdown, availability, speed tests and incidents; kept
+  for two years and downloadable as Markdown.
+- **Ask NetWatch:** ask about the network in plain language ("was the internet down this week,
+  and whose fault was it?", "who is using the bandwidth?") from a chat panel on every page.
+  Claude answers from NetWatch's own data through read-only tools (live status, timeline,
+  diagnosis, ISP report, devices, bandwidth, health score, exposure, the Bell line) and can't
+  change anything. Off until you save an Anthropic API key under Admin; uses Claude Opus 5.5 by
+  default (Sonnet or Haiku for lower cost), limited to 40 questions an hour.
 - **Patterns:** failures that repeat at a fixed interval (e.g. every 6 h) or cluster at a time of
   day are called out, since both point at something scheduled.
 - **Incident report for Bell:** a printable report (Print / save as PDF, or download Markdown)
@@ -121,9 +142,10 @@ integration. See the [Roadmap](#roadmap) for what's next.
 - **Efficient storage:** SQLite (WAL) with raw samples kept 7 days and 1-minute rollups kept
   90 days (both configurable). Measured at about 0.6 % CPU and 60 MB RAM with 7 targets.
 - **Operations:** `/health` endpoint, structured JSON logs, optional Prometheus `/metrics`.
-- **Sign-in required:** first visit creates the admin account; every page and API call needs a
-  session after that. Passwords are stored as scrypt hashes, sessions are server-side
-  HttpOnly cookies, repeated failed logins lock out for 5 minutes.
+- **Sign-in required:** first visit creates the admin account with a one-time setup code (so
+  nobody else on the LAN can claim it first); every page and API call needs a session after
+  that. Passwords are stored as scrypt hashes, sessions are server-side HttpOnly cookies that
+  end after 7 days without use, and repeated failed logins lock out for 5 minutes.
 - **Updates from the web UI:** see the running and latest versions, read the release notes, and
   press **Install**. A small host-side agent runs `update.sh`, which backs up the database,
   health-checks the new version and rolls back automatically if it fails. Live log, update
@@ -150,7 +172,12 @@ cd netwatch
 sudo ./setup.sh            # pulls ghcr.io/parabyte-ca/netwatch, falls back to a local build
 # or: sudo ./setup.sh --build   to always build locally
 ```
-Then open `http://192.168.2.15:8090` and create the admin account.
+Then open `http://192.168.2.15:8090` and create the admin account with the **setup code**
+`setup.sh` prints (also in `data/setup-token` and `sudo docker logs netwatch`).
+
+If you open NetWatch by a name rather than its IP address (e.g. `truenas.local`), add that name
+to `NETWATCH_ALLOWED_HOSTS` in `.env` and run `sudo docker compose up -d`; names not listed are
+refused to block DNS-rebinding attacks, and the page explains what to add.
 
 What `setup.sh` does:
 1. Creates `.env` from `.env.example` if it doesn't exist.
@@ -234,6 +261,13 @@ The Hub's API is undocumented and firmware-dependent; NetWatch detects the sign-
 **Advanced: explore the Hub's data** (e.g. `Device/Optical/Interfaces`) and send the output
 (passwords and keys are hidden) so the mapping can be adjusted. After 3 failed sign-ins NetWatch
 stops trying until you save the settings again, so a changed password can't lock the Hub.
+
+### Ask NetWatch
+Create an API key at [console.anthropic.com](https://console.anthropic.com) (usage is billed to
+that account), then under **Admin → Ask NetWatch** paste it, pick the model and effort, press
+**Test key** and **Save**. An **Ask NetWatch** button appears at the bottom right of every page.
+The key is encrypted like the Hub and Deco passwords. Each question sends the question and the
+data Claude looks up (target and device names and addresses, incident history) to Anthropic.
 
 ### Local development
 ```bash
@@ -360,6 +394,7 @@ and paths can only be set in `.env`.
 | `NETWATCH_METRICS_ENABLED` | `false` | Expose Prometheus metrics at `/metrics` |
 | `NETWATCH_METRICS_TOKEN` | *(empty)* | Bearer token for Prometheus to scrape `/metrics` without a login session |
 | `NETWATCH_SESSION_DAYS` | `30` | Login session lifetime |
+| `NETWATCH_SESSION_IDLE_HOURS` | `168` | Sign out a session unused for this long (0 = never) |
 | `NETWATCH_COOKIE_SECURE` | `false` | Mark the session cookie Secure (only when served over HTTPS) |
 | `NETWATCH_ALLOWED_HOSTS` | *(empty)* | Host names/addresses the UI may be opened by, comma-separated (e.g. `192.168.2.15`). Empty allows any IP address and `localhost`; other names are refused, which blocks DNS-rebinding attacks |
 | `NETWATCH_VERIFY_IMAGES` | `true` | Verify release image signatures before updating (read by `update.sh`) |
@@ -452,9 +487,6 @@ Planned, in order (suggestions welcome):
 
 | Version | Feature |
 |---|---|
-| v0.9 | **Ask NetWatch:** plain-English questions answered from your own data ("why was Netflix choppy last night?"), using the Claude API (your key; only summaries are sent) |
-| v0.9 | **Exposed services scan:** LAN devices with risky open ports, and the inbound ports devices opened on the Hub through UPnP |
-| v0.9 | **Network health score** (0-100) on the Overview and map, plus a weekly report |
 | Later | **Wi-Fi coverage view:** a floor plan with the Decos placed and each device's signal and roaming per room |
 | Later | **Speed tests against your plan:** nightly tests reported as a share of the plan's speed, with a 90-day trend |
 
