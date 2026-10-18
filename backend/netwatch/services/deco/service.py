@@ -8,21 +8,25 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import time
 from collections.abc import Callable
 
 from ..discovery.inventory import DeviceStore, Inventory, device_label
-from ..discovery.packets import Observation
-from ..events import WIFI, EventLog
+from ..discovery.packets import Observation, clean_name
+from ..events import SECURITY, WIFI, EventLog
 from ..secrets import SecretBox
 from ..storage import Store
-from .client import DecoClient, DecoError
+from .client import DecoClient, DecoError, DecoKeyChanged, DecoLoginError
 
 log = logging.getLogger(__name__)
 
 CONFIG_KEY = "deco_config"
 PASSWORD_KEY = "deco_password"  # noqa: S105 - the kv key, not a password
+PIN_KEY = "deco_key_pin"  # {"host", "fp"}: the trusted sign-in key (see DecoClient)
 POLL_S = 30
+MAX_LOGIN_FAILURES = 3  # then stop, so a wrong password cannot lock the owner account out
+_MAC = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
 DISCONNECT_AFTER_MS = 60_000
 
 BAND_LABEL = {
@@ -35,7 +39,9 @@ BAND_LABEL = {
 
 
 def norm_mac(mac: str | None) -> str:
-    return (mac or "").strip().lower().replace("-", ":")
+    """Canonical MAC, or "" when the value is not a MAC (the Deco's data is not trusted)."""
+    m = str(mac or "").strip().lower().replace("-", ":")
+    return m if _MAC.match(m) else ""
 
 
 def _backhaul(conn) -> str:
@@ -57,30 +63,31 @@ def _title(nickname: str | None) -> str | None:
 
 def normalize_deco(d: dict) -> dict:
     mac = norm_mac(d.get("mac"))
-    name = d.get("custom_nickname") or _title(d.get("nickname")) or mac[-5:]
+    name = clean_name(d.get("custom_nickname")) or clean_name(_title(d.get("nickname"))) or mac[-5:]
     return {
         "mac": mac,
-        "raw_mac": d.get("mac"),  # the Deco's own format, used when querying its clients
+        "raw_mac": d.get("mac") if mac else None,  # the Deco's format, to query its clients
         "name": name,
-        "ip": d.get("device_ip"),
-        "model": d.get("device_model"),
-        "hardware": d.get("hardware_ver"),
-        "firmware": d.get("software_ver"),
+        "ip": clean_name(d.get("device_ip"), 45),
+        "model": clean_name(d.get("device_model"), 32),
+        "hardware": clean_name(d.get("hardware_ver"), 32),
+        "firmware": clean_name(d.get("software_ver"), 64),
         "role": "main" if d.get("role") == "master" else "satellite",
         "online": d.get("group_status") in (None, "connected"),
         "internet": d.get("inet_status"),
-        "backhaul": _backhaul(d.get("connection_type")),
+        "backhaul": clean_name(_backhaul(d.get("connection_type")), 40) or "unknown",
         "signal": d.get("signal_level") or {},
         "backhaul_speed": d.get("backhual_speed"),
     }
 
 
 def normalize_client(c: dict, deco_mac: str) -> dict:
-    conn = str(c.get("connection_type") or "").lower()
+    conn = (clean_name(str(c.get("connection_type") or ""), 20) or "").lower()
+    ip = clean_name(c.get("ip"), 45)
     return {
         "mac": norm_mac(c.get("mac")),
-        "name": c.get("name") or None,
-        "ip": c.get("ip") if c.get("ip") not in ("", "0.0.0.0", "UNKNOWN") else None,
+        "name": clean_name(c.get("name")),
+        "ip": ip if ip not in (None, "0.0.0.0", "UNKNOWN") else None,
         "online": bool(c.get("online", True)),
         "connection": BAND_LABEL.get(conn, conn or "unknown"),
         "wired": conn == "wired",
@@ -124,6 +131,8 @@ class DecoService:
         self._gone_since: dict[str, int] = {}  # monitored device mac → first missed poll
         self._wifi_events: dict[str, int] = {}  # monitored device mac → open disconnect event
         self._last_pos: dict[str, str] = {}  # monitored device mac → where it was last seen
+        self._login_failures = 0
+        self.paused: str | None = None  # why polling stopped until the settings are saved
 
     # ── configuration ────────────────────────────────────────────────────────
 
@@ -136,12 +145,29 @@ class DecoService:
         return self.secrets.decrypt(token) if token else None
 
     def save(self, host: str, enabled: bool, password: str | None) -> None:
-        self.store.kv_set(CONFIG_KEY, {"host": host.strip(), "enabled": enabled})
+        host = host.strip()
+        if host != self.config()["host"]:
+            # A password and key trusted for one address are never used for another.
+            self.store.kv_set(PIN_KEY, None)
+            if not password:
+                self.store.kv_set(PASSWORD_KEY, None)
+        self.store.kv_set(CONFIG_KEY, {"host": host, "enabled": enabled})
         if password:
             self.store.kv_set(PASSWORD_KEY, self.secrets.encrypt(password))
+        self._login_failures = 0
+        self.paused = None
 
     def forget_password(self) -> None:
         self.store.kv_set(PASSWORD_KEY, None)
+
+    def pin(self, host: str) -> str | None:
+        p = self.store.kv_get(PIN_KEY, None) or {}
+        return p.get("fp") if p.get("host") == host else None
+
+    def trust_key(self, host: str, fp: str) -> None:
+        self.store.kv_set(PIN_KEY, {"host": host, "fp": fp})
+        self._login_failures = 0
+        self.paused = None
 
     @property
     def configured(self) -> bool:
@@ -163,7 +189,7 @@ class DecoService:
 
     def kick(self) -> None:
         """Poll now (after the settings change) instead of waiting for the next cycle."""
-        if self.config()["enabled"] and self.configured:
+        if self.config()["enabled"] and self.configured and not self.paused:
             self._kick = asyncio.create_task(self.poll(), name="netwatch-deco-kick")
 
     async def _drop_client(self) -> None:
@@ -176,7 +202,7 @@ class DecoService:
         await asyncio.sleep(5)
         while True:
             try:
-                if self.config()["enabled"] and self.configured:
+                if self.config()["enabled"] and self.configured and not self.paused:
                     await self.poll()
             except Exception:
                 log.exception("Deco poll failed")
@@ -218,12 +244,33 @@ class DecoService:
             self._client = self.client_factory(cfg["host"], pw)
             self._client_key = key
         assert self._client is not None  # noqa: S101 - set just above
+        pin = self.pin(cfg["host"])
+        self._client.key_pin = pin
         try:
             decos, clients = await self._fetch(self._client)
+        except DecoKeyChanged as exc:
+            self.error = str(exc)
+            self.paused = "the Deco's sign-in key changed"
+            await asyncio.to_thread(
+                self.events.instant, SECURITY, "critical", now,
+                "Deco sign-in key changed: password withheld, polling stopped",
+                details={"host": cfg["host"]},
+            )  # fmt: skip
+            return False
+        except DecoLoginError as exc:
+            self.error = str(exc)
+            self._login_failures += 1
+            if self._login_failures >= MAX_LOGIN_FAILURES:
+                self.paused = f"{self._login_failures} failed sign-ins"
+            log.warning("Deco sign-in failed", extra={"error": self.error})
+            return False
         except DecoError as exc:
             self.error = str(exc)
             log.warning("Deco poll failed", extra={"error": self.error})
             return False
+        self._login_failures = 0
+        if pin is None and self._client.key_seen:
+            await asyncio.to_thread(self.trust_key, cfg["host"], self._client.key_seen)
         self.error = None
         self.last_ok_ms = now
         await asyncio.to_thread(self._apply, decos, clients, now)
@@ -370,14 +417,20 @@ class DecoService:
 
     # ── test and status ──────────────────────────────────────────────────────
 
-    async def test(self, host: str, password: str) -> dict:
+    async def test(self, host: str, password: str, *, trust: bool = False) -> dict:
+        """Try a sign-in. With ``trust`` (the owner typed the password for the saved Deco), a
+        new or changed sign-in key is accepted and pinned; otherwise the pinned key is
+        enforced."""
         client = self.client_factory(host, password)
+        client.key_pin = None if trust else await asyncio.to_thread(self.pin, host)
         try:
             decos, clients = await self._fetch(client)
         except DecoError as exc:
             return {"ok": False, "error": str(exc)}
         finally:
             await client.aclose()
+        if trust and client.key_seen:
+            await asyncio.to_thread(self.trust_key, host, client.key_seen)
         return {
             "ok": True,
             "decos": [
@@ -401,6 +454,7 @@ class DecoService:
             "last_poll_ms": self.last_poll_ms,
             "last_ok_ms": self.last_ok_ms,
             "error": self.error,
+            "paused": self.paused,
             "decos": list(self.decos.values()),
             "clients": len(self.clients),
         }

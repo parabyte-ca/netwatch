@@ -29,11 +29,15 @@ services:
     environment:
       NETWATCH_DATA_DIR: /data
       NETWATCH_UPGRADE_DIR: /upgrade
+      NETWATCH_UPGRADE_STATUS_DIR: /upgrade-status
 
     volumes:
       - ./data:/data
-      # Shared with the host-side upgrade agent (scripts/upgrade-agent.sh) for in-app updates.
+      # In-app updates: requests go to the host-side upgrade agent (scripts/upgrade-agent.sh)
+      # through upgrade/; its replies come back read-only, so the container cannot tamper with
+      # anything the agent (root on the host) reads or writes.
       - ./upgrade:/upgrade
+      - ./upgrade-status:/upgrade-status:ro
 
     mem_limit: 512m
     healthcheck:

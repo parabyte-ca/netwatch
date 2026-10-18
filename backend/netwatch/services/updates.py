@@ -15,6 +15,8 @@ import json
 import logging
 import os
 import re
+import tempfile
+import threading
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -130,11 +132,23 @@ def _parse_ts(value) -> float | None:
 
 
 class UpgradeFolder:
-    def __init__(self, path: Path) -> None:
-        self.path = path
+    """``path`` is the request inbox (the only place the container writes). The agent reports
+    back through ``status_path``, which is mounted read-only so the container cannot plant
+    files or symlinks there; older agents wrote their reports into the inbox itself."""
 
-    def _read_json(self, name: str) -> dict | None:
-        p = self.path / name
+    def __init__(self, path: Path, status_path: Path | None = None) -> None:
+        self.path = path
+        self.status_path = status_path
+
+    @property
+    def out(self) -> Path:
+        sp = self.status_path
+        if sp is not None and (sp / "agent.json").is_file():
+            return sp
+        return self.path  # agent from before v0.7.1
+
+    def _read_json(self, name: str, folder: Path | None = None) -> dict | None:
+        p = (folder or self.out) / name
         try:
             if p.is_symlink() or not p.is_file() or p.stat().st_size > _MAX_FILE:
                 return None
@@ -150,7 +164,7 @@ class UpgradeFolder:
         return self._read_json("status.json")
 
     def request(self) -> dict | None:
-        return self._read_json("request.json")
+        return self._read_json("request.json", self.path)
 
     def helper_connected(self, now: float) -> bool:
         agent = self.agent() or {}
@@ -169,13 +183,14 @@ class UpgradeFolder:
             "requested_at": datetime.now(UTC).isoformat(timespec="seconds"),
         }
         self.path.mkdir(parents=True, exist_ok=True)
-        tmp = self.path / f".request.{os.getpid()}.tmp"
-        tmp.write_text(json.dumps(req))
+        fd, tmp = tempfile.mkstemp(dir=self.path, prefix=".request.", suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(req))
         os.replace(tmp, self.path / "request.json")
         return req
 
     def log_tail(self, max_bytes: int = 32_768) -> str:
-        p = self.path / "upgrade.log"
+        p = self.out / "upgrade.log"
         try:
             if p.is_symlink():
                 return ""
@@ -189,7 +204,7 @@ class UpgradeFolder:
             return ""
 
     def history(self, limit: int = 20) -> list[dict]:
-        p = self.path / "history.jsonl"
+        p = self.out / "history.jsonl"
         try:
             if p.is_symlink() or p.stat().st_size > 4 * _MAX_FILE:
                 return []
@@ -245,10 +260,15 @@ class UpdateManager:
     ):
         self.settings = settings
         self.store = store
-        self.folder = UpgradeFolder(settings.upgrade_dir) if settings.upgrade_dir else None
+        self.folder = (
+            UpgradeFolder(settings.upgrade_dir, settings.upgrade_status_dir)
+            if settings.upgrade_dir
+            else None
+        )
         self._client = client
         self._task: asyncio.Task | None = None
         self._check_lock = asyncio.Lock()
+        self._request_lock = threading.Lock()
         self._last_manual_check = 0.0
 
     @property
@@ -336,7 +356,12 @@ class UpdateManager:
         }
 
     def rollback_available(self) -> bool:
-        """update.sh keeps a record of the last successful update until it is rolled back."""
+        """update.sh keeps a record of the last successful update until it is rolled back.
+        Since v0.7.1 that record lives on the host, out of the container's reach, and the
+        agent reports whether it exists."""
+        agent = (self.folder.agent() if self.folder else None) or {}
+        if isinstance(agent.get("can_rollback"), bool):
+            return agent["can_rollback"]
         return (self.settings.backup_dir / "last-update.state").is_file()
 
     def _helper(self, now: float) -> dict:
@@ -379,14 +404,16 @@ class UpdateManager:
             raise UpdateError(f"{version} is not a published release; check for updates first")
         if bump_kind(__version__, version) is None:
             raise UpdateError(f"{version} is not newer than the running {__version__}")
-        req = self._ensure_ready(now).write_request("update", version, reason, by)
+        with self._request_lock:  # the auto-update thread and a manual request may race
+            req = self._ensure_ready(now).write_request("update", version, reason, by)
         log.info("update requested", extra={"version": version, "reason": reason, "by": by})
         return req
 
     def request_rollback(self, *, by: str) -> dict:
         if not self.rollback_available():
             raise UpdateError("there is no completed update to roll back")
-        req = self._ensure_ready(time.time()).write_request("rollback", None, "manual", by)
+        with self._request_lock:
+            req = self._ensure_ready(time.time()).write_request("rollback", None, "manual", by)
         log.info("rollback requested", extra={"by": by})
         return req
 

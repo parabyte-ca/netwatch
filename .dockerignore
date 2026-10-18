@@ -12,3 +12,5 @@ upgrade
 .env
 *.db
 *.db-*
+upgrade-status
+.state

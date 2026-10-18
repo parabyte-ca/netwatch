@@ -41,10 +41,11 @@ mkdir -p "$REPO_DIR/data/backups"
 chown root:root "$REPO_DIR/data" "$REPO_DIR/data/backups" 2>/dev/null \
     || warn "could not chown data/ to root; the container may be unable to write to it."
 chmod 750 "$REPO_DIR/data" 2>/dev/null || true
-# Shared with the upgrade agent: only root (host agent and container) may write requests.
-mkdir -p "$REPO_DIR/upgrade"
-chown root:root "$REPO_DIR/upgrade" 2>/dev/null || true
-chmod 700 "$REPO_DIR/upgrade" 2>/dev/null || true
+# Upgrade agent folders: upgrade/ receives requests from the container, upgrade-status/ is the
+# agent's reply (read-only in the container), .state/ is the agent's own (not mounted).
+mkdir -p "$REPO_DIR/upgrade" "$REPO_DIR/upgrade-status" "$REPO_DIR/.state"
+chown root:root "$REPO_DIR/upgrade" "$REPO_DIR/upgrade-status" "$REPO_DIR/.state" 2>/dev/null || true
+chmod 700 "$REPO_DIR/upgrade" "$REPO_DIR/.state" 2>/dev/null || true
 
 # ── Port check ─────────────────────────────────────────────────────────────────
 if command -v ss >/dev/null 2>&1; then
@@ -59,8 +60,13 @@ fi
 # ── Image ──────────────────────────────────────────────────────────────────────
 if [[ "$OPT_BUILD" == true ]]; then
     build_image
-elif ! pull_image "$VERSION" && ! pull_image latest; then
-    warn "Could not pull from GHCR (package private or not yet published?); building locally."
+elif pull_image "$VERSION"; then
+    if verify_enabled && ! verify_image "$IMAGE:$VERSION" >/dev/null; then
+        warn "Could not verify the signature of $IMAGE:$VERSION (releases before v0.7.1 are unsigned)."
+    fi
+    docker tag "$IMAGE:$VERSION" "$IMAGE:latest"
+else
+    warn "Could not pull $IMAGE:$VERSION; building it locally from this checkout."
     build_image
 fi
 

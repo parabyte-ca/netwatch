@@ -54,6 +54,16 @@ def validate_backup(path: Path) -> dict:
         if check != "ok":
             raise RestoreError(f"database is damaged: {check}")
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        # NetWatch's schema has no triggers or views: a backup that does could run its own SQL
+        # on every insert (e.g. reset the admin password), so it is not ours.
+        extra = conn.execute(
+            "SELECT type, name FROM sqlite_master WHERE type IN ('trigger', 'view')"
+        ).fetchall()
+        if extra:
+            raise RestoreError(
+                "backup contains objects NetWatch never creates: "
+                + ", ".join(f"{t} {n}" for t, n in extra[:5])
+            )
         missing = {"alembic_version", "targets", "users"} - tables
         if missing:
             raise RestoreError(
@@ -72,20 +82,44 @@ def validate_backup(path: Path) -> dict:
     return {"schema": rev, "targets": targets, "users": users, "bytes": path.stat().st_size}
 
 
+MAX_RESTORE_BYTES = 16 * 1024**3
+FREE_SPACE_RESERVE = 1024**3
+
+
 def unpack_upload(src: Path, dest: Path) -> None:
-    """Accept a plain .db or a gzip-compressed one."""
+    """Accept a plain .db or a gzip-compressed one. A compressed file may only expand to the
+    size limit, and never into the last GiB of free space (a gzip of zeros is tiny)."""
     with src.open("rb") as f:
         magic = f.read(2)
-    if magic == GZIP_MAGIC:
-        with gzip.open(src, "rb") as zin, dest.open("wb") as out:
-            shutil.copyfileobj(zin, out, 1 << 20)
-        src.unlink()
-    else:
+    if magic != GZIP_MAGIC:
         src.replace(dest)
+        return
+    limit = min(MAX_RESTORE_BYTES, shutil.disk_usage(dest.parent).free - FREE_SPACE_RESERVE)
+    written = 0
+    try:
+        with gzip.open(src, "rb") as zin, dest.open("wb") as out:
+            while chunk := zin.read(1 << 20):
+                written += len(chunk)
+                if written > limit:
+                    raise RestoreError("backup expands beyond the size limit or the free space")
+                out.write(chunk)
+    except (OSError, EOFError) as exc:
+        dest.unlink(missing_ok=True)
+        raise RestoreError(f"cannot decompress the upload: {exc}") from exc
+    except RestoreError:
+        dest.unlink(missing_ok=True)
+        raise
+    finally:
+        src.unlink(missing_ok=True)
 
 
 def stage_restore(data_dir: Path, candidate: Path) -> dict:
-    info = validate_backup(candidate)
+    try:
+        info = validate_backup(candidate)
+    finally:
+        # Opening a WAL-mode file (even read-only) creates empty -wal/-shm files beside it.
+        for suffix in ("-wal", "-shm"):
+            Path(f"{candidate}{suffix}").unlink(missing_ok=True)
     candidate.replace(data_dir / PENDING_NAME)
     log.warning("database restore staged; applied at next start", extra=info)
     return info
@@ -111,8 +145,22 @@ def apply_pending_restore(db_path: Path, backup_dir: Path) -> Path | None:
         if p.exists():
             p.unlink()
     pending.replace(db_path)
+    _drop_sessions(db_path)
     log.warning("database restored from backup", extra={"safety_copy": str(safety)})
     return safety
+
+
+def _drop_sessions(db_path: Path) -> None:
+    """Sign everyone in again: a backup must not revive sessions signed out since."""
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            with conn:
+                conn.execute("DELETE FROM sessions")
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:  # an old backup without the table: nothing to drop
+        log.info("no sessions dropped after restore", extra={"error": str(exc)})
 
 
 def list_backups(backup_dir: Path) -> list[dict]:

@@ -41,6 +41,8 @@ class Settings(BaseSettings):
 
     # In-app updates. upgrade_dir is shared with the host-side upgrade agent; empty disables.
     upgrade_dir: Path | None = Path("/upgrade")
+    # Where the agent reports back (mounted read-only into the container).
+    upgrade_status_dir: Path | None = Path("/upgrade-status")
     update_check: bool = True
     update_repo: str = Field(default="parabyte-ca/netwatch", pattern=r"^[\w.-]+/[\w.-]+$")
     # Defaults for the automatic-update policy (editable in the UI afterwards).
@@ -58,6 +60,9 @@ class Settings(BaseSettings):
 
     # Host NIC telemetry. Empty = the default-route interface plus its physical members.
     nic_interfaces: str = ""
+    # Host names the web UI may be reached by (comma-separated). Empty: any IP address or
+    # localhost. Requests for other names are refused, which defeats DNS rebinding.
+    allowed_hosts: str = ""
     nic_poll_s: float = Field(default=2.0, ge=0.5, le=60)
     sysfs_root: Path = Path("/sys")
     proc_root: Path = Path("/proc")
@@ -93,6 +98,10 @@ class Settings(BaseSettings):
     @property
     def nic_interface_list(self) -> list[str]:
         return [i.strip() for i in self.nic_interfaces.split(",") if i.strip()]
+
+    @property
+    def allowed_host_set(self) -> set[str]:
+        return {h.strip().lower().strip("[]") for h in self.allowed_hosts.split(",") if h.strip()}
 
     @property
     def db_path(self) -> Path:

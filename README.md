@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.7.0-blue)
+![Version](https://img.shields.io/badge/version-0.7.1-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -138,7 +138,7 @@ Then open `http://192.168.2.15:8090` and create the admin account.
 
 What `setup.sh` does:
 1. Creates `.env` from `.env.example` if it doesn't exist.
-2. Creates `data/` and `data/backups/`, owned by root.
+2. Creates `data/`, `data/backups/` and the upgrade agent folders, owned by root.
 3. Refuses to start if another process already holds the port.
 4. Pulls the image for the version in `VERSION` (or builds it).
 5. Starts the container with `docker compose`.
@@ -153,7 +153,9 @@ What `setup.sh` does:
 | `/mnt/shared_vol/websites/netwatch/data/netwatch.db` | SQLite database (bind-mounted at `/data`) |
 | `/mnt/shared_vol/websites/netwatch/data/backups/` | Pre-update database backups (last 10 kept) |
 | `/mnt/shared_vol/websites/netwatch/data/.secret_key` | Key for stored credentials (Deco password); not in backups, so if it is lost just enter the password again |
-| `/mnt/shared_vol/websites/netwatch/upgrade/` | Shared with the upgrade agent: requests, status, update log, history |
+| `/mnt/shared_vol/websites/netwatch/upgrade/` | Update requests from the container to the upgrade agent (the only folder it may write) |
+| `/mnt/shared_vol/websites/netwatch/upgrade-status/` | The agent's status, update log and history (read-only inside the container) |
+| `/mnt/shared_vol/websites/netwatch/.state/` | Root-only: the last update's rollback record, the agent's lock, log and rollback logs |
 
 **Container security model**
 
@@ -230,7 +232,13 @@ into the page; NetWatch restarts and the page reloads itself on the new version.
 How it works: the container never updates itself. It writes `upgrade/request.json`; the
 **upgrade agent** (`scripts/upgrade-agent.sh`, run every minute by a TrueNAS cron job as root)
 validates the request and runs `update.sh --version X.Y.Z`. Status, log and history come back
-through files in `upgrade/`.
+through `upgrade-status/`, which the container can only read.
+
+The agent is root on TrueNAS, so it treats everything the container can write as hostile: it
+only reads `upgrade/request.json` (no symlinks, size-capped, strictly validated, never a
+downgrade), keeps its own files where the container cannot reach them, and `update.sh` works
+on `data/` only from inside a throwaway container. A compromised NetWatch container therefore
+cannot use the agent to touch files on the host.
 
 | Agent command | Effect |
 |---|---|
@@ -274,12 +282,23 @@ Each update:
 1. Refuses to run if tracked files have local changes.
 2. Tags the running image as `:rollback-<version>`.
 3. Takes an online, WAL-consistent database backup.
-4. Fetches the new code, then pulls or builds the image.
-5. Restarts the container and waits for `/health`.
+4. For a release, pulls the image and verifies its signature (see below) before touching the
+   code; the release tag must be the commit the signed image was built from.
+5. Checks out the new code (or pulls/builds `:latest` when tracking `main`).
+6. Restarts the container and waits for `/health`.
 
 If the new version isn't healthy within 3 minutes, `update.sh` restores the previous code,
 image and database automatically, and saves the container's logs to
-`data/backups/rollback-<timestamp>.log`.
+`.state/rollback-<timestamp>.log`. A rollback first saves the current database as one more
+backup, so nothing collected since the update is lost for good.
+
+**Signed releases.** CI signs every published image with [Sigstore](https://www.sigstore.dev/)
+(keyless: the signature is tied to this repository's GitHub workflow, there is no key to
+leak). `update.sh` checks it with cosign (run from its pinned official image) and refuses to
+deploy anything else; because the tag must match the image's source commit, the scripts that
+then run as root are exactly the ones CI built. Releases before v0.7.1 are unsigned. To deploy
+a local build, use `--build`; to switch verification off (not recommended), set
+`NETWATCH_VERIFY_IMAGES=false` in `.env`.
 
 Git commands run as the owner of the checkout, so `sudo` never leaves root-owned files in
 the repo.
@@ -314,6 +333,8 @@ and paths can only be set in `.env`.
 | `NETWATCH_METRICS_TOKEN` | *(empty)* | Bearer token for Prometheus to scrape `/metrics` without a login session |
 | `NETWATCH_SESSION_DAYS` | `30` | Login session lifetime |
 | `NETWATCH_COOKIE_SECURE` | `false` | Mark the session cookie Secure (only when served over HTTPS) |
+| `NETWATCH_ALLOWED_HOSTS` | *(empty)* | Host names/addresses the UI may be opened by, comma-separated (e.g. `192.168.2.15`). Empty allows any IP address and `localhost`; other names are refused, which blocks DNS-rebinding attacks |
+| `NETWATCH_VERIFY_IMAGES` | `true` | Verify release image signatures before updating (read by `update.sh`) |
 | `NETWATCH_UPDATE_CHECK` | `true` | Daily check of GitHub releases (the only outbound call besides probes) |
 | `NETWATCH_UPDATE_REPO` | `parabyte-ca/netwatch` | Repository whose releases are offered |
 | `NETWATCH_AUTO_UPDATE` | `patch` | Initial policy: `off`, `notify`, `patch`, `minor` (then managed in the UI) |

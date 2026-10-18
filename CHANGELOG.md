@@ -4,6 +4,40 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.1] - 2026-10-18
+### Security
+- Upgrade agent and `update.sh` no longer trust anything the container can write: the
+  rollback record, lock and logs moved to a root-only `.state/` folder; status files to
+  `upgrade-status/`, mounted read-only; requests are opened without following symlinks; file
+  work in `data/` runs in a throwaway container; rollback records are strictly validated;
+  backup pruning can no longer be tricked into deleting other files; downgrades are refused.
+  This closes a path from a compromised container to root on the TrueNAS host. Existing
+  installs migrate automatically on the agent's next run (no manual step).
+- Release images are signed in CI (Sigstore, keyless) and `update.sh` verifies the signature
+  and that the release tag matches the image's source commit before deploying.
+  `NETWATCH_VERIFY_IMAGES=false` switches this off.
+- Deco: the stored owner password is only ever sent to the saved Deco address; names must
+  resolve to LAN addresses; redirects to other hosts are refused; the Deco's sign-in key is
+  pinned on first use and a changed key stops polling with a security event (re-trust it with
+  Test connection); polling stops after 3 failed sign-ins (protects the owner account from
+  lockout); session tokens are scrubbed from errors; Deco-supplied names are cleaned.
+- Sign-in: attempts are counted when they start (parallel requests can't bypass the lockout),
+  IPv6 clients are throttled per /64, password checks are limited to two at a time, the
+  password-change form is throttled too, and repeated refusals are logged once per lockout.
+- Requests for host names other than an IP address, `localhost` or `NETWATCH_ALLOWED_HOSTS`
+  are refused (DNS rebinding); request bodies are capped at 256 KiB (except backup uploads).
+- Restores: backups containing triggers or views are rejected, a compressed upload can't
+  expand past the size limit or the free space, concurrent restores can't collide, and all
+  sessions are signed out after a restore.
+- `/metrics` always requires sign-in or the token (also when switched off without a restart);
+  the API schema (`/openapi.json`) is no longer served; `/health` no longer returns error text.
+- CI: actions pinned to commit SHAs, `VERSION` validated, checkout credentials not persisted.
+
+### Fixed
+- Restoring a stored backup no longer reads the whole file on the event loop.
+- A failed rollback step no longer leaves NetWatch stopped; a rollback first saves the current
+  database as an extra backup.
+
 ## [0.7.0] - 2026-10-17
 ### Added
 - Network map page: interactive, automatically laid out map (Internet, Bell, Home Hub, switch,

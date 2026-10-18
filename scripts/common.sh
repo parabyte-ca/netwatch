@@ -51,12 +51,34 @@ compose() {
         -f "$REPO_DIR/docker-compose.yml" "$@"
 }
 
-# Pull IMAGE:<tag> and retag it as :latest (what docker-compose.yml runs). Returns 1 on failure.
+# Pull IMAGE:<tag>. Returns 1 on failure. It is NOT tagged :latest (what docker-compose.yml
+# runs) here, so an image is only ever run after the caller has checked it.
 pull_image() {
     local tag="$1"
     info "Pulling $IMAGE:$tag ..."
-    docker pull "$IMAGE:$tag" || return 1
-    [[ "$tag" == "latest" ]] || docker tag "$IMAGE:$tag" "$IMAGE:latest"
+    docker pull "$IMAGE:$tag"
+}
+
+# Release images are signed in CI with Sigstore (keyless: GitHub's OIDC identity of this
+# repository's workflow), and checked here with cosign run from its official image.
+COSIGN_IMAGE="${COSIGN_IMAGE:-ghcr.io/sigstore/cosign/cosign:v2.5.0@sha256:e82eb6d42ccb6bc048d8d9e5e598e4d5178e1af6c00e54e02c9b0569c5f3ec11}"
+SIGNER_RE='^https://github\.com/parabyte-ca/netwatch/\.github/workflows/ci\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+)$'
+SIGNER_ISSUER="https://token.actions.githubusercontent.com"
+
+verify_enabled() { [[ "$(env_value NETWATCH_VERIFY_IMAGES true)" != "false" ]]; }
+
+# Verify the signature of a pulled image; prints the git commit it was built from.
+verify_image() {
+    local ref="$1" digest rev
+    digest="$(docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$ref" \
+        | grep -m 1 -F "$IMAGE@sha256:")" || { warn "$ref has no registry digest."; return 1; }
+    info "Verifying the signature of $digest ..." >&2
+    docker run --rm "$COSIGN_IMAGE" verify --certificate-identity-regexp "$SIGNER_RE" \
+        --certificate-oidc-issuer "$SIGNER_ISSUER" "$digest" >&2 || return 1
+    rev="$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$ref")"
+    [[ "$rev" =~ ^[0-9a-f]{40}$ ]] || { warn "$ref has no source revision label."; return 1; }
+    info "Signed by CI, built from ${rev:0:12}." >&2
+    echo "$rev"
 }
 
 build_image() {

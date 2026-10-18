@@ -211,7 +211,13 @@ _DUMMY_HASH = hash_password(secrets.token_hex(8))
 
 
 class LoginThrottle:
-    """Per-client lockout after repeated failures (in memory; resets on restart)."""
+    """Per-client lockout after repeated failures (in memory; resets on restart).
+
+    An attempt is counted when it starts (``begin``), not when its password check fails, so
+    a burst of parallel requests cannot all slip in before the first failure is recorded.
+    """
+
+    MAX_KEYS = 10_000  # bounds memory if source addresses rotate (IPv6)
 
     def __init__(
         self, max_failures: int = 5, window_s: float = 300, lockout_s: float = 300
@@ -221,14 +227,35 @@ class LoginThrottle:
         self.lockout_s = lockout_s
         self._fails: dict[str, deque[float]] = defaultdict(deque)
         self._locked_until: dict[str, float] = {}
+        self._inflight: dict[str, int] = defaultdict(int)
+        self._refusal_logged: dict[str, float] = {}
 
     def retry_after(self, key: str, now: float | None = None) -> int:
         now = time.monotonic() if now is None else now
         until = self._locked_until.get(key, 0)
         return max(0, int(until - now + 0.999))
 
+    def begin(self, key: str, now: float | None = None) -> int:
+        """Reserve an attempt: 0 to go ahead (then call ``end``), else seconds to wait."""
+        now = time.monotonic() if now is None else now
+        if wait := self.retry_after(key, now):
+            return wait
+        q = self._fails.get(key)
+        recent = sum(1 for t in q if t >= now - self.window_s) if q else 0
+        if recent + self._inflight[key] >= self.max_failures:
+            return 1  # the attempts already under way would use up the allowance
+        self._inflight[key] += 1
+        return 0
+
+    def end(self, key: str) -> None:
+        self._inflight[key] -= 1
+        if self._inflight[key] <= 0:
+            del self._inflight[key]
+
     def failure(self, key: str, now: float | None = None) -> None:
         now = time.monotonic() if now is None else now
+        if len(self._fails) >= self.MAX_KEYS and key not in self._fails:
+            self._prune(now)
         q = self._fails[key]
         q.append(now)
         while q and q[0] < now - self.window_s:
@@ -240,6 +267,24 @@ class LoginThrottle:
     def success(self, key: str) -> None:
         self._fails.pop(key, None)
         self._locked_until.pop(key, None)
+
+    def log_refusal(self, key: str, now: float | None = None) -> bool:
+        """True once per lockout, so refused attempts don't flood the security log."""
+        now = time.monotonic() if now is None else now
+        until = self._locked_until.get(key, 0)
+        if self._refusal_logged.get(key) == until:
+            return False
+        self._refusal_logged[key] = until
+        return True
+
+    def _prune(self, now: float) -> None:
+        for k in [k for k, q in self._fails.items() if not q or q[-1] < now - self.window_s]:
+            del self._fails[k]
+        for k in [k for k, t in self._locked_until.items() if t < now]:
+            self._locked_until.pop(k, None)
+            self._refusal_logged.pop(k, None)
+        while len(self._fails) >= self.MAX_KEYS:  # still full: drop the oldest
+            del self._fails[next(iter(self._fails))]
 
 
 def password_problem(password: str) -> str | None:

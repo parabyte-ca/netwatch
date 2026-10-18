@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hmac
+import ipaddress
 import logging
 import os
 import signal
@@ -55,6 +56,33 @@ _CSP = (
 # API paths reachable without a session (everything else under /api/ requires login).
 _PUBLIC_API = frozenset({"/api/auth/status", "/api/auth/setup", "/api/auth/login"})
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+# JSON bodies are small; only the backup upload may be large (it streams and checks its size).
+MAX_BODY_BYTES = 256 * 1024
+_LARGE_BODY = frozenset({"/api/admin/restore"})
+_LOCAL_NAMES = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _host_name(header: str) -> str:
+    """The host part of a Host header, without the port or IPv6 brackets."""
+    h = header.strip().lower()
+    if h.startswith("["):
+        return h[1:].split("]", 1)[0]
+    return h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+
+
+def host_allowed(header: str | None, allowed: set[str]) -> bool:
+    name = _host_name(header or "")
+    if not name:
+        return False
+    if name in _LOCAL_NAMES or name in allowed:
+        return True
+    if allowed:
+        return False
+    try:
+        ipaddress.ip_address(name)
+    except ValueError:
+        return False
+    return True
 
 
 def create_app(
@@ -216,13 +244,29 @@ def create_app(
             engine.dispose()
 
     app = FastAPI(
-        title="NetWatch", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None
+        title="NetWatch",
+        version=__version__,
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
     )
 
     @app.middleware("http")
     async def auth_gate(request: Request, call_next):
         path = request.url.path
         is_api = path.startswith("/api/")
+        if (is_api or path == "/metrics") and not host_allowed(
+            request.headers.get("host"), settings.allowed_host_set
+        ):
+            # A page on another site that rebinds its name to this address gets nothing.
+            return JSONResponse({"detail": "unknown host name"}, status_code=421)
+        if is_api and request.method not in _SAFE_METHODS and path not in _LARGE_BODY:
+            length = request.headers.get("content-length")
+            if length is None and request.headers.get("transfer-encoding"):
+                return JSONResponse({"detail": "length required"}, status_code=411)
+            if length is not None and (not length.isdigit() or int(length) > MAX_BODY_BYTES):
+                return JSONResponse({"detail": "request body too large"}, status_code=413)
         if is_api and request.method not in _SAFE_METHODS:
             # CSRF defence in depth on top of SameSite=Strict: browsers won't send a custom
             # header cross-site without a CORS preflight, which this app never approves.
@@ -231,12 +275,10 @@ def create_app(
             origin = request.headers.get("origin")
             if origin and urlsplit(origin).netloc != request.headers.get("host"):
                 return JSONResponse({"detail": "cross-origin request refused"}, status_code=403)
-        if (is_api and path not in _PUBLIC_API) or (
-            path == "/metrics" and settings.metrics_enabled
-        ):
+        if (is_api and path not in _PUBLIC_API) or path == "/metrics":
             if path == "/metrics" and settings.metrics_token:
                 given = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-                if hmac.compare_digest(given, settings.metrics_token):
+                if hmac.compare_digest(given.encode(), settings.metrics_token.encode()):
                     return await call_next(request)
             token = request.cookies.get(COOKIE_NAME)
             user = (

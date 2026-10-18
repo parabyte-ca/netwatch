@@ -32,6 +32,5 @@ async def health(request: Request) -> JSONResponse:
         "uptime_s": round(time.time() - (monitor.started_at or time.time()), 1),
         "checks": checks,
     }
-    if monitor.last_flush_error:
-        body["writer_error"] = monitor.last_flush_error
+    # Public endpoint: say which check failed, not why (the error is in the container log).
     return JSONResponse(body, status_code=200 if healthy else 503)
