@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { api, UNAUTHORIZED_EVENT } from '../lib/api';
+import { api, ApiError, UNAUTHORIZED_EVENT } from '../lib/api';
 
 interface AuthContextValue {
   username: string;
@@ -14,7 +14,7 @@ export function useAuth(): AuthContextValue {
   return ctx;
 }
 
-type Phase = { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'setup' } | { kind: 'login' } | { kind: 'ready'; username: string };
+type Phase = { kind: 'loading' } | { kind: 'error'; message: string; host?: boolean } | { kind: 'setup'; code: boolean } | { kind: 'login' } | { kind: 'ready'; username: string };
 
 const input =
   'w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-sky-500 focus:outline-none';
@@ -26,11 +26,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     try {
       const st = await api.authStatus();
-      if (st.setup_required) setPhase({ kind: 'setup' });
+      if (st.setup_required) setPhase({ kind: 'setup', code: !!st.setup_code_required });
       else if (st.authenticated && st.username) setPhase({ kind: 'ready', username: st.username });
       else setPhase({ kind: 'login' });
     } catch (e) {
-      setPhase({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+      setPhase({ kind: 'error', message: e instanceof Error ? e.message : String(e), host: e instanceof ApiError && e.status === 421 });
     }
   }, []);
 
@@ -50,6 +50,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return <AuthContext.Provider value={{ username: phase.username, logout }}>{children}</AuthContext.Provider>;
   }
   if (phase.kind === 'loading') return <Screen title="NetWatch"><p className="text-sm text-slate-500">Loading…</p></Screen>;
+  if (phase.kind === 'error' && phase.host) return <UnknownHost />;
   if (phase.kind === 'error') {
     return (
       <Screen title="NetWatch">
@@ -60,7 +61,28 @@ export function AuthGate({ children }: { children: ReactNode }) {
       </Screen>
     );
   }
-  return <CredentialsForm mode={phase.kind} onDone={refresh} />;
+  return <CredentialsForm mode={phase.kind} needCode={phase.kind === 'setup' && phase.code} onDone={refresh} />;
+}
+
+/** Opened by a name NetWatch was not told about (it refuses those to block DNS rebinding). */
+function UnknownHost() {
+  const name = window.location.hostname;
+  return (
+    <Screen title="NetWatch">
+      <div role="alert" className="space-y-3 text-sm text-slate-300">
+        <p>
+          NetWatch doesn't answer to the name <code className="text-amber-300">{name}</code> yet. It only accepts IP
+          addresses and names you list, so other websites can't reach it through your browser.
+        </p>
+        <p>
+          To use this name, add it to <code>NETWATCH_ALLOWED_HOSTS</code> in <code>.env</code> (comma-separated,
+          keep your IP address too), then restart:
+        </p>
+        <pre className="overflow-x-auto rounded bg-slate-950 p-2 text-xs text-slate-200">{`NETWATCH_ALLOWED_HOSTS=<ip address>,${name}\nsudo docker compose up -d`}</pre>
+        <p className="text-slate-500">Or open NetWatch by its IP address instead.</p>
+      </div>
+    </Screen>
+  );
 }
 
 function Screen({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
@@ -78,10 +100,11 @@ function Screen({ title, subtitle, children }: { title: string; subtitle?: strin
   );
 }
 
-function CredentialsForm({ mode, onDone }: { mode: 'setup' | 'login'; onDone: () => Promise<void> }) {
+function CredentialsForm({ mode, needCode = false, onDone }: { mode: 'setup' | 'login'; needCode?: boolean; onDone: () => Promise<void> }) {
   const [username, setUsername] = useState(mode === 'setup' ? 'admin' : '');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const setup = mode === 'setup';
@@ -95,7 +118,7 @@ function CredentialsForm({ mode, onDone }: { mode: 'setup' | 'login'; onDone: ()
     }
     setBusy(true);
     try {
-      if (setup) await api.setup(username, password);
+      if (setup) await api.setup(username, password, code);
       else await api.login(username, password);
       await onDone();
     } catch (err) {
@@ -111,6 +134,15 @@ function CredentialsForm({ mode, onDone }: { mode: 'setup' | 'login'; onDone: ()
       subtitle={setup ? 'Create the admin account. You will use it to sign in from now on.' : undefined}
     >
       <form onSubmit={submit} className="space-y-3" aria-label={setup ? 'Create admin account' : 'Sign in'}>
+        {needCode && (
+          <div>
+            <label htmlFor="auth-code" className="mb-1 block text-xs text-slate-400">Setup code</label>
+            <input id="auth-code" className={input} autoComplete="off" required placeholder="abc123-def456-789abc" value={code} onChange={(e) => setCode(e.target.value)} />
+            <p className="mt-1 text-[11px] text-slate-500">
+              Printed by <code>setup.sh</code>; also in <code>data/setup-token</code> and <code>docker logs netwatch</code>.
+            </p>
+          </div>
+        )}
         <div>
           <label htmlFor="auth-user" className="mb-1 block text-xs text-slate-400">Username</label>
           <input id="auth-user" className={input} autoComplete="username" required value={username} onChange={(e) => setUsername(e.target.value)} />

@@ -30,6 +30,7 @@ class Prober:
             self._http = httpx.AsyncClient(
                 trust_env=False,
                 follow_redirects=True,
+                max_redirects=5,
                 headers={"User-Agent": "NetWatch"},
                 limits=httpx.Limits(max_keepalive_connections=0),
             )

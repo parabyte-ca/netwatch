@@ -10,7 +10,7 @@ const SPANS = [
   { key: '30d', label: '30 days', s: 2_592_000 },
   { key: '90d', label: '90 days', s: 7_776_000 },
 ];
-const KINDS: EventKind[] = ['outage', 'degraded', 'anomaly', 'nic_link', 'nic_speed', 'nic_errors', 'hub', 'wifi', 'device', 'monitor', 'security'];
+const KINDS: EventKind[] = ['outage', 'degraded', 'anomaly', 'nic_link', 'nic_speed', 'nic_errors', 'hub', 'exposure', 'wifi', 'device', 'monitor', 'security'];
 
 function dayKey(ms: number) {
   return new Date(ms).toLocaleDateString('en-CA', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });

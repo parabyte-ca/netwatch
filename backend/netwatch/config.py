@@ -35,6 +35,8 @@ class Settings(BaseSettings):
 
     # Authentication.
     session_days: int = Field(default=30, ge=1, le=365)
+    # Sign out a session unused for this long; 0 = only the lifetime above applies.
+    session_idle_hours: int = Field(default=168, ge=0, le=8760)
     cookie_secure: bool = False  # set true when served over HTTPS (reverse proxy)
     login_max_failures: int = Field(default=5, ge=3, le=50)
     login_lockout_s: int = Field(default=300, ge=30, le=86400)
@@ -94,6 +96,8 @@ class Settings(BaseSettings):
     traffic_retention_days: int = Field(default=7, ge=1, le=90)
     # Nightly bufferbloat (latency under load) test, 20 min after the update window opens.
     bufferbloat_nightly: bool = True
+    # Nightly exposure scan (open LAN services, Home Hub port forwards), 40 min after the window.
+    exposure_scan_nightly: bool = True
 
     @property
     def discovery_subnet_list(self) -> list[str]:

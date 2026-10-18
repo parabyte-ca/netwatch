@@ -32,10 +32,15 @@ ADMIN = {"username": "admin", "password": "correct-horse-battery"}
 CSRF = {"X-Requested-With": "netwatch"}
 
 
+def setup_body(client: TestClient, **over) -> dict:
+    """The first-run setup request, with the one-time code the app issued at startup."""
+    return {**ADMIN, "setup_token": client.app.state.setup_token, **over}
+
+
 def login(client: TestClient) -> TestClient:
     """Create the admin on first use (or sign in) and send the CSRF header by default."""
     client.headers.update(CSRF)
-    r = client.post("/api/auth/setup", json=ADMIN)
+    r = client.post("/api/auth/setup", json=setup_body(client))
     if r.status_code == 409:
         r = client.post("/api/auth/login", json=ADMIN)
     assert r.status_code in (200, 201), r.text

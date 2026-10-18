@@ -15,10 +15,11 @@ describe('AuthGate', () => {
     const f = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       if (url === '/api/auth/status') {
-        return json(created ? { setup_required: false, authenticated: true, username: 'admin' } : { setup_required: true, authenticated: false, username: null });
+        return json(created ? { setup_required: false, authenticated: true, username: 'admin' } : { setup_required: true, setup_code_required: true, authenticated: false, username: null });
       }
       if (url === '/api/auth/setup') {
         expect((init?.headers as Record<string, string>)['X-Requested-With']).toBe('netwatch');
+        expect(JSON.parse(String(init?.body)).setup_token).toBe('abc123-def456-789abc');
         created = true;
         return json({ username: 'admin' }, 201);
       }
@@ -26,6 +27,7 @@ describe('AuthGate', () => {
     });
     render(<AuthGate><p>secret app</p></AuthGate>);
     expect(await screen.findByText('Welcome to NetWatch')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Setup code'), { target: { value: 'abc123-def456-789abc' } });
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'long-enough-pw' } });
     fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'different-pw-1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create account' }));
@@ -60,5 +62,12 @@ describe('AuthGate', () => {
     expect(await screen.findByText('secret app')).toBeInTheDocument();
     window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
     await waitFor(() => expect(screen.getByText('Sign in to NetWatch')).toBeInTheDocument());
+  });
+  it('explains how to allow a refused host name', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json({ detail: "unknown host name 'x'" }, 421));
+    render(<AuthGate><p>secret app</p></AuthGate>);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('NETWATCH_ALLOWED_HOSTS');
+    expect(alert).toHaveTextContent(window.location.hostname);
   });
 });

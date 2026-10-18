@@ -260,6 +260,22 @@ async def bufferbloat(request: Request) -> dict:
     }
 
 
+@router.get("/exposure")
+async def exposure(request: Request) -> dict:
+    st = request.app.state
+    out = await asyncio.to_thread(st.exposure.summary)
+    out["nightly"] = st.settings.exposure_scan_nightly
+    out["hub_configured"] = await asyncio.to_thread(lambda: st.hub.configured)
+    return out
+
+
+@router.post("/exposure/scan", status_code=status.HTTP_202_ACCEPTED)
+async def run_exposure(request: Request) -> dict:
+    if not request.app.state.exposure.start_now():
+        raise HTTPException(status.HTTP_409_CONFLICT, "an exposure scan is already running")
+    return {"started": True}
+
+
 @router.post("/bufferbloat/run", status_code=status.HTTP_202_ACCEPTED)
 async def run_bufferbloat(request: Request) -> dict:
     if not request.app.state.bufferbloat.start_now():

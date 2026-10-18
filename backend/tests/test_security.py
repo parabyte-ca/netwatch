@@ -42,6 +42,7 @@ def test_host_allowlist():
 def test_unknown_host_is_refused(client):
     r = client.get("/api/auth/status", headers={"Host": "rebind.example:8090"})
     assert r.status_code == 421
+    assert r.json()["host"] == "rebind.example" and "NETWATCH_ALLOWED_HOSTS" in r.json()["detail"]
 
 
 def test_large_bodies_are_refused(client):

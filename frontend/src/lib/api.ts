@@ -106,6 +106,7 @@ export interface ProbeResult {
 
 export interface AuthStatus {
   setup_required: boolean;
+  setup_code_required?: boolean;
   authenticated: boolean;
   username: string | null;
 }
@@ -174,7 +175,8 @@ export type EventKind =
   | 'device'
   | 'security'
   | 'wifi'
-  | 'hub';
+  | 'hub'
+  | 'exposure';
 
 export interface TimelineEvent {
   id: number;
@@ -342,6 +344,55 @@ export interface DeviceDetail {
   ips: { device_id: number; ip: string; first_seen_ms: number; last_seen_ms: number; source: string }[];
   target: Target | null;
   events: TimelineEvent[];
+  services?: OpenService[];
+}
+
+export interface OpenService {
+  device_id: number;
+  port: number;
+  first_seen_ms: number;
+  last_seen_ms: number;
+  banner: string | null;
+  service: string;
+  risk: 'info' | 'medium' | 'high';
+  advice: string;
+  device_label?: string;
+  ip?: string | null;
+}
+
+export interface PortForward {
+  enabled: boolean;
+  protocol: string;
+  external_port: number | null;
+  external_port_end: number | null;
+  internal_ip: string | null;
+  internal_port: number | null;
+  description: string | null;
+  origin: 'upnp' | 'manual';
+  device_id: number | null;
+  device_label: string | null;
+}
+
+export interface ExposureFinding {
+  severity: 'critical' | 'warning' | 'info';
+  title: string;
+  advice: string;
+  device_id?: number | null;
+  ip?: string | null;
+  port?: number | null;
+}
+
+export interface ExposureSummary {
+  latest: { id: number; ts_ms: number; trigger: string; status: string; hosts: number; open_ports: number } | null;
+  running: boolean;
+  progress: { done: number; total: number } | null;
+  services: OpenService[];
+  forwards: PortForward[];
+  hub: { upnp_enabled: boolean | null; dmz_host: string | null; dmz_known: boolean } | null;
+  hub_read: boolean;
+  hub_configured: boolean;
+  nightly: boolean;
+  findings: ExposureFinding[];
 }
 
 export interface DiscoveryScan {
@@ -786,8 +837,8 @@ const post = (body?: unknown): RequestInit => ({
 
 export const api = {
   authStatus: () => request<AuthStatus>('/api/auth/status'),
-  setup: (username: string, password: string) =>
-    request<{ username: string }>('/api/auth/setup', post({ username, password })),
+  setup: (username: string, password: string, setup_token?: string) =>
+    request<{ username: string }>('/api/auth/setup', post({ username, password, setup_token: setup_token || undefined })),
   login: (username: string, password: string) =>
     request<{ username: string }>('/api/auth/login', post({ username, password })),
   logout: () => request<void>('/api/auth/logout', post()),
@@ -859,6 +910,8 @@ export const api = {
   exploreHub: (xpath: string) => request<{ xpath: string; value: unknown }>('/api/admin/hub/explore', post({ xpath })),
   bufferbloat: () => request<{ running: boolean; nightly: boolean; tests: BufferbloatTest[] }>('/api/bufferbloat'),
   runBufferbloat: () => request<{ started: boolean }>('/api/bufferbloat/run', post()),
+  exposure: () => request<ExposureSummary>('/api/exposure'),
+  runExposure: () => request<{ started: boolean }>('/api/exposure/scan', post()),
   trafficLive: () => request<TrafficLive>('/api/traffic/live'),
   trafficTop: (hours: number) => request<TrafficTop>(`/api/traffic/top?hours=${hours}`),
   deviceTraffic: (id: number, hours: number) => request<DeviceTraffic>(`/api/devices/${id}/traffic?hours=${hours}`),

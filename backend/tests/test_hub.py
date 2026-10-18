@@ -27,6 +27,29 @@ class FakeHub:
         self.rx_raw = -19234
         self.logins = 0
         self.expire_next = False
+        self.mappings = [
+            {
+                "uid": 1,
+                "Enable": True,
+                "Protocol": "TCP",
+                "ExternalPort": 32400,
+                "InternalPort": 32400,
+                "InternalClient": "192.168.2.15",
+                "Description": "Plex",
+                "Creator": "USER",
+            },
+            {
+                "uid": 2,
+                "Enable": True,
+                "Protocol": "UDP",
+                "ExternalPort": 3074,
+                "InternalPort": 3074,
+                "InternalClient": "192.168.2.40",
+                "Description": "Xbox (3074) UPnP",
+                "Creator": "UPNP",
+            },
+        ]
+        self.dmz = {"Enable": False, "AdvancedDMZhost": ""}
 
     def h(self, s: str) -> str:
         f = hashlib.sha512 if self.method == "sha512" else hashlib.md5
@@ -64,6 +87,9 @@ class FakeHub:
                 {"uid": 2, "IPv4Addresses": [{"IPAddress": "74.12.34.56"}]},
             ],
             "Device/WiFi/AccessPoints": [{"SSID": "home", "Security": {"KeyPassphrase": "s3cret"}}],
+            "Device/NAT/PortMappings": self.mappings,
+            "Device/UPnP/Device": {"Device": {"Enable": True, "UPnPIGD": True}},
+            "Device/Services/BellNetworkCfg/AdvancedDMZ": {"AdvancedDMZ": self.dmz},
         }
         return values.get(xpath)
 
@@ -156,6 +182,19 @@ async def test_wrong_password_and_reauth():
     fake.expire_next = True
     await c.snapshot()
     assert fake.logins == 2
+    await c.aclose()
+
+
+async def test_exposure_reads_forwards_upnp_and_dmz():
+    fake = FakeHub()
+    c = client_for(fake)
+    e = await c.exposure()
+    assert e["upnp_enabled"] is True and e["dmz_host"] is None and e["dmz_known"]
+    plex, xbox = e["port_mappings"]
+    assert plex["origin"] == "manual" and plex["internal_ip"] == "192.168.2.15"
+    assert xbox["origin"] == "upnp" and xbox["protocol"] == "UDP"
+    fake.dmz = {"Enable": True, "AdvancedDMZhost": "192.168.2.50"}
+    assert (await c.exposure())["dmz_host"] == "192.168.2.50"
     await c.aclose()
 
 

@@ -12,7 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..services.discovery.classify import TYPES
 from ..services.discovery.inventory import device_label, summarise_group
-from ..services.events import ANOMALY, DEVICE
+from ..services.events import ANOMALY, DEVICE, EXPOSURE
+from ..services.exposure import describe_port
 
 router = APIRouter(prefix="/api")
 
@@ -60,8 +61,16 @@ async def device_detail(device_id: int, request: Request) -> dict:
     )
     macs = {m["mac"] for m in members}
     recent = await asyncio.to_thread(
-        st.events.list, now - EVENT_LOOKBACK_MS, now + 1, kinds=[ANOMALY, DEVICE], limit=2000
+        st.events.list,
+        now - EVENT_LOOKBACK_MS,
+        now + 1,
+        kinds=[ANOMALY, DEVICE, EXPOSURE],
+        limit=2000,
     )
+    services = [
+        {**s, **describe_port(s["port"])}
+        for s in await asyncio.to_thread(st.exposure_store.services, d["id"])
+    ]
     related = [
         e
         for e in recent
@@ -74,6 +83,7 @@ async def device_detail(device_id: int, request: Request) -> dict:
         "ips": ips,
         "target": target,
         "events": related,
+        "services": services,
     }
 
 

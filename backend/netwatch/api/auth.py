@@ -8,7 +8,14 @@ import time
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field, field_validator
 
-from ..auth import COOKIE_NAME, AuthStore, LoginThrottle, password_problem
+from ..auth import (
+    COOKIE_NAME,
+    SETUP_TOKEN_FILE,
+    AuthStore,
+    LoginThrottle,
+    password_problem,
+    setup_token_ok,
+)
 from ..services.events import SECURITY
 
 router = APIRouter(prefix="/api/auth")
@@ -27,6 +34,10 @@ class Credentials(BaseModel):
         if not _USERNAME.match(v):
             raise ValueError("letters, digits and . _ @ - only")
         return v
+
+
+class SetupBody(Credentials):
+    setup_token: str | None = Field(default=None, max_length=64)
 
 
 class PasswordChange(BaseModel):
@@ -113,17 +124,32 @@ async def auth_status(request: Request) -> dict:
     user = None
     token = request.cookies.get(COOKIE_NAME)
     if token and users:
-        user = await asyncio.to_thread(store.resolve_session, token)
+        user = await asyncio.to_thread(
+            store.resolve_session, token, request.app.state.settings.session_idle_hours * 3600
+        )
     return {
         "setup_required": users == 0,
+        "setup_code_required": users == 0 and bool(getattr(request.app.state, "setup_token", None)),
         "authenticated": user is not None,
         "username": user.username if user else None,
     }
 
 
 @router.post("/setup", status_code=status.HTTP_201_CREATED)
-async def setup(body: Credentials, request: Request, response: Response) -> dict:
+async def setup(body: SetupBody, request: Request, response: Response) -> dict:
     """First-run only: create the admin account and sign in."""
+    st = request.app.state
+    throttle: LoginThrottle = st.login_throttle
+    key = f"setup:{_client(request)}"
+    if wait := throttle.retry_after(key):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"too many failed attempts; try again in {wait} s",
+            headers={"Retry-After": str(wait)},
+        )
+    if not setup_token_ok(getattr(st, "setup_token", None), body.setup_token):
+        throttle.failure(key)
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "setup code is missing or wrong")
     if problem := password_problem(body.password):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
     async with _hash_slots(request):
@@ -132,6 +158,8 @@ async def setup(body: Credentials, request: Request, response: Response) -> dict
         )
     if uid is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "setup has already been completed")
+    st.setup_token = None
+    (st.settings.data_dir / SETUP_TOKEN_FILE).unlink(missing_ok=True)
     await _new_session(request, response, uid)
     return {"username": body.username}
 

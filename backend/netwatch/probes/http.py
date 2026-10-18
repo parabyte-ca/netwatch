@@ -18,6 +18,8 @@ async def probe_http(t: TargetSpec, client: httpx.AsyncClient) -> ProbeResult:
         return ProbeResult(t.id, ts, False, error="timeout")
     except httpx.ConnectError:
         return ProbeResult(t.id, ts, False, error="connect")
+    except httpx.TooManyRedirects:
+        return ProbeResult(t.id, ts, False, error="too_many_redirects")
     except httpx.HTTPError as exc:
         return ProbeResult(t.id, ts, False, error=type(exc).__name__[:64])
     ok = status == t.expect_status if t.expect_status else status < 400
