@@ -172,19 +172,40 @@ class HubService:
 
     # ── polling ──────────────────────────────────────────────────────────────
 
-    async def poll(self, now_ms: int | None = None) -> bool:
+    async def _ensure_client(self) -> HubClient | None:
         cfg = await asyncio.to_thread(self.config)
         pw = await asyncio.to_thread(self.password)
-        now = now_ms or int(time.time() * 1000)
-        self.last_poll_ms = now
-        if not pw:
-            self.error = "the stored password cannot be decrypted; enter it again"
-            return False
+        if not (cfg["host"] and pw):
+            return None
         if self._client_key != (cfg["host"], pw):
             await self._drop()
             self._client = self.client_factory(cfg["host"], pw)
             self._client_key = (cfg["host"], pw)
-        assert self._client is not None  # noqa: S101 - set just above
+        return self._client
+
+    async def exposure(self) -> dict | None:
+        """Port forwards, UPnP and DMZ from the Hub; None when the Hub isn't set up or reachable."""
+        cfg = await asyncio.to_thread(self.config)
+        configured = await asyncio.to_thread(lambda: self.configured)
+        if not (cfg["enabled"] and configured) or self.paused:
+            return None
+        client = await self._ensure_client()
+        if client is None:
+            return None
+        try:
+            return await client.exposure()
+        except HubError as exc:
+            log.warning("Hub exposure read failed", extra={"error": str(exc)})
+            return None
+
+    async def poll(self, now_ms: int | None = None) -> bool:
+        now = now_ms or int(time.time() * 1000)
+        self.last_poll_ms = now
+        if await asyncio.to_thread(self.password) is None:
+            self.error = "the stored password cannot be decrypted; enter it again"
+            return False
+        await self._ensure_client()
+        assert self._client is not None  # noqa: S101 - host and password are set
         try:
             snap = await self._client.snapshot()
         except HubLoginError as exc:

@@ -22,33 +22,39 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from . import __version__
 from .api import (
     admin,
+    ask,
     devices,
     diagnosis,
     health,
     monitoring,
     netmap,
+    score,
     system,
     targets,
     traffic,
     updates,
 )
 from .api import auth as auth_api
-from .auth import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, AuthStore, LoginThrottle
+from .auth import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, AuthStore, LoginThrottle, issue_setup_token
 from .config import Settings, get_settings
 from .db import make_engine, run_migrations
 from .probes import Prober
+from .services.assistant import Assistant
 from .services.bufferbloat import BufferbloatStore, BufferbloatTester
 from .services.deco.service import DecoService
 from .services.diagnosis import Diagnoser
 from .services.discovery.inventory import DeviceStore
 from .services.discovery.service import DiscoveryService
 from .services.events import MONITOR, SECURITY, EventLog, IncidentRecorder, startup_events
+from .services.exposure import ExposureScanner, ExposureStore
+from .services.health import HealthService
 from .services.hub.service import HubService, HubStore
 from .services.metrics import Metrics
 from .services.netinfo import default_route
 from .services.netmap import NetMap
 from .services.nic import NicMonitor, NicStore, interfaces_to_watch
 from .services.pathtest import PATH_TEST_KINDS, PathStore, PathTester
+from .services.report import build_report
 from .services.restore import apply_pending_restore
 from .services.runtime_settings import OVERRIDES_KEY, apply_values, load_overrides
 from .services.scheduler import Monitor
@@ -189,6 +195,10 @@ def create_app(
                 "bufferbloat_tests": bufferbloat_store.purge(
                     now_ms - settings.throughput_retention_days * day_ms
                 ),
+                "health_reports": app.state.health.purge(),
+                "exposure_scans": exposure_store.purge(
+                    now_ms - settings.throughput_retention_days * day_ms
+                ),
             }
 
         def rollup_and_purge_traffic(now_s: int) -> int:
@@ -249,8 +259,31 @@ def create_app(
             SecretBox(settings.data_dir),
             traffic=traffic_store,
         )
+        exposure_store = ExposureStore(engine)
+        app.state.exposure_store = exposure_store
+        app.state.exposure = ExposureScanner(exposure_store, engine, events, hub=app.state.hub)
+
+        def health_report(start_ms: int, end_ms: int) -> dict:
+            return build_report(
+                app.state.diagnoser,
+                throughput_store,
+                start_ms,
+                end_ms,
+                hub_store=hub_store,
+                bufferbloat_store=bufferbloat_store,
+            )
+
+        app.state.health = HealthService(
+            engine, health_report, app.state.exposure.summary, tz=lambda: settings.tz
+        )
+        app.state.assistant = Assistant(
+            store, SecretBox(settings.data_dir), app, tz=lambda: settings.tz
+        )
         app.state.netmap = NetMap(app.state)
         app.state.auth = AuthStore(engine)
+        app.state.setup_token = await asyncio.to_thread(
+            issue_setup_token, app.state.auth, settings.data_dir
+        )
         app.state.login_throttle = LoginThrottle(
             max_failures=settings.login_max_failures, lockout_s=settings.login_lockout_s
         )
@@ -275,6 +308,14 @@ def create_app(
             kv_get=store.kv_get,
             kv_set=store.kv_set,
         )
+        app.state.health.start_schedule()
+        app.state.exposure.start_schedule(
+            enabled=lambda: settings.exposure_scan_nightly,
+            window=lambda: app.state.updates.policy().get("window", settings.auto_update_window),
+            tz=lambda: settings.tz,
+            kv_get=store.kv_get,
+            kv_set=store.kv_set,
+        )
         app.state.updates.start()
         log.info("netwatch started", extra={"version": __version__, "port": settings.port})
         try:
@@ -284,6 +325,8 @@ def create_app(
             await app.state.deco.stop()
             await app.state.hub.stop()
             await app.state.bufferbloat.stop()
+            await app.state.exposure.stop()
+            await app.state.health.stop()
             await discovery.stop()
             await throughput.stop()
             await path_tester.stop()
@@ -313,7 +356,15 @@ def create_app(
             request.headers.get("host"), settings.allowed_host_set
         ):
             # A page on another site that rebinds its name to this address gets nothing.
-            return JSONResponse({"detail": "unknown host name"}, status_code=421)
+            name = _host_name(request.headers.get("host") or "")[:100] or "(none)"
+            return JSONResponse(
+                {
+                    "detail": f"unknown host name {name!r}: add it to NETWATCH_ALLOWED_HOSTS "
+                    "in .env and restart the container",
+                    "host": name,
+                },
+                status_code=421,
+            )
         if is_api and request.method not in _SAFE_METHODS and path not in _LARGE_BODY:
             length = request.headers.get("content-length")
             if length is None and request.headers.get("transfer-encoding"):
@@ -335,7 +386,11 @@ def create_app(
                     return await call_next(request)
             token = request.cookies.get(COOKIE_NAME)
             user = (
-                await asyncio.to_thread(request.app.state.auth.resolve_session, token)
+                await asyncio.to_thread(
+                    request.app.state.auth.resolve_session,
+                    token,
+                    settings.session_idle_hours * 3600,
+                )
                 if token
                 else None
             )
@@ -366,6 +421,8 @@ def create_app(
     app.include_router(admin.router)
     app.include_router(netmap.router)
     app.include_router(traffic.router)
+    app.include_router(score.router)
+    app.include_router(ask.router)
 
     @app.get("/metrics", include_in_schema=False)
     def metrics_endpoint(request: Request) -> Response:

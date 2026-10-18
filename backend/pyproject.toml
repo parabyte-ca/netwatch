@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "netwatch"
-version = "0.8.0"
+version = "0.9.0"
 description = "Self-hosted network diagnostics and root-cause analysis"
 license = "MIT"
 requires-python = ">=3.12"
@@ -22,6 +22,7 @@ dependencies = [
     "netaddr>=1.3,<2.0",  # offline IEEE OUI registry for device vendors
     "tzdata>=2024.1",  # zoneinfo data for the auto-update window (slim images lack it)
     "cryptography>=44,<51",  # encrypts the stored Deco password
+    "anthropic>=1.15,<2",  # Ask NetWatch (only used once an API key is saved)
 ]
 
 [project.optional-dependencies]

@@ -295,6 +295,42 @@ hub_stats = Table(
     sqlite_with_rowid=False,
 )
 
+# Open TCP services found on LAN devices by the exposure scan (one row per device and port).
+device_services = Table(
+    "device_services",
+    metadata,
+    Column("device_id", Integer, ForeignKey("devices.id", ondelete="CASCADE"), primary_key=True),
+    Column("port", Integer, primary_key=True),
+    Column("first_seen_ms", Integer, nullable=False),
+    Column("last_seen_ms", Integer, nullable=False),
+    Column("banner", String(120)),
+    sqlite_with_rowid=False,
+)
+
+# Exposure scans: the LAN port scan plus what the Home Hub forwards from the internet.
+exposure_scans = Table(
+    "exposure_scans",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("ts_ms", Integer, nullable=False),
+    Column("trigger", String(16), nullable=False),  # scheduled | manual
+    Column("status", String(8), nullable=False),  # ok | error
+    Column("hosts", Integer, nullable=False, default=0),
+    Column("open_ports", Integer, nullable=False, default=0),
+    Column("error", String(200)),
+    Column("details", Text, nullable=False, default="{}"),
+)
+
+# Weekly network health reports (one per week, Monday 00:00 local time).
+health_reports = Table(
+    "health_reports",
+    metadata,
+    Column("week_start", String(10), primary_key=True),  # YYYY-MM-DD
+    Column("created_ms", Integer, nullable=False),
+    Column("score", Integer),
+    Column("details", Text, nullable=False, default="{}"),
+)
+
 Index("ix_sessions_user", sessions.c.user_id)
 Index("ix_events_start", events.c.start_ms)
 Index("ix_events_target", events.c.target_id)
@@ -308,6 +344,7 @@ Index("ix_devices_last_seen", devices.c.last_seen_ms)
 Index("ix_devices_target", devices.c.target_id)
 Index("ix_devices_merged", devices.c.merged_into)
 Index("ix_bufferbloat_ts", bufferbloat_tests.c.ts_ms)
+Index("ix_exposure_scans_ts", exposure_scans.c.ts_ms)
 Index("ix_events_open", events.c.start_ms, sqlite_where=events.c.end_ms.is_(None))
 
 

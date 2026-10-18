@@ -159,6 +159,23 @@ export function DeviceDetail() {
         <DeviceTraffic id={d.id} />
       </Section>
 
+      {!!data.services?.length && (
+        <Section title="Open services">
+          <ul className="space-y-1 text-sm">
+            {data.services.map((s) => (
+              <li key={s.port} className="flex flex-wrap items-baseline gap-x-2">
+                <span className={s.risk === 'high' ? 'text-rose-300' : s.risk === 'medium' ? 'text-amber-300' : 'text-slate-200'}>
+                  {s.service} <span className="tabular-nums text-slate-500">{s.port}/tcp</span>
+                </span>
+                {s.banner && <span className="font-mono text-xs text-slate-500">{s.banner}</span>}
+                {s.risk !== 'info' && <span className="w-full text-xs text-slate-400">{s.advice}</span>}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-slate-500">From the latest <Link to="/exposure" className="text-sky-400 hover:underline">exposure scan</Link>.</p>
+        </Section>
+      )}
+
       <Section title="IP address history">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

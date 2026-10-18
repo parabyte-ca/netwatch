@@ -106,6 +106,7 @@ export interface ProbeResult {
 
 export interface AuthStatus {
   setup_required: boolean;
+  setup_code_required?: boolean;
   authenticated: boolean;
   username: string | null;
 }
@@ -174,7 +175,8 @@ export type EventKind =
   | 'device'
   | 'security'
   | 'wifi'
-  | 'hub';
+  | 'hub'
+  | 'exposure';
 
 export interface TimelineEvent {
   id: number;
@@ -342,6 +344,117 @@ export interface DeviceDetail {
   ips: { device_id: number; ip: string; first_seen_ms: number; last_seen_ms: number; source: string }[];
   target: Target | null;
   events: TimelineEvent[];
+  services?: OpenService[];
+}
+
+export interface OpenService {
+  device_id: number;
+  port: number;
+  first_seen_ms: number;
+  last_seen_ms: number;
+  banner: string | null;
+  service: string;
+  risk: 'info' | 'medium' | 'high';
+  advice: string;
+  device_label?: string;
+  ip?: string | null;
+}
+
+export interface PortForward {
+  enabled: boolean;
+  protocol: string;
+  external_port: number | null;
+  external_port_end: number | null;
+  internal_ip: string | null;
+  internal_port: number | null;
+  description: string | null;
+  origin: 'upnp' | 'manual';
+  device_id: number | null;
+  device_label: string | null;
+}
+
+export interface ExposureFinding {
+  severity: 'critical' | 'warning' | 'info';
+  title: string;
+  advice: string;
+  device_id?: number | null;
+  ip?: string | null;
+  port?: number | null;
+}
+
+export interface ScoreComponent {
+  key: string;
+  label: string;
+  weight: number;
+  score: number;
+  detail: string;
+}
+
+export interface HealthScore {
+  score: number | null;
+  label: string;
+  components: ScoreComponent[];
+  highlights: string[];
+  start_ms: number;
+  end_ms: number;
+  days: number;
+}
+
+export interface WeeklyReportRow {
+  week_start: string;
+  created_ms: number;
+  score: number | null;
+  label: string | null;
+  previous_score: number | null;
+  highlights: string[];
+  incident_count: number;
+}
+
+export interface WeeklyReport extends Omit<HealthScore, 'start_ms' | 'end_ms' | 'days'> {
+  week_start: string;
+  created_ms: number;
+  previous_score: number | null;
+  period: { start: string; end: string; start_ms: number; end_ms: number };
+  summary: Report['summary'];
+  speeds: Report['speeds'];
+  incidents: { id: number; start: string; duration: string; cause: string; severity: string; start_ms: number }[];
+  incident_count: number;
+  markdown: string;
+}
+
+export interface AssistantStatus {
+  enabled: boolean;
+  model: string;
+  effort: 'low' | 'medium' | 'high';
+  key_set: boolean;
+  models: string[];
+  efforts: string[];
+}
+
+export interface AskTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface AskAnswer {
+  answer: string;
+  tools: string[];
+  model: string;
+  usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number };
+  stop_reason: string | null;
+}
+
+export interface ExposureSummary {
+  latest: { id: number; ts_ms: number; trigger: string; status: string; hosts: number; open_ports: number } | null;
+  running: boolean;
+  progress: { done: number; total: number } | null;
+  services: OpenService[];
+  forwards: PortForward[];
+  hub: { upnp_enabled: boolean | null; dmz_host: string | null; dmz_known: boolean } | null;
+  hub_read: boolean;
+  hub_configured: boolean;
+  nightly: boolean;
+  findings: ExposureFinding[];
 }
 
 export interface DiscoveryScan {
@@ -786,8 +899,8 @@ const post = (body?: unknown): RequestInit => ({
 
 export const api = {
   authStatus: () => request<AuthStatus>('/api/auth/status'),
-  setup: (username: string, password: string) =>
-    request<{ username: string }>('/api/auth/setup', post({ username, password })),
+  setup: (username: string, password: string, setup_token?: string) =>
+    request<{ username: string }>('/api/auth/setup', post({ username, password, setup_token: setup_token || undefined })),
   login: (username: string, password: string) =>
     request<{ username: string }>('/api/auth/login', post({ username, password })),
   logout: () => request<void>('/api/auth/logout', post()),
@@ -852,6 +965,13 @@ export const api = {
     return request<NetworkMapResponse>(`/api/map${qs ? `?${qs}` : ''}`);
   },
   hub: () => request<HubStatus>('/api/admin/hub'),
+  assistant: () => request<AssistantStatus>('/api/admin/assistant'),
+  saveAssistant: (body: { enabled: boolean; model: string; effort: string; api_key?: string; forget_key?: boolean }) =>
+    request<AssistantStatus>('/api/admin/assistant', { method: 'PUT', body: JSON.stringify(body) }),
+  testAssistant: (api_key?: string) =>
+    request<{ ok: boolean; error?: string; model?: string; display_name?: string }>('/api/admin/assistant/test', post({ api_key: api_key || undefined })),
+  askStatus: () => request<{ available: boolean; model: string }>('/api/ask'),
+  ask: (messages: AskTurn[]) => request<AskAnswer>('/api/ask', post({ messages })),
   saveHub: (body: { host: string; enabled: boolean; password?: string; forget_password?: boolean }) =>
     request<HubStatus>('/api/admin/hub', { method: 'PUT', body: JSON.stringify(body) }),
   testHub: (host: string, password?: string) =>
@@ -859,6 +979,13 @@ export const api = {
   exploreHub: (xpath: string) => request<{ xpath: string; value: unknown }>('/api/admin/hub/explore', post({ xpath })),
   bufferbloat: () => request<{ running: boolean; nightly: boolean; tests: BufferbloatTest[] }>('/api/bufferbloat'),
   runBufferbloat: () => request<{ started: boolean }>('/api/bufferbloat/run', post()),
+  exposure: () => request<ExposureSummary>('/api/exposure'),
+  score: (days = 7) => request<HealthScore>(`/api/score?days=${days}`),
+  weeklyReports: () => request<{ reports: WeeklyReportRow[]; last_full_week: string }>('/api/weekly-reports'),
+  weeklyReport: (week: string) => request<WeeklyReport>(`/api/weekly-reports/${week}`),
+  weeklyReportMarkdownUrl: (week: string) => `/api/weekly-reports/${week}?format=md`,
+  generateWeeklyReport: (week_start?: string) => request<WeeklyReport>('/api/weekly-reports', post({ week_start })),
+  runExposure: () => request<{ started: boolean }>('/api/exposure/scan', post()),
   trafficLive: () => request<TrafficLive>('/api/traffic/live'),
   trafficTop: (hours: number) => request<TrafficTop>(`/api/traffic/top?hours=${hours}`),
   deviceTraffic: (id: number, hours: number) => request<DeviceTraffic>(`/api/devices/${id}/traffic?hours=${hours}`),

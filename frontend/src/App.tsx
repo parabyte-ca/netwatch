@@ -7,6 +7,8 @@ import { Devices } from './pages/Devices';
 import { Diagnosis } from './pages/Diagnosis';
 import { Diagnostics } from './pages/Diagnostics';
 import { EventDetail } from './pages/EventDetail';
+import { Health } from './pages/Health';
+import { Exposure } from './pages/Exposure';
 import { Overview } from './pages/Overview';
 import { Report } from './pages/Report';
 import { System } from './pages/System';
@@ -26,6 +28,8 @@ export function App() {
         <Route path="targets/:id" element={<TargetDetail />} />
         <Route path="devices" element={<Devices />} />
         <Route path="devices/:id" element={<DeviceDetail />} />
+        <Route path="exposure" element={<Exposure />} />
+        <Route path="health-score" element={<Health />} />
         <Route path="timeline" element={<Timeline />} />
         <Route path="events/:id" element={<EventDetail />} />
         <Route path="map" element={<Suspense fallback={<p className="text-slate-400">Loading map…</p>}><NetworkMap /></Suspense>} />

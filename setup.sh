@@ -80,7 +80,9 @@ if wait_healthy; then
             || warn "upgrade agent not installed; in-app updates will be unavailable."
     fi
     info "$PROJECT v$VERSION is running at $(lan_url)"
-    info "First visit: create the admin account in the browser."
+    if [[ -f "$REPO_DIR/data/setup-token" ]]; then
+        info "First visit: create the admin account in the browser with setup code: $(head -c 64 "$REPO_DIR/data/setup-token" | tr -cd '0-9a-f-')"
+    fi
 else
     compose logs --tail 50 || true
     die "$PROJECT did not become healthy. See the logs above."

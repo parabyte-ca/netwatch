@@ -10,16 +10,22 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
+import os
 import secrets
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from pathlib import Path
 
 from sqlalchemy import Engine, delete, func, insert, select, update
 
 from .db import sessions, users
 
+log = logging.getLogger(__name__)
+
 COOKIE_NAME = "netwatch_session"
+SETUP_TOKEN_FILE = "setup-token"  # noqa: S105 - a file name
 CSRF_HEADER = "x-requested-with"
 CSRF_VALUE = "netwatch"
 MIN_PASSWORD_LEN = 10
@@ -155,7 +161,8 @@ class AuthStore:
             )
         return token
 
-    def resolve_session(self, token: str) -> SessionUser | None:
+    def resolve_session(self, token: str, idle_s: int = 0) -> SessionUser | None:
+        """The session's user, or None if it is unknown, expired or idle for over ``idle_s``."""
         now = int(time.time() * 1000)
         th = _token_hash(token)
         with self.engine.connect() as conn:
@@ -165,6 +172,10 @@ class AuthStore:
                 .where(sessions.c.token_hash == th, sessions.c.expires_ms > now)
             ).first()
         if row is None:
+            return None
+        if idle_s and now - row.last_seen_ms > idle_s * 1000:
+            with self.engine.begin() as conn:
+                conn.execute(delete(sessions).where(sessions.c.token_hash == th))
             return None
         if now - row.last_seen_ms > 60_000:  # throttle last-seen writes
             with self.engine.begin() as conn:
@@ -285,6 +296,30 @@ class LoginThrottle:
             self._refusal_logged.pop(k, None)
         while len(self._fails) >= self.MAX_KEYS:  # still full: drop the oldest
             del self._fails[next(iter(self._fails))]
+
+
+def issue_setup_token(store: AuthStore, data_dir: Path) -> str | None:
+    """While no admin exists, a one-time code that first-run setup must present.
+
+    Without it, anyone on the LAN who opened NetWatch first could claim the admin account.
+    The code is written to ``data/setup-token`` (root-only) and to the log; setup.sh prints it.
+    """
+    path = data_dir / SETUP_TOKEN_FILE
+    if store.user_count():
+        path.unlink(missing_ok=True)
+        return None
+    token = "-".join(secrets.token_hex(3) for _ in range(3))
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(token + "\n")
+    log.warning("First-run setup code: %s (also in data/%s)", token, SETUP_TOKEN_FILE)
+    return token
+
+
+def setup_token_ok(expected: str | None, given: str | None) -> bool:
+    if not expected:
+        return True
+    return hmac.compare_digest((given or "").strip().lower().encode(), expected.encode())
 
 
 def password_problem(password: str) -> str | None:

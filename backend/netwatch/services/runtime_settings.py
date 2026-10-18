@@ -71,6 +71,9 @@ FIELDS: tuple[Editable, ...] = (
     Editable("bufferbloat_nightly", "path_tests", "Nightly bufferbloat test",
              "Saturates the internet line for about 30 s each night (20 min after the update "
              "window opens) to grade latency under load.", True),
+    Editable("exposure_scan_nightly", "path_tests", "Nightly exposure scan",
+             "Checks LAN devices for open services and reads the Home Hub's port forwards "
+             "(40 min after the update window opens).", True),
     # Host NIC
     Editable("nic_interfaces", "nic", "Interfaces to watch",
              "Comma-separated. Empty = default-route interface plus its physical ports.", True),
@@ -92,6 +95,8 @@ FIELDS: tuple[Editable, ...] = (
     # Security
     Editable("session_days", "security", "Session lifetime",
              "How long a sign-in lasts (applies to new sign-ins).", True, "days"),
+    Editable("session_idle_hours", "security", "Sign out when idle",
+             "Ends a session unused for this long. 0 = never.", True, "h"),
     Editable("login_max_failures", "security", "Failed sign-ins before lockout",
              "Per client address, within 5 minutes.", True),
     Editable("login_lockout_s", "security", "Lockout duration", "", True, "s"),

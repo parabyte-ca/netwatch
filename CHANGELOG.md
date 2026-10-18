@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-10-18
+### Added
+- Exposure scan (new **Exposure** page): a nightly (40 minutes after the update window, setting
+  "Nightly exposure scan") and on-demand TCP check of about 30 well-known ports on every LAN
+  device seen in the last hour, plus the Home Hub's port forwards, UPnP mappings and DMZ host.
+  Ranked findings with advice; new "Exposure" timeline events for new open services and new port
+  forwards; open services on each device page.
+- Network health score (0-100) for the last 24 hours, 7 or 30 days: internet uptime, connection
+  quality, latency under load, home network, fibre line and exposure, each with its detail.
+  Shown on the Overview and the new **Health** page.
+- Weekly health report, written every Monday morning for the previous week (Monday to Sunday),
+  with the score and its change, highlights, breakdown, availability, speed tests and incidents;
+  kept for two years, downloadable as Markdown, and can be written on demand.
+- Ask NetWatch: a chat panel on every page that answers questions about the network with Claude,
+  using read-only tools over NetWatch's own data. Off until an Anthropic API key is saved under
+  Admin → Ask NetWatch (encrypted like the other credentials); Claude Opus 5.5 by default, with
+  Sonnet 5.5 and Haiku 5.5 as cheaper options; 40 questions an hour at most.
+- First-run setup now needs a one-time setup code (printed by `setup.sh`, also in
+  `data/setup-token` and the container log), so nobody else on the LAN can create the admin
+  account first.
+- Sessions end after 7 days without use (new setting "Sign out when idle",
+  `NETWATCH_SESSION_IDLE_HOURS`, 0 = never).
+
+### Changed
+- Opening NetWatch by a host name it doesn't know now shows which name was refused and the exact
+  `NETWATCH_ALLOWED_HOSTS` line to add, instead of "Cannot reach the server: unknown host name".
+- HTTP probes follow at most 5 redirects; a redirect loop is reported as `too_many_redirects`.
+
 ## [0.8.0] - 2026-10-18
 ### Added
 - Live bandwidth per device from the Decos: "top talkers" now, over 24 hours and 7 days on the

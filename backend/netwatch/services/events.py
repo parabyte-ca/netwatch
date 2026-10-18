@@ -30,8 +30,10 @@ OUTAGE, LOSS, NIC_LINK, NIC_SPEED, NIC_ERRORS, MONITOR, ANOMALY, DEVICE, SECURIT
     "wifi",
 )
 HUB = "hub"  # the Home Hub's own reports (restarts, fibre link, internet session)
+EXPOSURE = "exposure"  # new open services and port forwards found by the exposure scan
 KINDS = (
     OUTAGE, LOSS, NIC_LINK, NIC_SPEED, NIC_ERRORS, MONITOR, ANOMALY, DEVICE, SECURITY, WIFI, HUB,
+    EXPOSURE,
 )  # fmt: skip
 
 

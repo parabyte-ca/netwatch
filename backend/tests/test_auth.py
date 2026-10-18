@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from netwatch.auth import LoginThrottle, hash_password, verify_password
 from netwatch.main import create_app
 
-from .conftest import ADMIN, CSRF, FakeProber, login, test_settings
+from .conftest import ADMIN, CSRF, FakeProber, login, setup_body, test_settings
 
 
 def test_hash_roundtrip():
@@ -19,12 +19,23 @@ def test_first_run_setup_flow(anon_client):
     c = anon_client
     c.headers.update(CSRF)
     st = c.get("/api/auth/status").json()
-    assert st == {"setup_required": True, "authenticated": False, "username": None}
+    assert st == {
+        "setup_required": True,
+        "setup_code_required": True,
+        "authenticated": False,
+        "username": None,
+    }
+    code_file = c.app.state.settings.data_dir / "setup-token"
+    assert code_file.read_text().strip() == c.app.state.setup_token
+    assert oct(code_file.stat().st_mode & 0o777) == "0o600"
+    assert c.post("/api/auth/setup", json=ADMIN).status_code == 403  # no code
+    assert c.post("/api/auth/setup", json=setup_body(c, setup_token="0-0-0")).status_code == 403
     assert c.get("/api/targets").status_code == 401
-    assert c.post("/api/auth/setup", json={**ADMIN, "password": "short"}).status_code == 422
-    assert c.post("/api/auth/setup", json={**ADMIN, "username": "bad name"}).status_code == 422
-    r = c.post("/api/auth/setup", json=ADMIN)
+    assert c.post("/api/auth/setup", json=setup_body(c, password="short")).status_code == 422
+    assert c.post("/api/auth/setup", json=setup_body(c, username="bad name")).status_code == 422
+    r = c.post("/api/auth/setup", json=setup_body(c))
     assert r.status_code == 201
+    assert not code_file.exists() and c.app.state.setup_token is None
     cookie = r.headers["set-cookie"].lower()
     assert "httponly" in cookie and "samesite=strict" in cookie
     assert c.get("/api/auth/status").json()["authenticated"] is True
@@ -146,3 +157,17 @@ def test_reset_password_cli(tmp_path, monkeypatch, capsys):
         assert store.authenticate("admin", "second-password-2") is not None
     finally:
         get_settings.cache_clear()
+
+
+def test_idle_sessions_are_signed_out(client):
+    from netwatch.auth import COOKIE_NAME, token_hash
+    from netwatch.db import sessions
+
+    st = client.app.state
+    st.settings.session_idle_hours = 1
+    assert client.get("/api/targets").status_code == 200
+    th = token_hash(client.cookies[COOKIE_NAME])
+    with st.auth.engine.begin() as conn:
+        conn.execute(sessions.update().where(sessions.c.token_hash == th).values(last_seen_ms=0))
+    assert client.get("/api/targets").status_code == 401
+    assert st.auth.list_sessions() == []

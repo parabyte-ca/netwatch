@@ -68,6 +68,18 @@ async def test_http_ok_and_status_rules():
         ).ok
 
 
+async def test_http_redirect_loop_is_capped():
+    from netwatch.probes import Prober
+
+    loop = httpx.MockTransport(lambda req: httpx.Response(302, headers={"Location": "/again"}))
+    p = Prober()
+    p._http = httpx.AsyncClient(transport=loop, follow_redirects=True, max_redirects=5)
+    r = await probe_http(spec(kind="http", url="http://x.test/"), p.http)
+    assert not r.ok and r.error == "too_many_redirects"
+    await p.aclose()
+    assert Prober().http.max_redirects == 5
+
+
 async def test_http_connect_error():
     def boom(_req):
         raise httpx.ConnectError("nope")

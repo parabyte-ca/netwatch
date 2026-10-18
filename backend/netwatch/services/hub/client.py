@@ -302,10 +302,51 @@ class HubClient:
             "wan_ip": wan_ip,
         }
 
+    async def exposure(self) -> dict:
+        """What the Hub lets in from the internet: port forwards (manual and UPnP), whether UPnP
+        is on, and the DMZ host. Paths a firmware lacks come back as None."""
+        maps, upnp, dmz = await self.get_values(
+            [
+                "Device/NAT/PortMappings",
+                "Device/UPnP/Device",
+                "Device/Services/BellNetworkCfg/AdvancedDMZ",
+            ]
+        )
+        dev = _first(_unwrap(upnp, "Device"))
+        dmz = _first(_unwrap(dmz, "AdvancedDMZ"))
+        return {
+            "port_mappings": [port_mapping(m) for m in _list(_unwrap(maps, "PortMappings"))]
+            if maps is not None
+            else None,
+            "upnp_enabled": bool(dev.get("Enable") and dev.get("UPnPIGD", True)) if dev else None,
+            "dmz_host": (dmz.get("AdvancedDMZhost") or None) if dmz.get("Enable") else None,
+            "dmz_known": bool(dmz),
+        }
+
     async def explore(self, xpath: str) -> Any:
         """Raw value of any path, credentials hidden (to find fields on a new firmware)."""
         (value,) = await self.get_values([xpath])
         return redact(value)
+
+
+def port_mapping(m: dict) -> dict:
+    """A port forward in NetWatch's terms; ``origin`` tells UPnP (added by a device) from manual."""
+    creator = " ".join(str(m.get(k) or "") for k in ("Creator", "Service", "Alias")).lower()
+    desc = str(m.get("Description") or "")
+    upnp = "upnp" in creator or "upnp" in desc.lower() or "miniupnp" in desc.lower()
+    ext = _int(m.get("ExternalPort"))
+    end = _int(m.get("ExternalPortEndRange")) or ext
+    return {
+        "enabled": bool(m.get("Enable", True)),
+        "protocol": str(m.get("Protocol") or "TCP").upper()[:8],
+        "external_port": ext,
+        "external_port_end": end if end and ext and end > ext else None,
+        "internal_ip": str(m.get("InternalClient") or "")[:45] or None,
+        "internal_port": _int(m.get("InternalPort")) or ext,
+        "description": desc[:80] or None,
+        "origin": "upnp" if upnp else "manual",
+        "remote_host": str(m.get("RemoteHost") or "")[:45] or None,
+    }
 
 
 def _unwrap(v: Any, key: str) -> Any:
