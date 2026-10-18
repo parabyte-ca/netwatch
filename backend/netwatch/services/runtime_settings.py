@@ -67,6 +67,10 @@ FIELDS: tuple[Editable, ...] = (
              "ARP rate (10 s average) that opens an ARP-storm event.", True, "pkt/s"),
     Editable("dns_check_interval_min", "discovery", "DNS consistency check",
              "Minutes between resolver comparisons (0 = off).", False, "min"),
+    # Bufferbloat
+    Editable("bufferbloat_nightly", "path_tests", "Nightly bufferbloat test",
+             "Saturates the internet line for about 30 s each night (20 min after the update "
+             "window opens) to grade latency under load.", True),
     # Host NIC
     Editable("nic_interfaces", "nic", "Interfaces to watch",
              "Comma-separated. Empty = default-route interface plus its physical ports.", True),
@@ -82,6 +86,9 @@ FIELDS: tuple[Editable, ...] = (
     Editable("throughput_retention_days", "retention", "Speed tests", "", True, "days"),
     Editable("device_retention_days", "retention", "Unseen devices",
              "Named or monitored devices are always kept.", True, "days"),
+    Editable("traffic_retention_days", "retention", "Per-device traffic (1-minute)",
+             "Bandwidth per device from the Decos; older traffic is kept as hourly totals "
+             "for as long as the 1-minute rollups.", True, "days"),
     # Security
     Editable("session_days", "security", "Session lifetime",
              "How long a sign-in lasts (applies to new sign-ins).", True, "days"),
@@ -100,7 +107,7 @@ FIELDS: tuple[Editable, ...] = (
 BY_NAME = {f.name: f for f in FIELDS}
 GROUPS = {
     "detection": "Outage detection",
-    "path_tests": "Path tests",
+    "path_tests": "Path and load tests",
     "discovery": "Discovery",
     "nic": "TrueNAS network interface",
     "retention": "Data retention",

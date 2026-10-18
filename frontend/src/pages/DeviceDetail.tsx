@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { DeviceTraffic } from '../components/DeviceTraffic';
 import { EventRow } from '../components/EventRow';
 import { api, type DeviceType } from '../lib/api';
 import { DEVICE_TYPE_LABEL, fmtAgo, fmtTime } from '../lib/format';
@@ -153,6 +154,10 @@ export function DeviceDetail() {
           </div>
         </Section>
       </div>
+
+      <Section title="Bandwidth">
+        <DeviceTraffic id={d.id} />
+      </Section>
 
       <Section title="IP address history">
         <div className="overflow-x-auto">

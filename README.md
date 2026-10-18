@@ -1,21 +1,23 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.7.2-blue)
+![Version](https://img.shields.io/badge/version-0.8.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
 stores the results locally, and graphs latency and loss SmokePing-style so intermittent
 drops can be pinned to a time and a network layer. It runs as a single Docker container on
-the always-on TrueNAS host. No data leaves your network apart from the probes themselves and
-a daily update check against GitHub (which can be switched off).
+the always-on TrueNAS host. No data leaves your network apart from the probes themselves, the
+nightly bufferbloat test's download and upload to Cloudflare's speed-test servers, and a daily
+update check against GitHub (both can be switched off).
 
 Built in phases: **v0.1** probes, storage and graphs; **v0.2** sign-in and web/automatic
 updates; **v0.3** outage detection, an event timeline, TrueNAS NIC telemetry, mtr path tests
 and iperf3 throughput tests; **v0.4** device discovery, an inventory and network anomaly
 alerts; **v0.5** the root-cause diagnosis engine and an incident report for Bell; **v0.6** the
-admin panel; **v0.7 (this release)** the network map with incident replay and the Deco mesh
-integration.
+admin panel; **v0.7** the network map with incident replay and the Deco mesh integration;
+**v0.8 (this release)** live per-device bandwidth, the bufferbloat grade and the Home Hub
+integration. See the [Roadmap](#roadmap) for what's next.
 
 ## Features
 - **Probes:** ICMP (from every 1 s), DNS query latency/failures, TCP connect, and HTTP checks,
@@ -84,6 +86,20 @@ integration.
   disconnects over a minute for monitored devices) and diagnosis causes (a Deco went offline,
   every failing device was on one Deco, a device dropped off Wi-Fi). The password is encrypted
   with a key file kept outside the database, so backups never contain it.
+- **Live bandwidth per device:** who is using the internet right now and over the last day or
+  week ("top talkers" on the Overview and the map), live traffic on every map link (busy links
+  are thicker and animated), and a bandwidth chart on each device page. Measured by the Decos,
+  kept at 1-minute detail for 7 days (adjustable under Admin → settings), then as hourly totals.
+- **Bufferbloat grade (A+ to F):** latency to 1.1.1.1 while the line is idle, then while it is
+  saturated downloading and uploading, graded like Waveform's test. It explains the classic
+  "video calls lag whenever someone downloads". Runs nightly after the update window (can be
+  switched off) and on demand from Diagnostics; tests never raise packet-loss alerts.
+- **Home Hub integration (Bell Home Hub 4000):** reads the Hub's own view of the line every
+  minute: restarts (from its uptime), fibre receive/transmit levels and link state, and the
+  internet session. Restarts, link-down periods, session reconnects and a weak fibre signal
+  become timeline events and top-confidence diagnosis causes, and the Bell incident report gains
+  a "Bell line" section. Read-only; an advanced explorer shows the Hub's raw data with
+  passwords hidden.
 - **Patterns:** failures that repeat at a fixed interval (e.g. every 6 h) or cluster at a time of
   day are called out, since both point at something scheduled.
 - **Incident report for Bell:** a printable report (Print / save as PDF, or download Markdown)
@@ -206,6 +222,18 @@ NetWatch out (it signs in again on its next poll). To avoid that tug-of-war, inv
 account as a **manager** in the Deco app (Me → Managers) and use that one on your phone; leave
 the owner account to NetWatch. Only LAN addresses are accepted, so the password never leaves
 the network.
+
+### Home Hub
+Under **Admin → Home Hub**, check the address (NetWatch suggests your gateway, normally
+`192.168.2.1`), enter the Hub's **admin** password (the one for its web page; by default it's
+printed on the Hub's label), press **Test connection**, then tick **Poll every minute** and
+**Save**. The test reports the model, firmware, uptime and fibre level.
+
+The Hub's API is undocumented and firmware-dependent; NetWatch detects the sign-in method
+(MD5 or SHA-512) itself. If a value such as the fibre level shows as missing, open
+**Advanced: explore the Hub's data** (e.g. `Device/Optical/Interfaces`) and send the output
+(passwords and keys are hidden) so the mapping can be adjusted. After 3 failed sign-ins NetWatch
+stops trying until you save the settings again, so a changed password can't lock the Hub.
 
 ### Local development
 ```bash
@@ -418,6 +446,17 @@ endpoints marked public, and state-changing calls need the header `X-Requested-W
 | `GET /api/targets/{id}/series?start=&end=&points=` | Graph data; raw samples for ranges of 6 h or less, rollups beyond that |
 | `GET /api/targets/{id}/export?start=&end=&format=csv\|json` | Raw samples, up to 31 days |
 | `GET /metrics` | Prometheus metrics (when enabled) |
+
+## Roadmap
+Planned, in order (suggestions welcome):
+
+| Version | Feature |
+|---|---|
+| v0.9 | **Ask NetWatch:** plain-English questions answered from your own data ("why was Netflix choppy last night?"), using the Claude API (your key; only summaries are sent) |
+| v0.9 | **Exposed services scan:** LAN devices with risky open ports, and the inbound ports devices opened on the Hub through UPnP |
+| v0.9 | **Network health score** (0-100) on the Overview and map, plus a weekly report |
+| Later | **Wi-Fi coverage view:** a floor plan with the Decos placed and each device's signal and roaming per room |
+| Later | **Speed tests against your plan:** nightly tests reported as a share of the plan's speed, with a 90-day trend |
 
 ## Changelog
 See [CHANGELOG.md](CHANGELOG.md).

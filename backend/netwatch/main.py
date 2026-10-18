@@ -20,17 +20,30 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from . import __version__
-from .api import admin, devices, diagnosis, health, monitoring, netmap, system, targets, updates
+from .api import (
+    admin,
+    devices,
+    diagnosis,
+    health,
+    monitoring,
+    netmap,
+    system,
+    targets,
+    traffic,
+    updates,
+)
 from .api import auth as auth_api
 from .auth import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, AuthStore, LoginThrottle
 from .config import Settings, get_settings
 from .db import make_engine, run_migrations
 from .probes import Prober
+from .services.bufferbloat import BufferbloatStore, BufferbloatTester
 from .services.deco.service import DecoService
 from .services.diagnosis import Diagnoser
 from .services.discovery.inventory import DeviceStore
 from .services.discovery.service import DiscoveryService
 from .services.events import MONITOR, SECURITY, EventLog, IncidentRecorder, startup_events
+from .services.hub.service import HubService, HubStore
 from .services.metrics import Metrics
 from .services.netinfo import default_route
 from .services.netmap import NetMap
@@ -43,6 +56,7 @@ from .services.secrets import SecretBox
 from .services.seed import seed_defaults
 from .services.storage import Store
 from .services.throughput import ThroughputStore, ThroughputTester
+from .services.traffic import HOUR_WATERMARK_KEY, TrafficStore
 from .services.updates import UpdateManager
 
 log = logging.getLogger(__name__)
@@ -151,6 +165,7 @@ def create_app(
         throughput_store = ThroughputStore(engine)
         throughput = ThroughputTester(throughput_store)
         device_store = DeviceStore(engine)
+        traffic_store = TrafficStore(engine)
         discovery = DiscoveryService(
             settings, store, events, device_store, on_targets_changed=monitor.reload
         )
@@ -169,7 +184,19 @@ def create_app(
                 "device_ips": device_store.purge_ips(
                     now_ms - settings.device_retention_days * day_ms
                 ),
+                "traffic": rollup_and_purge_traffic(int(now)),
+                "hub_stats": hub_store.purge(now_ms - settings.rollup_retention_days * day_ms),
+                "bufferbloat_tests": bufferbloat_store.purge(
+                    now_ms - settings.throughput_retention_days * day_ms
+                ),
             }
+
+        def rollup_and_purge_traffic(now_s: int) -> int:
+            minute_floor = now_s - settings.traffic_retention_days * 86400
+            since = store.kv_get(HOUR_WATERMARK_KEY, None) or minute_floor
+            traffic_store.rollup_hours(now_s, since_s=max(int(since), minute_floor))
+            store.kv_set(HOUR_WATERMARK_KEY, now_s // 3600 * 3600)
+            return traffic_store.purge(minute_floor, now_s - settings.rollup_retention_days * 86400)
 
         monitor.purge_hooks.append(purge_extra)
 
@@ -203,8 +230,24 @@ def create_app(
             devices=device_store,
         )
         app.state.discovery = discovery
+        app.state.traffic = traffic_store
+        bufferbloat_store = BufferbloatStore(engine)
+
+        def quiet(until_ms: int) -> None:
+            recorder.quiet_until_ms = max(recorder.quiet_until_ms, until_ms)
+
+        app.state.bufferbloat = BufferbloatTester(bufferbloat_store, quiet=quiet)
+        app.state.bufferbloat_store = bufferbloat_store
+        hub_store = HubStore(engine)
+        app.state.hub_store = hub_store
+        app.state.hub = HubService(store, events, hub_store, SecretBox(settings.data_dir))
         app.state.deco = DecoService(
-            store, events, device_store, discovery.inventory, SecretBox(settings.data_dir)
+            store,
+            events,
+            device_store,
+            discovery.inventory,
+            SecretBox(settings.data_dir),
+            traffic=traffic_store,
         )
         app.state.netmap = NetMap(app.state)
         app.state.auth = AuthStore(engine)
@@ -224,6 +267,14 @@ def create_app(
         throughput.start_schedule()
         await discovery.start()
         app.state.deco.start()
+        app.state.hub.start()
+        app.state.bufferbloat.start_schedule(
+            enabled=lambda: settings.bufferbloat_nightly,
+            window=lambda: app.state.updates.policy().get("window", settings.auto_update_window),
+            tz=lambda: settings.tz,
+            kv_get=store.kv_get,
+            kv_set=store.kv_set,
+        )
         app.state.updates.start()
         log.info("netwatch started", extra={"version": __version__, "port": settings.port})
         try:
@@ -231,6 +282,8 @@ def create_app(
         finally:
             await app.state.updates.stop()
             await app.state.deco.stop()
+            await app.state.hub.stop()
+            await app.state.bufferbloat.stop()
             await discovery.stop()
             await throughput.stop()
             await path_tester.stop()
@@ -312,6 +365,7 @@ def create_app(
     app.include_router(diagnosis.router)
     app.include_router(admin.router)
     app.include_router(netmap.router)
+    app.include_router(traffic.router)
 
     @app.get("/metrics", include_in_schema=False)
     def metrics_endpoint(request: Request) -> Response:

@@ -15,7 +15,8 @@ import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, type Incident, type MapEdge, type MapHighlight, type MapNode, type MapPositions, type NetworkMapResponse } from '../lib/api';
-import { DEVICE_TYPE_LABEL, STATE_STYLE, fmtMs, fmtPct, fmtTime, lossColour } from '../lib/format';
+import { TopTalkers } from '../components/TopTalkers';
+import { DEVICE_TYPE_LABEL, STATE_STYLE, fmtBps, fmtDurationMs, fmtMs, fmtPct, fmtTime, lossColour } from '../lib/format';
 import { NODE_H, NODE_W, layoutMap } from '../lib/mapLayout';
 
 const btn = 'rounded-md px-3 py-1.5 text-sm font-medium disabled:opacity-50';
@@ -38,7 +39,12 @@ const ICON: Record<MapNode['kind'], string> = {
 type MapNodeData = { node: MapNode; mark: 'cause' | 'failing' | null };
 type FlowNode = Node<MapNodeData, 'net'>;
 
+function rates(t: { down_bps: number; up_bps: number }): string {
+  return `↓${fmtBps(t.down_bps)} ↑${fmtBps(t.up_bps)}`;
+}
+
 function subline(n: MapNode): string {
+  if (n.traffic) return rates(n.traffic);
   if (n.kind === 'group') return 'tap to list';
   const m = n.members.find((x) => x.median_ms != null);
   const parts = [n.info.ip, n.info.backhaul && n.kind === 'deco' ? n.info.backhaul : null, m ? fmtMs(m.median_ms) : null];
@@ -75,7 +81,7 @@ const nodeTypes = { net: NetNode };
 
 function edgeLabel(e: MapEdge): string | undefined {
   const stats = [e.median_ms != null ? fmtMs(e.median_ms) : null, e.loss_pct ? `${fmtPct(e.loss_pct)} loss` : null].filter(Boolean);
-  const text = [e.label, ...stats].filter(Boolean).join(' · ');
+  const text = [e.label, ...stats, e.traffic && rates(e.traffic)].filter(Boolean).join(' · ');
   return text || undefined;
 }
 
@@ -92,6 +98,7 @@ function toFlow(g: NetworkMapResponse, pos: MapPositions, hl: MapHighlight | und
   const edges: Edge[] = g.edges.map((e) => {
     const down = byId.get(e.target)?.state === 'down' || byId.get(e.source)?.state === 'down';
     const colour = down ? '#ef4444' : e.loss_pct != null ? lossColour(e.loss_pct) : '#475569';
+    const flow = e.traffic ? e.traffic.down_bps + e.traffic.up_bps : 0;
     return {
       id: e.id,
       source: e.source,
@@ -99,10 +106,11 @@ function toFlow(g: NetworkMapResponse, pos: MapPositions, hl: MapHighlight | und
       label: edgeLabel(e),
       labelStyle: { fill: '#cbd5e1', fontSize: 11 },
       labelBgStyle: { fill: '#0f172a' },
-      animated: e.medium === 'wireless' && !down,
+      // Busy links move and get thicker (log scale: 1 Mb/s → 2 px, 1 Gb/s → 6 px).
+      animated: !down && (e.medium === 'wireless' || flow > 1e5),
       style: {
         stroke: colour,
-        strokeWidth: e.medium === 'logical' ? 1 : 2,
+        strokeWidth: flow > 1e5 ? Math.min(6, 2 + Math.log10(flow / 1e6) * (4 / 3)) : e.medium === 'logical' ? 1 : 2,
         strokeDasharray: e.medium === 'wireless' ? '6 4' : e.medium === 'logical' ? '2 4' : undefined,
       },
       markerEnd: e.medium === 'logical' ? undefined : { type: MarkerType.ArrowClosed, color: colour, width: 14, height: 14 },
@@ -125,6 +133,9 @@ function Details({ n, onClose }: { n: MapNode; onClose: () => void }) {
     ['Type', i.type && (DEVICE_TYPE_LABEL[i.type] ?? i.type)],
     ['Vendor', i.vendor],
     ['Connection', i.connection],
+    ['Uptime', i.uptime_s != null && fmtDurationMs(i.uptime_s * 1000)],
+    ['Fibre signal', i.rx_dbm != null && `${i.rx_dbm} dBm received${i.tx_dbm != null ? `, ${i.tx_dbm} dBm sent` : ''}`],
+    ['Internet', i.wan_up != null && (i.wan_up ? `up${i.wan_ip ? ` · ${i.wan_ip}` : ''}` : 'down')],
   ];
   return (
     <aside className="space-y-3 rounded-lg bg-slate-900 p-4 text-sm ring-1 ring-slate-800" aria-label="Node details">
@@ -353,12 +364,13 @@ export function NetworkMap() {
             <Details n={node} onClose={() => setSelected(null)} />
           ) : (
             <div className="rounded-lg bg-slate-900 p-4 text-sm text-slate-400 ring-1 ring-slate-800">
+              {!replay && graph?.deco_api && <div className="mb-4"><TopTalkers limit={5} compact /></div>}
               <p>Tap a node for details. Drag nodes to tidy the map; positions are saved.</p>
               <ul className="mt-3 space-y-1 text-xs">
                 <li><span className="inline-block w-8 border-t-2 border-slate-500 align-middle" /> wired</li>
                 <li><span className="inline-block w-8 border-t-2 border-dashed border-slate-500 align-middle" /> Wi-Fi</li>
                 <li><span className="inline-block w-8 border-t border-dotted border-slate-500 align-middle" /> logical (not measured)</li>
-                <li>Line colour: packet loss (green → red); labels show median latency.</li>
+                <li>Line colour: packet loss (green → red); labels show median latency and live traffic; busy links are thicker.</li>
               </ul>
             </div>
           )}

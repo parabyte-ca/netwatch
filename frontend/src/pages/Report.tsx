@@ -152,6 +152,35 @@ export function Report() {
             </section>
           )}
 
+          {r.line && Object.keys(r.line).length > 0 && (
+            <section aria-label="Bell line" className="break-inside-avoid">
+              <h2 className="mb-1 text-base font-semibold text-white print:text-black">Bell line (from the Home Hub) and latency under load</h2>
+              <ul className="list-disc space-y-0.5 pl-5 text-sm">
+                {r.line.hub_restarts != null && (
+                  <>
+                    <li>Home Hub restarts: {r.line.hub_restarts}</li>
+                    <li>Link down periods reported by the Hub: {r.line.wan_down}</li>
+                    <li>Internet session reconnects: {r.line.ppp_reconnects}</li>
+                  </>
+                )}
+                {r.line.rx_dbm_min != null && (
+                  <li>Fibre receive level: {r.line.rx_dbm_avg} dBm average, {r.line.rx_dbm_min} dBm lowest</li>
+                )}
+                {r.line.bufferbloat && (
+                  <li>
+                    Latency under load: grade {r.line.bufferbloat.grade} (idle {fmtMs(r.line.bufferbloat.idle_ms)}, downloading{' '}
+                    {fmtMs(r.line.bufferbloat.down_ms)}, uploading {fmtMs(r.line.bufferbloat.up_ms)}; {r.line.bufferbloat.when})
+                  </li>
+                )}
+              </ul>
+              {r.line.events && r.line.events.length > 0 && (
+                <ul className="mt-1 space-y-0.5 pl-5 text-xs text-slate-400 print:text-black">
+                  {r.line.events.slice(0, 20).map((e) => <li key={e.when + e.title}>{e.when}: {e.title}</li>)}
+                </ul>
+              )}
+            </section>
+          )}
+
           {r.speeds.length > 0 && (
             <section aria-label="Speed tests" className="break-inside-avoid">
               <h2 className="mb-1 text-base font-semibold text-white print:text-black">Speed tests (iperf3)</h2>

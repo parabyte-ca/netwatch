@@ -90,6 +90,10 @@ class Settings(BaseSettings):
     arp_storm_pps: int = Field(default=100, ge=10, le=100000)
     dns_check_interval_min: int = Field(default=30, ge=0, le=1440)
     device_retention_days: int = Field(default=365, ge=7, le=3650)
+    # Per-device traffic at 1-minute detail (then hourly totals, kept like rollups).
+    traffic_retention_days: int = Field(default=7, ge=1, le=90)
+    # Nightly bufferbloat (latency under load) test, 20 min after the update window opens.
+    bufferbloat_nightly: bool = True
 
     @property
     def discovery_subnet_list(self) -> list[str]:
