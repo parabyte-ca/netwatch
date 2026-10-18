@@ -68,7 +68,8 @@ async def test_load_failure_is_recorded(store):
 
     t.loader = nothing
     r = await t.run()
-    assert r["status"] == "error" and "could not load" in r["error"] and r.get("grade") is None
+    assert r["status"] == "error" and "almost no data moved" in r["error"]
+    assert r.get("grade") is None
 
 
 async def test_recorder_ignores_failures_during_a_load_test(store):
@@ -116,3 +117,33 @@ async def _const(v):
 async def _fake_load(direction, seconds):
     await asyncio.sleep(seconds)
     return 10_000_000
+
+
+async def test_http_load_counts_bytes_and_reports_refusals():
+    import httpx
+
+    from netwatch.services.bufferbloat import DOWN_BYTES, UP_BYTES, HttpLoad, LoadError
+
+    seen: list[httpx.Request] = []
+
+    def ok(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        if req.method == "GET":
+            assert f"bytes={DOWN_BYTES}" in str(req.url)
+            return httpx.Response(200, content=b"x" * 3_000_000)
+        assert req.headers["content-length"] == str(UP_BYTES)
+        assert "transfer-encoding" not in req.headers
+        return httpx.Response(200)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(ok)) as c:
+        assert await HttpLoad(c)("download", 0.2) >= 3_000_000
+        assert await HttpLoad(c)("upload", 0.2) >= UP_BYTES
+
+    def refused(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, content=b"error code: 1020")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(refused)) as c:
+        with pytest.raises(LoadError, match="HTTP 403 to the download"):
+            await HttpLoad(c)("download", 0.2)
+        with pytest.raises(LoadError, match="HTTP 403 to the upload"):
+            await HttpLoad(c)("upload", 0.2)

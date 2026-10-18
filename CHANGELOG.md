@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.2] - 2026-10-18
+### Fixed
+- Bufferbloat test failing with "could not load the line": it asked Cloudflare's speed-test
+  server for 250 MB per request and streamed uploads without a length, and ignored the answer.
+  Requests are now 25 MB downloads and 4 MB uploads with a length, the server's HTTP status is
+  checked, and a refusal is reported as such ("speed.cloudflare.com answered HTTP 403…").
+  Upload bytes are only counted once the server has accepted them.
+- Ask NetWatch could leave a blank screen on phones: the chat scrolled the whole page instead of
+  just the conversation. A page that fails to draw now shows the error and a Reload button
+  instead of a blank screen, and a problem in the chat panel no longer takes the page down.
+
 ## [0.9.1] - 2026-10-18
 ### Fixed
 - Requests that reach NetWatch without a `Content-Length` header (chunked, as some reverse
