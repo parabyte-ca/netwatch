@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { AskPanel } from './AskPanel';
+import { ErrorBoundary } from './ErrorBoundary';
 import { useAuth } from './AuthGate';
 
 const NAV = [
@@ -111,8 +112,12 @@ export function Layout() {
         )}
       </header>
       <main className="mx-auto max-w-7xl px-4 py-6">
-        <Outlet />
-        <AskPanel />
+        <ErrorBoundary key={location.pathname}>
+          <Outlet />
+        </ErrorBoundary>
+        <ErrorBoundary label="Ask NetWatch" compact>
+          <AskPanel />
+        </ErrorBoundary>
       </main>
     </div>
   );

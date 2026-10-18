@@ -37,6 +37,9 @@ UP_URL = "https://speed.cloudflare.com/__up"
 IDLE_S, LOAD_S, PING_EVERY_S = 5.0, 10.0, 0.1
 STREAMS = 6
 CHUNK = 1 << 20
+DOWN_BYTES = 25_000_000  # per request (the speed-test endpoints refuse very large sizes)
+UP_BYTES = 4 * CHUNK  # per request, sent with a Content-Length (not chunked)
+HEADERS = {"User-Agent": "NetWatch (+https://github.com/parabyte-ca/netwatch)"}
 MIN_LOAD_BYTES = 2_000_000  # below this the line was not loaded: no grade
 LAST_RUN_KEY = "bufferbloat_last_scheduled"
 
@@ -64,6 +67,10 @@ async def icmp_ping(host: str) -> float | None:
     return r.rtts[0] if r.is_alive and r.rtts else None
 
 
+class LoadError(RuntimeError):
+    """The speed-test server refused the load (the message says how)."""
+
+
 class HttpLoad:
     """Saturate the line with parallel HTTPS streams for a fixed time."""
 
@@ -72,13 +79,19 @@ class HttpLoad:
 
     async def __call__(self, direction: str, seconds: float) -> int:
         own = self.client is None
-        client = self.client or httpx.AsyncClient(timeout=httpx.Timeout(15.0, read=15.0))
+        client = self.client or httpx.AsyncClient(
+            timeout=httpx.Timeout(15.0, read=15.0), headers=HEADERS
+        )
         moved = [0]
         deadline = time.monotonic() + seconds
 
         async def down() -> None:
             while time.monotonic() < deadline:
-                async with client.stream("GET", DOWN_URL.format(n=250_000_000)) as r:
+                async with client.stream("GET", DOWN_URL.format(n=DOWN_BYTES)) as r:
+                    if r.status_code != 200:
+                        raise LoadError(
+                            f"speed.cloudflare.com answered HTTP {r.status_code} to the download"
+                        )
                     async for chunk in r.aiter_bytes(CHUNK):
                         moved[0] += len(chunk)
                         if time.monotonic() >= deadline:
@@ -88,12 +101,18 @@ class HttpLoad:
             block = os.urandom(CHUNK)
 
             async def body():
-                while time.monotonic() < deadline:
-                    moved[0] += len(block)
+                for _ in range(UP_BYTES // CHUNK):
                     yield block
 
             while time.monotonic() < deadline:
-                await client.post(UP_URL, content=body())
+                r = await client.post(
+                    UP_URL, content=body(), headers={"Content-Length": str(UP_BYTES)}
+                )
+                if r.status_code >= 400:
+                    raise LoadError(
+                        f"speed.cloudflare.com answered HTTP {r.status_code} to the upload"
+                    )
+                moved[0] += UP_BYTES  # counted once the server has taken it
 
         worker = down if direction == "download" else up
         tasks = [asyncio.create_task(worker()) for _ in range(STREAMS)]
@@ -190,7 +209,10 @@ class BufferbloatTester:
         moved = await load
         if moved < MIN_LOAD_BYTES:
             # Grading unloaded latency would hand out a false A+.
-            raise RuntimeError(f"could not load the line for the {direction} test")
+            raise RuntimeError(
+                f"almost no data moved during the {direction} test "
+                f"({moved // 1000} kB); is speed.cloudflare.com reachable from TrueNAS?"
+            )
         return samples, moved * 8 / max(time.monotonic() - started, 0.001)
 
     async def run(self, trigger: str = "manual") -> dict:
@@ -213,7 +235,12 @@ class BufferbloatTester:
                         "ts_ms": ts,
                         "trigger": trigger,
                         "status": "error",
-                        "error": f"{type(exc).__name__}: {exc}"[:200],
+                        # Our own errors read as sentences; others keep their type for clues.
+                        "error": (
+                            str(exc)
+                            if isinstance(exc, RuntimeError)
+                            else f"{type(exc).__name__}: {exc}"
+                        )[:200],
                         "details": {},
                     },
                 )

@@ -33,12 +33,16 @@ export function AskPanel() {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const end = useRef<HTMLDivElement>(null);
+  const log = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     api.askStatus().then((s) => setAvailable(s.available), () => setAvailable(false));
   }, [open]);
-  useEffect(() => end.current?.scrollIntoView?.({ block: 'end' }), [msgs, busy]);
+  // Scroll only the conversation, never the page (scrollIntoView also moves the page on phones).
+  useEffect(() => {
+    const el = log.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [msgs, busy, error]);
 
   async function send(q: string) {
     const question = q.trim();
@@ -50,7 +54,8 @@ export function AskPanel() {
     setError(null);
     try {
       const r = await api.ask(history.map(({ role, content }) => ({ role, content })));
-      setMsgs([...history, { role: 'assistant', content: r.answer || '(no answer)', tools: r.tools }]);
+      const answer = typeof r?.answer === 'string' && r.answer ? r.answer : '(no answer)';
+      setMsgs([...history, { role: 'assistant', content: answer, tools: Array.isArray(r?.tools) ? r.tools : [] }]);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setMsgs(msgs); // drop the unanswered question so it can be asked again
@@ -73,7 +78,7 @@ export function AskPanel() {
         </button>
       )}
       {open && (
-        <aside aria-label="Ask NetWatch" className="fixed inset-x-0 bottom-0 z-50 flex max-h-[85vh] flex-col rounded-t-xl bg-slate-900 shadow-2xl ring-1 ring-slate-700 sm:inset-x-auto sm:bottom-4 sm:right-4 sm:h-[36rem] sm:w-[26rem] sm:rounded-xl">
+        <aside aria-label="Ask NetWatch" className="fixed inset-x-0 bottom-0 z-50 flex max-h-[85dvh] flex-col rounded-t-xl bg-slate-900 shadow-2xl ring-1 ring-slate-700 sm:inset-x-auto sm:bottom-4 sm:right-4 sm:h-[36rem] sm:w-[26rem] sm:rounded-xl">
           <div className="flex items-center justify-between border-b border-slate-800 px-4 py-2">
             <h2 className="text-sm font-semibold text-white">Ask NetWatch</h2>
             <div className="flex gap-2">
@@ -81,7 +86,7 @@ export function AskPanel() {
               <button onClick={() => setOpen(false)} aria-label="Close" className="px-1 text-slate-400 hover:text-white">✕</button>
             </div>
           </div>
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 text-sm" aria-live="polite">
+          <div ref={log} className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-4 text-sm" aria-live="polite">
             {msgs.length === 0 && (
               <div className="space-y-2">
                 <p className="text-slate-400">Ask about outages, slowness, devices or security. Answers come from NetWatch's own data.</p>
@@ -102,7 +107,6 @@ export function AskPanel() {
             ))}
             {busy && <p className="text-slate-500">Looking into it…</p>}
             {error && <p role="alert" className="text-rose-400">{error}</p>}
-            <div ref={end} />
           </div>
           <form onSubmit={submit} className="flex gap-2 border-t border-slate-800 p-3">
             <input aria-label="Question" className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-sky-500 focus:outline-none"
