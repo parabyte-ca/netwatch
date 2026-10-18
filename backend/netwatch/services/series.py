@@ -57,12 +57,9 @@ def build_series(
     else:
         step = max(60, math.ceil(span / points / 60) * 60)
         start = start // 60 * 60
-        rows = store.rollups(target["id"], start, end)
-        grouped: dict[int, list[dict]] = defaultdict(list)
-        for r in rows:
-            grouped[(r["bucket_ts"] - start) // step * step + start].append(r)
-        buckets = _fill_gaps({ts: merge(v) for ts, v in grouped.items()}, start, end, step)
-        summary = merge(rows)
+        grouped = store.rollup_buckets(target["id"], start, end, step)  # merged in SQL
+        buckets = _fill_gaps(grouped, start, end, step)
+        summary = merge(grouped.values())
         source = "rollup"
 
     summary["loss_pct"] = loss_pct(summary)

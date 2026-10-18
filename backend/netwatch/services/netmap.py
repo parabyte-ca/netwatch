@@ -51,9 +51,8 @@ class NetMap:
 
     # ── target state, live or replayed ───────────────────────────────────────
 
-    def _target_view(self, at_ms: int | None, now: int) -> dict[int, dict]:
+    def _target_view(self, targets: list[dict], at_ms: int | None, now: int) -> dict[int, dict]:
         out: dict[int, dict] = {}
-        targets = self.st.store.list_targets(enabled_only=True)
         if at_ms is None:
             for t in targets:
                 s = self.st.monitor.target_status(t["id"], now)
@@ -88,7 +87,8 @@ class NetMap:
         st = self.st
         route = st.discovery.gateway_ip()
         targets = st.store.list_targets(enabled_only=True)
-        tview = self._target_view(at_ms, now)
+        target_by_id = {t["id"]: t for t in targets}
+        tview = self._target_view(targets, at_ms, now)
         by_layer: dict[str, list[dict]] = defaultdict(list)
         for t in targets:
             by_layer[target_layer(t, route)].append(t)
@@ -209,7 +209,7 @@ class NetMap:
         main_id = None
         for mac, d in sorted(deco_state.items(), key=lambda kv: kv[1]["role"] != "main"):
             dev = device_by_mac.get(mac)
-            t = (dev and dev.get("target_id") and st.store.get_target(dev["target_id"])) or None
+            t = (dev and dev.get("target_id") and target_by_id.get(dev["target_id"])) or None
             if at_ms is not None:
                 state = deco_events.get(mac) or (tview.get(t["id"], {}).get("state") if t else "up")
             else:
@@ -278,7 +278,7 @@ class NetMap:
                 if d["online"]:
                     groups[parent].append(d)
                 continue
-            t = st.store.get_target(d["target_id"]) if d.get("target_id") else None
+            t = target_by_id.get(d["target_id"]) if d.get("target_id") else None
             v = tview.get(t["id"], {}) if t else {}
             state = v.get("state", "unknown") if t else "up" if d["online"] else "unknown"
             nid = f"dev:{d['id']}"

@@ -64,8 +64,10 @@ def build_report(
         )
 
     isp_incidents = [i for i in incidents if i.causes and i.causes[0].layer in ISP_LAYERS]
-    isp_down_ms = sum(
-        i.duration_ms(now) for i in isp_incidents if any(e["kind"] == "outage" for e in i.events)
+    isp_down_ms = sum(  # only the part inside the reporting period
+        max(0, min(i.end_ms or now, end_ms) - max(i.start_ms, start_ms))
+        for i in isp_incidents
+        if any(e["kind"] == "outage" for e in i.events)
     )
     span = max(end_ms - start_ms, 1)
     tests = [

@@ -45,10 +45,12 @@ class LiveState:
             return {"state": "unknown", "last": None, "window_s": None, "stats": None}
         window_s = max(60.0, 10 * h.interval_s)
         cutoff = now_ms - window_s * 1000
-        recent = [r for r in h.items if r.ts_ms >= cutoff]
-        last = h.items[-1]
+        # Copy first (atomic): API threads read while the event loop appends results.
+        items = list(h.items)
+        recent = [r for r in items if r.ts_ms >= cutoff]
+        last = items[-1]
         fails = 0
-        for r in reversed(h.items):
+        for r in reversed(items):
             if r.ok:
                 break
             fails += 1

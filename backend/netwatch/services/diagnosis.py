@@ -8,10 +8,12 @@ Nothing is stored: incidents are rebuilt from the event timeline on every reques
 
 from __future__ import annotations
 
+import bisect
 import ipaddress
 import itertools
 import statistics
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -20,10 +22,12 @@ from zoneinfo import ZoneInfo
 from .events import ANOMALY, LOSS, NIC_ERRORS, NIC_LINK, NIC_SPEED, OUTAGE, WIFI, EventLog
 from .netinfo import DefaultRoute
 from .pathtest import PathStore
-from .stats import aggregate, loss_pct, merge
+from .stats import aggregate, merge
 from .storage import WATERMARK_KEY, Store
 
 MERGE_GAP_MS = 60_000  # failures this close together are one incident
+DONE_CACHE = 2000  # finished incidents kept diagnosed in memory
+_NO_WIFI = {"macs": [], "deco_mac": None, "deco_name": None}
 CONTEXT_PAD_MS = 5 * 60_000  # NIC events and path tests considered around an incident
 ANOMALY_PAD_MS = 3600_000
 HEALTHY_MAX_LOSS = 20.0  # % loss during the incident below which a target counts as working
@@ -163,6 +167,9 @@ class Diagnoser:
         self.raw_retention_days = raw_retention_days
         self.tz = ZoneInfo(tz)
         self.devices = devices  # DeviceStore: which Deco a monitored device was on
+        # Incidents that ended long enough ago that nothing around them can change any more
+        # are diagnosed once: a poll then only works on open and recent incidents.
+        self._done: OrderedDict[tuple, Incident] = OrderedDict()
 
     # ── incidents ────────────────────────────────────────────────────────────
 
@@ -187,19 +194,47 @@ class Diagnoser:
         targets = {t["id"]: t for t in self.store.list_targets()}
         route = self.gateway()
         gw = route.gateway if route else None
-        ctx_events = self.events.list(
-            groups[0].start_ms - ANOMALY_PAD_MS,
-            max((g.end_ms or now) for g in groups) + ANOMALY_PAD_MS,
-            kinds=[NIC_LINK, NIC_SPEED, NIC_ERRORS, ANOMALY, WIFI],
-            limit=5000,
+        sig = (
+            gw,
+            tuple((t["id"], t["host"], t["group"], t["kind"], t["name"]) for t in targets.values()),
         )
+        out: list[Incident] = []
+        todo: list[Incident] = []
         for inc in groups:
-            self._context(inc, targets, gw, ctx_events, now)
-            inc.causes = diagnose(inc, now)
-        return groups
+            key = (inc.start_ms, inc.end_ms, tuple(e["id"] for e in inc.events), sig)
+            done = self._done.get(key)
+            if done is not None:
+                self._done.move_to_end(key)
+                out.append(done)
+            else:
+                out.append(inc)
+                todo.append(inc)
+        if todo:
+            ctx_events = self.events.list(
+                todo[0].start_ms - ANOMALY_PAD_MS,
+                max((g.end_ms or now) for g in todo) + ANOMALY_PAD_MS,
+                kinds=[NIC_LINK, NIC_SPEED, NIC_ERRORS, ANOMALY, WIFI],
+                limit=50_000,
+            )
+            wifi = self._wifi_map()
+            for inc in todo:
+                self._context(inc, targets, gw, ctx_events, wifi, now)
+                inc.causes = diagnose(inc, now)
+                if inc.end_ms is not None and inc.end_ms + ANOMALY_PAD_MS + 60_000 < now:
+                    key = (inc.start_ms, inc.end_ms, tuple(e["id"] for e in inc.events), sig)
+                    self._done[key] = inc
+            while len(self._done) > DONE_CACHE:
+                self._done.popitem(last=False)
+        return out
 
     def _context(
-        self, inc: Incident, targets: dict, gw: str | None, ctx_events: list, now: int
+        self,
+        inc: Incident,
+        targets: dict,
+        gw: str | None,
+        ctx_events: list,
+        wifi: dict[int, dict],
+        now: int,
     ) -> None:
         start, end = inc.start_ms, inc.end_ms or now
         for ev in inc.events:
@@ -213,19 +248,19 @@ class Diagnoser:
             if ev["kind"] not in entry["kinds"]:
                 entry["kinds"].append(ev["kind"])
             if "macs" not in entry:
-                entry.update(self._wifi_info(t["id"]))
+                entry.update(wifi.get(t["id"], _NO_WIFI))
         for t in targets.values():
             if t["id"] in inc.failing:
                 continue
-            st = self.window_stats(t["id"], start, end, now)
-            lp = loss_pct(st)
-            if st["count"] and lp is not None and lp <= HEALTHY_MAX_LOSS:
+            n, lost = self.window_loss(t["id"], start, end, now)
+            lp = round(100 * lost / n, 2) if n else None
+            if lp is not None and lp <= HEALTHY_MAX_LOSS:
                 inc.healthy[t["id"]] = {
                     "name": t["name"],
                     "host": t["host"],
                     "layer": target_layer(t, gw),
                     "loss_pct": lp,
-                    "deco_mac": self._wifi_info(t["id"])["deco_mac"],
+                    "deco_mac": wifi.get(t["id"], _NO_WIFI)["deco_mac"],
                 }
         for e in ctx_events:
             if e["kind"] == ANOMALY:
@@ -235,25 +270,51 @@ class Diagnoser:
                 (inc.wifi_events if e["kind"] == WIFI else inc.nic_events).append(e)
         tests = self.paths.list(start_ms=start - 60_000, end_ms=end + CONTEXT_PAD_MS, limit=20)
         linked = {t["id"] for t in tests}
-        for ev in inc.events:
-            for t in self.paths.list(event_id=ev["id"], limit=5):
-                if t["id"] not in linked:
-                    tests.append(t)
-                    linked.add(t["id"])
+        ev_ids = [ev["id"] for ev in inc.events]
+        for t in self.paths.list(event_ids=ev_ids, limit=5 * len(ev_ids)):
+            if t["id"] not in linked:
+                tests.append(t)
+                linked.add(t["id"])
         inc.path_tests = [t for t in tests if t["status"] == "ok"]
 
-    def _wifi_info(self, target_id: int) -> dict:
-        """MACs of the device behind a target, and the Deco it was last seen on."""
-        dev = self.devices.by_target(target_id) if self.devices else None
-        if dev is None:
-            return {"macs": [], "deco_mac": None, "deco_name": None}
-        rows = [dev, *self.devices.members(dev["id"])]
-        on = next((r["details"] for r in rows if (r.get("details") or {}).get("deco_mac")), {})
-        return {
-            "macs": [r["mac"] for r in rows],
-            "deco_mac": on.get("deco_mac"),
-            "deco_name": on.get("deco_name"),
-        }
+    def _wifi_map(self) -> dict[int, dict]:
+        """target id → MACs of the device behind it and the Deco it was last seen on (one
+        pass over the devices for the whole call)."""
+        if not self.devices:
+            return {}
+        rows = self.devices.all()
+        members: dict[int, list[dict]] = {}
+        for r in rows:
+            if r.get("merged_into"):
+                members.setdefault(r["merged_into"], []).append(r)
+        out = {}
+        for dev in rows:
+            if not dev.get("target_id"):
+                continue
+            group = [dev, *members.get(dev["id"], [])]
+            on = next((r["details"] for r in group if (r.get("details") or {}).get("deco_mac")), {})
+            out[dev["target_id"]] = {
+                "macs": [r["mac"] for r in group],
+                "deco_mac": on.get("deco_mac"),
+                "deco_name": on.get("deco_name"),
+            }
+        return out
+
+    def window_loss(
+        self, target_id: int, start_ms: int, end_ms: int, now_ms: int
+    ) -> tuple[int, int]:
+        """(probes, lost) over a window, split between rollups and raw samples like
+        ``window_stats`` but counted in SQL (the diagnosis only needs the loss)."""
+        raw_cutoff = now_ms - self.raw_retention_days * 86_400_000
+        if start_ms >= raw_cutoff:
+            return self.store.loss_counts(target_id, start_ms, end_ms + 1)
+        watermark_ms = int(self.store.kv_get(WATERMARK_KEY, 0) or 0) * 1000
+        split = max(min(watermark_ms, end_ms + 1), start_ms)
+        n, lost = self.store.rollup_loss_counts(target_id, start_ms // 60_000 * 60, split // 1000)
+        if split <= end_ms:
+            rn, rlost = self.store.loss_counts(target_id, split, end_ms + 1)
+            n, lost = n + rn, lost + rlost
+        return n, lost
 
     def window_stats(self, target_id: int, start_ms: int, end_ms: int, now_ms: int) -> dict:
         """Probe statistics over a window: raw samples where they are kept, 1-minute rollups
@@ -263,7 +324,7 @@ class Diagnoser:
             return self._raw_stats(target_id, start_ms, end_ms + 1)
         watermark_ms = int(self.store.kv_get(WATERMARK_KEY, 0) or 0) * 1000
         split = max(min(watermark_ms, end_ms + 1), start_ms)
-        parts = self.store.rollups(target_id, start_ms // 60_000 * 60, split // 1000)
+        parts = [self.store.rollup_merged(target_id, start_ms // 60_000 * 60, split // 1000)]
         if split <= end_ms:
             parts.append(self._raw_stats(target_id, split, end_ms + 1))
         return merge(parts)
@@ -762,12 +823,13 @@ def find_patterns(starts_ms: list[int], tz: ZoneInfo) -> list[dict]:
     starts = sorted(starts_ms)
     if len(starts) >= 4:
         gaps = [b - a for a, b in itertools.pairwise(starts)]
+        ordered = sorted(gaps)
         best: list[int] = []
-        for g in gaps:
+        for g in gaps:  # O(n log n): the gaps close to g are a slice of the sorted gaps
             tol = max(60_000, 0.05 * g)
-            close = [x for x in gaps if abs(x - g) <= tol]
-            if len(close) > len(best):
-                best = close
+            lo, hi = bisect.bisect_left(ordered, g - tol), bisect.bisect_right(ordered, g + tol)
+            if hi - lo > len(best):
+                best = ordered[lo:hi]
         if len(best) >= 3 and len(best) >= 0.6 * len(gaps):
             period = statistics.median(best)
             out.append(

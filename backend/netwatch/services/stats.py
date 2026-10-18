@@ -13,7 +13,7 @@ from collections.abc import Iterable, Sequence
 
 FIELDS = ("count", "lost", "min", "p5", "p25", "median", "p75", "p95", "max", "avg", "jitter")
 _PCTS = (("p5", 5), ("p25", 25), ("median", 50), ("p75", 75), ("p95", 95))
-_WEIGHTED = ("p5", "p25", "median", "p75", "p95", "avg", "jitter")
+WEIGHTED = ("p5", "p25", "median", "p75", "p95", "avg", "jitter")
 
 
 def percentile(sorted_values: Sequence[float], pct: float) -> float:
@@ -64,7 +64,7 @@ def merge(buckets: Iterable[dict]) -> dict:
     weights = [b["count"] - b["lost"] for b in ok_items]
     out["min"] = min(b["min"] for b in ok_items)
     out["max"] = max(b["max"] for b in ok_items)
-    for key in _WEIGHTED:
+    for key in WEIGHTED:
         vals = [(b[key], w) for b, w in zip(ok_items, weights, strict=True) if b[key] is not None]
         wsum = sum(w for _, w in vals)
         out[key] = round(sum(v * w for v, w in vals) / wsum, 3) if wsum else None

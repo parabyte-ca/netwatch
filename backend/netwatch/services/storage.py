@@ -10,17 +10,18 @@ from collections import defaultdict
 from collections.abc import Iterable
 from pathlib import Path
 
-from sqlalchemy import Engine, delete, func, insert, select, text, update
+from sqlalchemy import Engine, Integer, case, cast, delete, func, insert, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from ..db import kv, rollup_1m, samples, targets
 from ..probes.base import ProbeResult
-from .stats import aggregate
+from .stats import FIELDS, WEIGHTED, aggregate
 
 log = logging.getLogger(__name__)
 
 WATERMARK_KEY = "rollup_watermark"
 _ROLLUP_CHUNK_S = 6 * 3600
+LATE_SAMPLE_S = 180  # longest probe timeout (60 s) plus flush retries, rounded up
 
 
 class Store:
@@ -118,6 +119,82 @@ class Store:
         with self.engine.connect() as conn:
             return [tuple(r) for r in conn.execute(stmt)]
 
+    def loss_counts(self, target_id: int, start_ms: int, end_ms: int) -> tuple[int, int]:
+        """(probes, lost) in [start_ms, end_ms) from raw samples, counted in SQL."""
+        stmt = select(
+            func.count(), func.coalesce(func.sum(case((samples.c.ok, 0), else_=1)), 0)
+        ).where(
+            samples.c.target_id == target_id,
+            samples.c.ts_ms >= start_ms,
+            samples.c.ts_ms < end_ms,
+        )
+        with self.engine.connect() as conn:
+            n, lost = conn.execute(stmt).one()
+        return int(n), int(lost)
+
+    def rollup_loss_counts(self, target_id: int, start_s: int, end_s: int) -> tuple[int, int]:
+        stmt = select(
+            func.coalesce(func.sum(rollup_1m.c.count), 0),
+            func.coalesce(func.sum(rollup_1m.c.lost), 0),
+        ).where(
+            rollup_1m.c.target_id == target_id,
+            rollup_1m.c.bucket_ts >= start_s,
+            rollup_1m.c.bucket_ts < end_s,
+        )
+        with self.engine.connect() as conn:
+            n, lost = conn.execute(stmt).one()
+        return int(n), int(lost)
+
+    @staticmethod
+    def _merged_columns() -> list:
+        """SQL equivalents of ``stats.merge`` over rollup rows (see its docstring)."""
+        r = rollup_1m.c
+        ok = r.count - r.lost
+        good = (ok > 0) & r.min.is_not(None)
+
+        def weighted(col):
+            num = func.sum(case((good & col.is_not(None), col * ok)))
+            den = func.sum(case((good & col.is_not(None), ok)))
+            return func.round(num * 1.0 / func.nullif(den, 0), 3)
+
+        return [
+            func.coalesce(func.sum(r.count), 0),
+            func.coalesce(func.sum(r.lost), 0),
+            func.min(case((good, r.min))),
+            func.max(case((good, r.max))),
+            *(weighted(getattr(r, k)) for k in WEIGHTED),
+        ]
+
+    @staticmethod
+    def _merged_row(row) -> dict:
+        out = {"count": int(row[0]), "lost": int(row[1]), "min": row[2], "max": row[3]}
+        out.update(zip(WEIGHTED, row[4:], strict=True))
+        if out["min"] is None:
+            out.update({k: None for k in FIELDS[2:]})
+        return out
+
+    def rollup_merged(self, target_id: int, start_s: int, end_s: int) -> dict:
+        """``stats.merge`` of the rollups in [start_s, end_s), computed in SQL (a 90-day range
+        is ~130k rows: far too many to turn into Python dicts on every request)."""
+        r = rollup_1m.c
+        stmt = select(*self._merged_columns()).where(
+            r.target_id == target_id, r.bucket_ts >= start_s, r.bucket_ts < end_s
+        )
+        with self.engine.connect() as conn:
+            return self._merged_row(conn.execute(stmt).one())
+
+    def rollup_buckets(self, target_id: int, start_s: int, end_s: int, step_s: int) -> dict:
+        """Rollups merged into ``step_s`` buckets aligned on start_s: {bucket start: stats}."""
+        r = rollup_1m.c
+        bucket = (cast((r.bucket_ts - start_s) / step_s, Integer) * step_s + start_s).label("b")
+        stmt = (
+            select(bucket, *self._merged_columns())
+            .where(r.target_id == target_id, r.bucket_ts >= start_s, r.bucket_ts < end_s)
+            .group_by(bucket)
+        )
+        with self.engine.connect() as conn:
+            return {int(row[0]): self._merged_row(row[1:]) for row in conn.execute(stmt)}
+
     def rollups(self, target_id: int, start_s: int, end_s: int) -> list[dict]:
         stmt = (
             select(rollup_1m)
@@ -138,7 +215,11 @@ class Store:
         # A minute is complete once the writer has flushed it; leave a 15 s grace period.
         end = int((now - 15) // 60 * 60)
         floor = int(now - raw_retention_days * 86400) // 60 * 60
-        start = max(self.kv_get(WATERMARK_KEY, floor), floor)
+        watermark = self.kv_get(WATERMARK_KEY, floor)
+        # Samples are stamped with the probe's start time but written when it finishes (a
+        # timeout can take up to a minute, a failed flush is retried), so re-roll the last few
+        # minutes every time: late samples (often the lost ones) still reach the rollups.
+        start = max(min(watermark, end - LATE_SAMPLE_S), floor)
         written = 0
         while start < end:
             chunk_end = min(start + _ROLLUP_CHUNK_S, end)
@@ -147,16 +228,21 @@ class Store:
             start = chunk_end
         return written
 
+    def _target_ids(self, conn) -> list[int]:
+        return [r[0] for r in conn.execute(select(targets.c.id))]
+
     def _rollup_range(self, start_s: int, end_s: int) -> int:
-        stmt = (
-            select(samples.c.target_id, samples.c.ts_ms, samples.c.rtt_ms, samples.c.ok)
-            .where(samples.c.ts_ms >= start_s * 1000, samples.c.ts_ms < end_s * 1000)
-            .order_by(samples.c.target_id, samples.c.ts_ms)
-        )
         groups: dict[tuple[int, int], list[float | None]] = defaultdict(list)
         with self.engine.connect() as conn:
-            for tid, ts_ms, rtt, ok in conn.execute(stmt):
-                groups[(tid, ts_ms // 60000 * 60)].append(rtt if ok else None)
+            # One primary-key range scan per target (no timestamp-only index needed).
+            for tid in self._target_ids(conn):
+                stmt = select(samples.c.ts_ms, samples.c.rtt_ms, samples.c.ok).where(
+                    samples.c.target_id == tid,
+                    samples.c.ts_ms >= start_s * 1000,
+                    samples.c.ts_ms < end_s * 1000,
+                )
+                for ts_ms, rtt, ok in conn.execute(stmt):
+                    groups[(tid, ts_ms // 60000 * 60)].append(rtt if ok else None)
         if not groups:
             return 0
         rows = [
@@ -174,11 +260,17 @@ class Store:
     def purge(self, now: float, raw_retention_days: int, rollup_retention_days: int) -> dict:
         raw_cut = int((now - raw_retention_days * 86400) * 1000)
         rollup_cut = int(now - rollup_retention_days * 86400)
+        raw = rolled = 0
         with self.engine.begin() as conn:
-            raw = conn.execute(delete(samples).where(samples.c.ts_ms < raw_cut)).rowcount
-            rolled = conn.execute(
-                delete(rollup_1m).where(rollup_1m.c.bucket_ts < rollup_cut)
-            ).rowcount
+            for tid in self._target_ids(conn):  # primary-key ranges, see _rollup_range
+                raw += conn.execute(
+                    delete(samples).where(samples.c.target_id == tid, samples.c.ts_ms < raw_cut)
+                ).rowcount
+                rolled += conn.execute(
+                    delete(rollup_1m).where(
+                        rollup_1m.c.target_id == tid, rollup_1m.c.bucket_ts < rollup_cut
+                    )
+                ).rowcount
         with self.engine.connect() as conn:
             conn.execute(text("PRAGMA incremental_vacuum"))
             conn.commit()

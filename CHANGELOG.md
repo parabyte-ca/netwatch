@@ -4,6 +4,38 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.2] - 2026-10-18
+### Changed
+- Diagnosis page: incidents that ended over an hour ago are diagnosed once and remembered;
+  loss during an incident is counted in SQL; device lookups and path tests are fetched once per
+  request. A 7-day view on a busy database went from ~6.6 s to ~0.8 s (first load) and ~10 ms
+  per refresh after that.
+- Incident report and long graphs merge the 1-minute rollups in SQL: a 30-day report ~12 s →
+  ~1.7 s, a 90-day graph ~1.5 s → ~0.25 s.
+- Database: dropped two timestamp-only indexes (about a third of the samples table's size, and a
+  second write per probe); purge and rollups walk each target instead. Added indexes for path
+  tests by event/target, devices by target/group, and open events (migration runs on start, ~1 s).
+- Raw CSV/JSON export streams an hour at a time instead of loading the whole range.
+- Graphs update in place instead of being rebuilt on every refresh; polling skips a tick while
+  the previous request is still running, and a slow answer for an old time range no longer
+  replaces a newer one.
+
+### Fixed
+- Samples written late (timeouts, retried flushes) now reach the 1-minute rollups, so long-range
+  loss is no longer under-counted.
+- The map's incident replay includes failures merged into the incident later.
+- The Bell report's availability only counts downtime inside the report period.
+- Live status could fail intermittently while new probe results arrived.
+
+### Security
+- Discovery is protected against floods of made-up hardware addresses: at most 30 new devices are
+  recorded per minute (one "MAC flood" alert instead), in-memory state is bounded and pruned,
+  alerts are capped per type, and the gateway-MAC alert is per gateway.
+- A monitored device's ping target only follows it to addresses on the local network.
+- One malformed packet or Deco record no longer discards the rest of the batch.
+- The DHCP probe reuses one made-up client address instead of a new one every scan; reverse DNS
+  lookups run in parallel with a short timeout; full-size frames are captured (large mDNS answers).
+
 ## [0.7.1] - 2026-10-18
 ### Security
 - Upgrade agent and `update.sh` no longer trust anything the container can write: the
