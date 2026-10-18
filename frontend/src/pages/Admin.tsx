@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { EventRow } from '../components/EventRow';
-import { api, type DecoStatus, type DecoTestResult, type HubStatus, type SettingField, type SettingsResponse } from '../lib/api';
+import { api, type AssistantStatus, type DecoStatus, type DecoTestResult, type HubStatus, type SettingField, type SettingsResponse } from '../lib/api';
 import { fmtAgo, fmtBytes, fmtDurationMs, fmtTime } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
 
@@ -278,6 +278,104 @@ function BackupsCard({ onRestart }: { onRestart: () => void }) {
         </table>
       </div>
       {data && data.backups.length === 0 && <p className="text-sm text-slate-500">No backups yet.</p>}
+    </Card>
+  );
+}
+
+const MODEL_LABEL: Record<string, string> = {
+  'claude-opus-5-5': 'Claude Opus 5.5 (best answers)',
+  'claude-sonnet-5-5': 'Claude Sonnet 5.5 (cheaper)',
+  'claude-haiku-5-5': 'Claude Haiku 5.5 (cheapest)',
+};
+
+function AssistantCard() {
+  const [st, setSt] = useState<AssistantStatus | null>(null);
+  const [key, setKey] = useState('');
+  const [enabled, setEnabled] = useState(true);
+  const [model, setModel] = useState('claude-opus-5-5');
+  const [effort, setEffort] = useState('medium');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [test, setTest] = useState<string | null>(null);
+  const apply = (d: AssistantStatus) => {
+    setSt(d);
+    setEnabled(d.enabled);
+    setModel(d.model);
+    setEffort(d.effort);
+  };
+  useEffect(() => {
+    api.assistant().then(apply, (e) => setError(err(e)));
+  }, []);
+  async function run(fn: () => Promise<void>) {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setError(err(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const save = (extra: { forget_key?: boolean } = {}) =>
+    run(async () => {
+      apply(await api.saveAssistant({ enabled, model, effort, api_key: key.trim() || undefined, ...extra }));
+      setKey('');
+    });
+  const testNow = () =>
+    run(async () => {
+      setTest(null);
+      const r = await api.testAssistant(key.trim() || undefined);
+      setTest(r.ok ? `Key works: ${r.display_name ?? r.model} is available.` : `Test failed: ${r.error}`);
+    });
+  if (!st || st.key_set === undefined) return <Card title="Ask NetWatch (Claude)">{error ? <p className="text-sm text-rose-400">{error}</p> : null}</Card>;
+  return (
+    <Card title="Ask NetWatch (Claude)">
+      <div className="space-y-3 text-sm">
+        <p className="text-xs text-slate-400">
+          Ask questions about the network in plain language ("why was the internet slow last night?"). Claude reads NetWatch's data
+          through read-only tools and cannot change anything. What it looks up (target and device names, addresses, incident history)
+          is sent to Anthropic to answer the question. Get a key at console.anthropic.com; usage is billed to that account. The key is
+          encrypted like the Hub and Deco passwords.
+        </p>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-400">Anthropic API key {st.key_set && '(saved)'}</span>
+            <input aria-label="Anthropic API key" type="password" className={`${input} w-64`} value={key} autoComplete="off"
+              placeholder={st.key_set ? '•••••••• (unchanged)' : 'sk-ant-…'} onChange={(e) => setKey(e.target.value)} />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-400">Model</span>
+            <select aria-label="Model" className={input} value={model} onChange={(e) => setModel(e.target.value)}>
+              {(st.models ?? [model]).map((m) => <option key={m} value={m}>{MODEL_LABEL[m] ?? m}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-400">Effort</span>
+            <select aria-label="Effort" className={input} value={effort} onChange={(e) => setEffort(e.target.value)}>
+              {(st.efforts ?? [effort]).map((x) => <option key={x} value={x}>{x}</option>)}
+            </select>
+          </label>
+          <label className="flex items-center gap-2 pb-1">
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            On
+          </label>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button className={`${btn} bg-sky-600 text-white hover:bg-sky-500`} disabled={busy} onClick={() => void save()}>Save</button>
+          <button className={`${btn} text-slate-200 ring-1 ring-slate-700 hover:bg-slate-800`} disabled={busy || (!key && !st.key_set)} onClick={() => void testNow()}>
+            {busy ? 'Working…' : 'Test key'}
+          </button>
+          {st.key_set && (
+            <button className={`${btn} text-rose-300 ring-1 ring-slate-700 hover:bg-slate-800`} disabled={busy}
+              onClick={() => window.confirm('Forget the stored Anthropic API key?') && void save({ forget_key: true })}>
+              Forget key
+            </button>
+          )}
+        </div>
+        {error && <p className="text-rose-400">{error}</p>}
+        {test && <p className={test.startsWith('Test failed') ? 'text-rose-300' : 'text-emerald-300'}>{test}</p>}
+      </div>
     </Card>
   );
 }
@@ -564,6 +662,7 @@ export function Admin() {
       {settings && <SettingsCard data={settings} onSaved={setSettings} />}
       <HubCard />
       <DecoCard />
+      <AssistantCard />
       <SessionsCard />
       <BackupsCard onRestart={() => void waitForRestart(setNote)} />
       <SecurityLogCard />

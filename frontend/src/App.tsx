@@ -29,7 +29,7 @@ export function App() {
         <Route path="devices" element={<Devices />} />
         <Route path="devices/:id" element={<DeviceDetail />} />
         <Route path="exposure" element={<Exposure />} />
-        <Route path="health" element={<Health />} />
+        <Route path="health-score" element={<Health />} />
         <Route path="timeline" element={<Timeline />} />
         <Route path="events/:id" element={<EventDetail />} />
         <Route path="map" element={<Suspense fallback={<p className="text-slate-400">Loading map…</p>}><NetworkMap /></Suspense>} />

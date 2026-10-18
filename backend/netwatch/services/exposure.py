@@ -217,11 +217,16 @@ def findings(services: list[dict], forwards: list[dict], hub: dict | None) -> li
     for f in forwards:
         if not f.get("enabled"):
             continue
-        name, risk, advice = PORTS.get(f.get("internal_port") or 0, (None, "medium", ""))
+        upnp = f.get("origin") == "upnp"
+        known = PORTS.get(f.get("internal_port") or 0)
+        # Unknown ports opened through UPnP are usually games and consoles.
+        name, risk, advice = known or (None, "info" if upnp else "medium", "")
+        if risk == "info" and known:
+            advice = "Reachable from the whole internet: keep it updated and password-protected."
         port = f.get("external_port")
         who = f.get("device_label") or f.get("internal_ip") or "?"
-        via = " (opened by the device through UPnP)" if f.get("origin") == "upnp" else ""
-        sev = "critical" if risk == "high" else "warning"
+        via = " (opened by the device through UPnP)" if upnp else ""
+        sev = {"high": "critical", "medium": "warning"}.get(risk, "info")
         out.append(
             {
                 "severity": sev,

@@ -78,7 +78,7 @@ export function Overview() {
         }`}
       >
         {typeof score.data?.score === 'number' && (
-          <Link to="/health" className="float-right ml-3 flex items-center gap-2 rounded-md px-1 text-xs text-slate-300 hover:bg-slate-900/40" title="Network health score, last 7 days">
+          <Link to="/health-score" className="float-right ml-3 flex items-center gap-2 rounded-md px-1 text-xs text-slate-300 hover:bg-slate-900/40" title="Network health score, last 7 days">
             <ScoreRing score={score.data.score} size={48} />
             <span className="hidden sm:inline">{score.data.label}<br /><span className="text-slate-500">7-day health</span></span>
           </Link>

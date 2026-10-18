@@ -137,7 +137,7 @@ function CredentialsForm({ mode, needCode = false, onDone }: { mode: 'setup' | '
         {needCode && (
           <div>
             <label htmlFor="auth-code" className="mb-1 block text-xs text-slate-400">Setup code</label>
-            <input id="auth-code" className={input} autoComplete="off" required placeholder="abc123-def456-789abc" value={code} onChange={(e) => setCode(e.target.value)} />
+            <input id="auth-code" className={input} autoComplete="off" required value={code} onChange={(e) => setCode(e.target.value)} />
             <p className="mt-1 text-[11px] text-slate-500">
               Printed by <code>setup.sh</code>; also in <code>data/setup-token</code> and <code>docker logs netwatch</code>.
             </p>

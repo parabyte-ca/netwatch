@@ -422,6 +422,28 @@ export interface WeeklyReport extends Omit<HealthScore, 'start_ms' | 'end_ms' | 
   markdown: string;
 }
 
+export interface AssistantStatus {
+  enabled: boolean;
+  model: string;
+  effort: 'low' | 'medium' | 'high';
+  key_set: boolean;
+  models: string[];
+  efforts: string[];
+}
+
+export interface AskTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface AskAnswer {
+  answer: string;
+  tools: string[];
+  model: string;
+  usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number };
+  stop_reason: string | null;
+}
+
 export interface ExposureSummary {
   latest: { id: number; ts_ms: number; trigger: string; status: string; hosts: number; open_ports: number } | null;
   running: boolean;
@@ -943,6 +965,13 @@ export const api = {
     return request<NetworkMapResponse>(`/api/map${qs ? `?${qs}` : ''}`);
   },
   hub: () => request<HubStatus>('/api/admin/hub'),
+  assistant: () => request<AssistantStatus>('/api/admin/assistant'),
+  saveAssistant: (body: { enabled: boolean; model: string; effort: string; api_key?: string; forget_key?: boolean }) =>
+    request<AssistantStatus>('/api/admin/assistant', { method: 'PUT', body: JSON.stringify(body) }),
+  testAssistant: (api_key?: string) =>
+    request<{ ok: boolean; error?: string; model?: string; display_name?: string }>('/api/admin/assistant/test', post({ api_key: api_key || undefined })),
+  askStatus: () => request<{ available: boolean; model: string }>('/api/ask'),
+  ask: (messages: AskTurn[]) => request<AskAnswer>('/api/ask', post({ messages })),
   saveHub: (body: { host: string; enabled: boolean; password?: string; forget_password?: boolean }) =>
     request<HubStatus>('/api/admin/hub', { method: 'PUT', body: JSON.stringify(body) }),
   testHub: (host: string, password?: string) =>

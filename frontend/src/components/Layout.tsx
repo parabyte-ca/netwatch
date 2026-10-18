@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
+import { AskPanel } from './AskPanel';
 import { useAuth } from './AuthGate';
 
 const NAV = [
   { to: '/', label: 'Overview', end: true },
-  { to: '/health', label: 'Health' },
+  { to: '/health-score', label: 'Health' },
   { to: '/targets', label: 'Targets' },
   { to: '/devices', label: 'Devices' },
   { to: '/exposure', label: 'Exposure' },
@@ -111,6 +112,7 @@ export function Layout() {
       </header>
       <main className="mx-auto max-w-7xl px-4 py-6">
         <Outlet />
+        <AskPanel />
       </main>
     </div>
   );

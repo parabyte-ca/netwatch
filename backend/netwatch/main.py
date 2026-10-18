@@ -22,6 +22,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from . import __version__
 from .api import (
     admin,
+    ask,
     devices,
     diagnosis,
     health,
@@ -38,6 +39,7 @@ from .auth import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, AuthStore, LoginThrottle
 from .config import Settings, get_settings
 from .db import make_engine, run_migrations
 from .probes import Prober
+from .services.assistant import Assistant
 from .services.bufferbloat import BufferbloatStore, BufferbloatTester
 from .services.deco.service import DecoService
 from .services.diagnosis import Diagnoser
@@ -274,6 +276,9 @@ def create_app(
         app.state.health = HealthService(
             engine, health_report, app.state.exposure.summary, tz=lambda: settings.tz
         )
+        app.state.assistant = Assistant(
+            store, SecretBox(settings.data_dir), app, tz=lambda: settings.tz
+        )
         app.state.netmap = NetMap(app.state)
         app.state.auth = AuthStore(engine)
         app.state.setup_token = await asyncio.to_thread(
@@ -417,6 +422,7 @@ def create_app(
     app.include_router(netmap.router)
     app.include_router(traffic.router)
     app.include_router(score.router)
+    app.include_router(ask.router)
 
     @app.get("/metrics", include_in_schema=False)
     def metrics_endpoint(request: Request) -> Response:

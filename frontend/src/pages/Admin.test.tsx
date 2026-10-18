@@ -41,6 +41,11 @@ function mockApi(calls: { url: string; method: string; body?: unknown }[]) {
       return json({ backups: [{ name: 'netwatch-20261017-v0.5.0.db', bytes: 1048576, modified: 1792270000 }], restore_pending: false, database_bytes: 2097152 });
     }
     if (url === '/api/admin/security-log') return json([]);
+    if (url === '/api/admin/assistant') {
+      const saved = init?.method === 'PUT';
+      return json({ enabled: true, model: 'claude-opus-5-5', effort: 'medium', key_set: saved, models: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'], efforts: ['low', 'medium', 'high'] });
+    }
+    if (url === '/api/admin/assistant/test') return json({ ok: true, model: 'claude-opus-5-5', display_name: 'Claude Opus 5.5' });
     if (url === '/api/admin/hub') {
       return json({ host: '', enabled: false, password_set: false, last_poll_ms: null, last_ok_ms: null, error: null, paused: null, snapshot: null, suggestion: '192.168.2.1' });
     }
@@ -124,5 +129,19 @@ describe('Admin', () => {
     fireEvent.change(within(hub).getByLabelText('Hub admin password'), { target: { value: 'pw' } });
     fireEvent.click(within(hub).getByRole('button', { name: 'Test connection' }));
     expect(await within(hub).findByText(/Connected \(SHA512\): Home Hub 4000 2\.13\.1, up 1 d 1 h 0 min, fibre -19\.2 dBm|Connected \(SHA512\): Home Hub 4000/)).toBeInTheDocument();
+  });
+  it('saves the Anthropic key without showing it again and tests it', async () => {
+    const calls: { url: string; method: string; body?: unknown }[] = [];
+    mockApi(calls);
+    render(<MemoryRouter><Admin /></MemoryRouter>);
+    const card = await screen.findByRole('region', { name: 'Ask NetWatch (Claude)' });
+    fireEvent.change(within(card).getByLabelText('Anthropic API key'), { target: { value: 'sk-ant-abc123' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Test key' }));
+    expect(await within(card).findByText('Key works: Claude Opus 5.5 is available.')).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole('button', { name: 'Save' }));
+    expect(await within(card).findByText(/\(saved\)/)).toBeInTheDocument();
+    expect(within(card).getByLabelText('Anthropic API key')).toHaveValue('');
+    const put = calls.find((c) => c.url === '/api/admin/assistant' && c.method === 'PUT');
+    expect(JSON.parse(String(put?.body))).toMatchObject({ api_key: 'sk-ant-abc123', model: 'claude-opus-5-5' });
   });
 });

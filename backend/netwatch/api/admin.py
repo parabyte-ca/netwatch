@@ -12,6 +12,7 @@ import socket
 import tempfile
 import time
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse
@@ -490,3 +491,51 @@ async def explore_hub(body: HubExploreIn, request: Request) -> dict:
     except HubError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     return {"xpath": body.xpath, "value": value}
+
+
+# ── Ask NetWatch (Claude API) ─────────────────────────────────────────────────
+
+
+@router.get("/assistant")
+async def get_assistant(request: Request) -> dict:
+    return await asyncio.to_thread(request.app.state.assistant.status)
+
+
+class AssistantIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    model: str = Field(pattern=r"^claude-(opus-5-5|sonnet-5-5|haiku-5-5)$")
+    effort: Literal["low", "medium", "high"] = "medium"
+    api_key: str | None = Field(default=None, max_length=256, pattern=r"^sk-ant-[A-Za-z0-9_-]+$")
+    forget_key: bool = False
+
+
+@router.put("/assistant")
+async def put_assistant(body: AssistantIn, request: Request) -> dict:
+    a = request.app.state.assistant
+    before = await asyncio.to_thread(a.status)
+    await asyncio.to_thread(a.save, body.enabled, body.model, body.effort, body.api_key)
+    if body.forget_key:
+        await asyncio.to_thread(a.forget_key)
+    what = []
+    if before["enabled"] != body.enabled:
+        what.append("on" if body.enabled else "off")
+    if body.api_key:
+        what.append("API key saved")
+    if body.forget_key:
+        what.append("API key forgotten")
+    if before["model"] != body.model:
+        what.append(f"model {body.model}")
+    if what:
+        await security_event(request, "info", "Ask NetWatch changed: " + "; ".join(what))
+    return await asyncio.to_thread(a.status)
+
+
+class AssistantTestIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    api_key: str | None = Field(default=None, max_length=256, pattern=r"^sk-ant-[A-Za-z0-9_-]+$")
+
+
+@router.post("/assistant/test")
+async def test_assistant(body: AssistantTestIn, request: Request) -> dict:
+    return await request.app.state.assistant.test(body.api_key)

@@ -145,7 +145,7 @@ export function Health() {
             {rows.map((r) => (
               <li key={r.week_start}>
                 <button onClick={() => void show(r.week_start)} aria-expanded={open?.week_start === r.week_start} className="flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm hover:bg-slate-800/60">
-                  <span className="w-28 shrink-0 text-slate-300">Week of {r.week_start}</span>
+                  <span className="shrink-0 whitespace-nowrap text-slate-300">Week of {r.week_start}</span>
                   <span className="h-2 flex-1 overflow-hidden rounded bg-slate-800" aria-hidden>
                     <span className="block h-full rounded" style={{ width: `${(100 * (r.score ?? 0)) / max}%`, background: scoreColour(r.score) }} />
                   </span>
