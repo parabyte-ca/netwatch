@@ -29,7 +29,10 @@ OUTAGE, LOSS, NIC_LINK, NIC_SPEED, NIC_ERRORS, MONITOR, ANOMALY, DEVICE, SECURIT
     "security",
     "wifi",
 )
-KINDS = (OUTAGE, LOSS, NIC_LINK, NIC_SPEED, NIC_ERRORS, MONITOR, ANOMALY, DEVICE, SECURITY, WIFI)
+HUB = "hub"  # the Home Hub's own reports (restarts, fibre link, internet session)
+KINDS = (
+    OUTAGE, LOSS, NIC_LINK, NIC_SPEED, NIC_ERRORS, MONITOR, ANOMALY, DEVICE, SECURITY, WIFI, HUB,
+)  # fmt: skip
 
 
 def _row(r) -> dict:
@@ -157,6 +160,9 @@ class IncidentRecorder:
         self._queue: asyncio.Queue = asyncio.Queue()
         self._open: dict[tuple[int, str], int] = {}
         self._task: asyncio.Task | None = None
+        # While NetWatch saturates the line on purpose (bufferbloat test), the loss and
+        # timeouts it causes are expected: transitions starting before this are not recorded.
+        self.quiet_until_ms = 0
 
     @property
     def running(self) -> bool:
@@ -220,6 +226,9 @@ class IncidentRecorder:
             "probe": spec.kind,
             "group": spec.group,
         }
+        if t.new in (DOWN, DEGRADED) and t.ts_ms <= self.quiet_until_ms:
+            log.info("failure during a load test not recorded", extra={"target": spec.name})
+            return
         if t.new == DOWN:
             eid = await asyncio.to_thread(
                 self.events.open,

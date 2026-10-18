@@ -173,7 +173,8 @@ export type EventKind =
   | 'anomaly'
   | 'device'
   | 'security'
-  | 'wifi';
+  | 'wifi'
+  | 'hub';
 
 export interface TimelineEvent {
   id: number;
@@ -441,6 +442,88 @@ export interface Incident {
   causes: Cause[];
 }
 
+export interface Rates {
+  down_bps: number;
+  up_bps: number;
+}
+
+export interface TrafficDevice {
+  device_id: number | null;
+  label: string;
+  type: string;
+  macs: string[];
+}
+
+export interface TrafficLive {
+  generated_ms: number;
+  deco_api: boolean;
+  as_of_ms: number | null;
+  down_bps: number;
+  up_bps: number;
+  devices: (TrafficDevice & Rates & { deco_mac: string; deco_name: string | null; connection: string })[];
+  by_deco: Record<string, Rates & { clients: number }>;
+}
+
+export interface TrafficTop {
+  hours: number;
+  down_bytes: number;
+  up_bytes: number;
+  devices: (TrafficDevice & { down_bytes: number; up_bytes: number; down_peak: number; up_peak: number })[];
+}
+
+export interface DeviceTraffic {
+  device_id: number;
+  hours: number;
+  step: number;
+  down_bytes: number;
+  up_bytes: number;
+  series: { ts: number; down_bps: number; up_bps: number; down_peak: number; up_peak: number }[];
+}
+
+export interface BufferbloatPhase {
+  median: number | null;
+  p95: number | null;
+  loss_pct: number | null;
+  n: number;
+}
+
+export interface BufferbloatTest {
+  id: number;
+  ts_ms: number;
+  trigger: 'scheduled' | 'manual';
+  status: 'ok' | 'error';
+  grade: string | null;
+  idle_ms: number | null;
+  down_ms: number | null;
+  up_ms: number | null;
+  down_bps: number | null;
+  up_bps: number | null;
+  error: string | null;
+  details: { anchor?: string; added_ms?: number | null; idle?: BufferbloatPhase; download?: BufferbloatPhase; upload?: BufferbloatPhase };
+}
+
+export interface HubSnapshot {
+  model: string | null;
+  firmware: string | null;
+  uptime_s: number | null;
+  optical: { status: string | null; rx_dbm: number | null; tx_dbm: number | null; rx_raw: unknown; tx_raw: unknown } | null;
+  ppp: { status: string | null; uptime_s: number | null; last_error: string | null } | null;
+  wan_ip: string | null;
+  wan_up?: boolean | null;
+}
+
+export interface HubStatus {
+  host: string;
+  enabled: boolean;
+  password_set: boolean;
+  last_poll_ms: number | null;
+  last_ok_ms: number | null;
+  error: string | null;
+  paused: string | null;
+  snapshot: HubSnapshot | null;
+  suggestion?: string | null;
+}
+
 export type MapNodeKind = 'internet' | 'isp' | 'hub' | 'switch' | 'host' | 'deco' | 'device' | 'group';
 
 export interface MapMember {
@@ -467,6 +550,7 @@ export interface MapNode {
   state: State;
   inferred: boolean;
   members: MapMember[];
+  traffic?: Rates;
   info: {
     ip?: string | null;
     mac?: string;
@@ -482,6 +566,11 @@ export interface MapNode {
     count?: number;
     devices?: MapGroupDevice[];
     interfaces?: { name: string; speed: number | null; state: string | null }[];
+    uptime_s?: number | null;
+    rx_dbm?: number | null;
+    tx_dbm?: number | null;
+    wan_up?: boolean | null;
+    wan_ip?: string | null;
   };
 }
 
@@ -493,6 +582,7 @@ export interface MapEdge {
   median_ms: number | null;
   loss_pct: number | null;
   label: string | null;
+  traffic?: Rates;
 }
 
 export interface MapHighlight {
@@ -583,6 +673,15 @@ export interface Report {
   patterns: Pattern[];
   targets: { name: string; host: string; layer_label: string; probes: number; loss_pct: number | null; median_ms: number | null; p95_ms: number | null }[];
   speeds: { kind: string; direction: string; tests: number; avg_bps: number; min_bps: number; max_bps: number }[];
+  line?: {
+    hub_restarts?: number;
+    wan_down?: number;
+    ppp_reconnects?: number;
+    rx_dbm_min?: number | null;
+    rx_dbm_avg?: number | null;
+    events?: { when: string; title: string }[];
+    bufferbloat?: { grade: string; idle_ms: number; down_ms: number; up_ms: number; when: string; tests: number };
+  };
   ruled_out: string[];
   incidents: ReportIncident[];
   markdown: string;
@@ -752,6 +851,17 @@ export const api = {
     const qs = q.toString();
     return request<NetworkMapResponse>(`/api/map${qs ? `?${qs}` : ''}`);
   },
+  hub: () => request<HubStatus>('/api/admin/hub'),
+  saveHub: (body: { host: string; enabled: boolean; password?: string; forget_password?: boolean }) =>
+    request<HubStatus>('/api/admin/hub', { method: 'PUT', body: JSON.stringify(body) }),
+  testHub: (host: string, password?: string) =>
+    request<{ ok: boolean; error?: string; snapshot?: HubSnapshot; method?: string }>('/api/admin/hub/test', post({ host, password })),
+  exploreHub: (xpath: string) => request<{ xpath: string; value: unknown }>('/api/admin/hub/explore', post({ xpath })),
+  bufferbloat: () => request<{ running: boolean; nightly: boolean; tests: BufferbloatTest[] }>('/api/bufferbloat'),
+  runBufferbloat: () => request<{ started: boolean }>('/api/bufferbloat/run', post()),
+  trafficLive: () => request<TrafficLive>('/api/traffic/live'),
+  trafficTop: (hours: number) => request<TrafficTop>(`/api/traffic/top?hours=${hours}`),
+  deviceTraffic: (id: number, hours: number) => request<DeviceTraffic>(`/api/devices/${id}/traffic?hours=${hours}`),
   mapLayout: () => request<{ positions: MapPositions }>('/api/map/layout'),
   saveMapLayout: (positions: MapPositions) =>
     request<{ positions: MapPositions }>('/api/map/layout', { method: 'PUT', body: JSON.stringify({ positions }) }),

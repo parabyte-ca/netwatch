@@ -312,7 +312,7 @@ def _on_lan(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return any(ip in net for net in _LAN_NETS if net.version == ip.version)
 
 
-def _deco_host(host: str) -> str:
+def _lan_host(host: str) -> str:
     """A LAN address, or a name that only resolves to LAN addresses: the owner password must
     never leave the network. (Blocking: call from a thread.)"""
     h = host.strip().lower()
@@ -321,7 +321,7 @@ def _deco_host(host: str) -> str:
     except ValueError:
         if not _HOSTNAME.match(h) or h.rsplit(".", 1)[-1].isdigit():
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, "enter the main Deco's IP address"
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "enter an IP address"
             ) from None
         try:
             addrs = {ipaddress.ip_address(a[4][0]) for a in socket.getaddrinfo(h, 80)}
@@ -363,7 +363,7 @@ class DecoIn(BaseModel):
 @router.put("/deco")
 async def put_deco(body: DecoIn, request: Request) -> dict:
     deco = request.app.state.deco
-    host = await asyncio.to_thread(_deco_host, body.host) if body.host.strip() else ""
+    host = await asyncio.to_thread(_lan_host, body.host) if body.host.strip() else ""
     if body.enabled and not host:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "enter the main Deco's address")
     before = await asyncio.to_thread(deco.status)
@@ -392,7 +392,7 @@ class DecoTestIn(BaseModel):
 @router.post("/deco/test")
 async def test_deco(body: DecoTestIn, request: Request) -> dict:
     deco = request.app.state.deco
-    host = await asyncio.to_thread(_deco_host, body.host)
+    host = await asyncio.to_thread(_lan_host, body.host)
     saved = (await asyncio.to_thread(deco.config))["host"]
     if body.password:
         # Typed by the owner for the saved Deco: also (re)trusts its sign-in key.
@@ -404,3 +404,89 @@ async def test_deco(body: DecoTestIn, request: Request) -> dict:
     if not password:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "enter the owner password")
     return await deco.test(host, password)
+
+
+# ── Home Hub ──────────────────────────────────────────────────────────────────
+
+
+def _hub_body(request: Request) -> dict:
+    st = request.app.state
+    body = st.hub.status()
+    if not body["host"]:
+        body["suggestion"] = st.discovery.gateway_ip()
+    return body
+
+
+@router.get("/hub")
+async def get_hub(request: Request) -> dict:
+    return await asyncio.to_thread(_hub_body, request)
+
+
+class HubIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    host: str = Field(max_length=253)
+    enabled: bool
+    password: str | None = Field(default=None, max_length=128)
+    forget_password: bool = False
+
+
+@router.put("/hub")
+async def put_hub(body: HubIn, request: Request) -> dict:
+    hub = request.app.state.hub
+    host = await asyncio.to_thread(_lan_host, body.host) if body.host.strip() else ""
+    if body.enabled and not host:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "enter the Hub's address")
+    before = await asyncio.to_thread(hub.status)
+    await asyncio.to_thread(hub.save, host, body.enabled, body.password or None)
+    if body.forget_password:
+        await asyncio.to_thread(hub.forget_password)
+    what = []
+    if (before["host"], before["enabled"]) != (host, body.enabled):
+        what.append(f"{'on' if body.enabled else 'off'}, {host or 'no address'}")
+    if body.password:
+        what.append("admin password saved")
+    if body.forget_password:
+        what.append("admin password forgotten")
+    if what:
+        await security_event(request, "info", "Home Hub integration changed: " + "; ".join(what))
+    hub.kick()
+    return await asyncio.to_thread(_hub_body, request)
+
+
+class HubTestIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    host: str = Field(max_length=253)
+    password: str | None = Field(default=None, max_length=128)
+
+
+@router.post("/hub/test")
+async def test_hub(body: HubTestIn, request: Request) -> dict:
+    hub = request.app.state.hub
+    host = await asyncio.to_thread(_lan_host, body.host)
+    if body.password:
+        return await hub.test(host, body.password)
+    if host != (await asyncio.to_thread(hub.config))["host"]:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "enter the admin password")
+    password = await asyncio.to_thread(hub.password)
+    if not password:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "enter the admin password")
+    return await hub.test(host, password)
+
+
+class HubExploreIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    xpath: str = Field(
+        min_length=6, max_length=200, pattern=r"^Device(/[A-Za-z0-9_@=\[\]'\"*.-]+)*$"
+    )
+
+
+@router.post("/hub/explore")
+async def explore_hub(body: HubExploreIn, request: Request) -> dict:
+    """Raw read of one path of the Hub's data tree (credentials hidden), to find fields."""
+    from ..services.hub.client import HubError
+
+    try:
+        value = await request.app.state.hub.explore(body.xpath)
+    except HubError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return {"xpath": body.xpath, "value": value}

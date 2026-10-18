@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { EventRow } from '../components/EventRow';
-import { api, type DecoStatus, type DecoTestResult, type SettingField, type SettingsResponse } from '../lib/api';
-import { fmtAgo, fmtBytes, fmtTime } from '../lib/format';
+import { api, type DecoStatus, type DecoTestResult, type HubStatus, type SettingField, type SettingsResponse } from '../lib/api';
+import { fmtAgo, fmtBytes, fmtDurationMs, fmtTime } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
 
 const btn = 'rounded-md px-3 py-1.5 text-sm font-medium disabled:opacity-50';
@@ -282,6 +282,124 @@ function BackupsCard({ onRestart }: { onRestart: () => void }) {
   );
 }
 
+function HubCard() {
+  const [st, setSt] = useState<HubStatus | null>(null);
+  const [host, setHost] = useState('');
+  const [enabled, setEnabled] = useState(false);
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [test, setTest] = useState<string | null>(null);
+  const [xpath, setXpath] = useState('Device/DeviceInfo');
+  const [raw, setRaw] = useState<string | null>(null);
+
+  const apply = (d: HubStatus) => {
+    setSt(d);
+    setHost(d.host || d.suggestion || '');
+    setEnabled(d.enabled);
+  };
+  useEffect(() => {
+    api.hub().then(apply, (e) => setError(err(e)));
+  }, []);
+
+  async function run(fn: () => Promise<void>) {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setError(err(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const save = (extra: { forget_password?: boolean } = {}) =>
+    run(async () => {
+      apply(await api.saveHub({ host, enabled, password: password || undefined, ...extra }));
+      setPassword('');
+    });
+  const testNow = () =>
+    run(async () => {
+      setTest(null);
+      const r = await api.testHub(host, password || undefined);
+      const o = r.snapshot?.optical;
+      setTest(r.ok
+        ? `Connected (${r.method?.toUpperCase()}): ${r.snapshot?.model ?? 'Hub'} ${r.snapshot?.firmware ?? ''}, up ${fmtDurationMs((r.snapshot?.uptime_s ?? 0) * 1000)}` +
+          (o?.rx_dbm != null ? `, fibre ${o.rx_dbm} dBm` : ', fibre level not found (see Explore below)')
+        : `Test failed: ${r.error}`);
+    });
+  const explore = () =>
+    run(async () => {
+      const r = await api.exploreHub(xpath.trim());
+      setRaw(JSON.stringify(r.value, null, 2) ?? 'null');
+    });
+
+  if (!st) return <Card title="Home Hub">{error ? <p className="text-sm text-rose-400">{error}</p> : null}</Card>;
+  const snap = st.snapshot;
+  return (
+    <Card title="Home Hub">
+      <div className="space-y-3 text-sm">
+        <p className="text-xs text-slate-400">
+          Reads the Bell Home Hub's own view of the line every minute: restarts (from its uptime), the fibre signal level and
+          link state, and the internet session. It turns them into timeline events that settle "is it Bell or is it us?".
+          Read-only: NetWatch never changes a setting on the Hub. The admin password is encrypted like the Deco's.
+        </p>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-400">Hub address</span>
+            <input aria-label="Hub address" className={`${input} w-44`} value={host} onChange={(e) => setHost(e.target.value)} />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-400">Admin password {st.password_set && '(saved)'}</span>
+            <input aria-label="Hub admin password" type="password" className={`${input} w-48`} value={password}
+              autoComplete="new-password" placeholder={st.password_set ? '•••••••• (unchanged)' : 'not set'}
+              onChange={(e) => setPassword(e.target.value)} />
+          </label>
+          <label className="flex items-center gap-2 pb-1">
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            Poll every minute
+          </label>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button className={`${btn} bg-sky-600 text-white hover:bg-sky-500`} disabled={busy} onClick={() => void save()}>Save</button>
+          <button className={`${btn} text-slate-200 ring-1 ring-slate-700 hover:bg-slate-800`}
+            disabled={busy || !host || (!password && !st.password_set)} onClick={() => void testNow()}>
+            {busy ? 'Working…' : 'Test connection'}
+          </button>
+          {st.password_set && (
+            <button className={`${btn} text-rose-300 ring-1 ring-slate-700 hover:bg-slate-800`} disabled={busy}
+              onClick={() => window.confirm('Forget the stored Hub admin password?') && void save({ forget_password: true })}>
+              Forget password
+            </button>
+          )}
+        </div>
+        {error && <p className="text-rose-400">{error}</p>}
+        {test && <p className={test.startsWith('Test failed') ? 'text-rose-300' : 'text-emerald-300'}>{test}</p>}
+        <p className="text-xs text-slate-400">
+          {snap
+            ? `Last read ${fmtAgo(st.last_ok_ms ?? 0, Date.now())}: ${snap.model ?? 'Hub'}, up ${fmtDurationMs((snap.uptime_s ?? 0) * 1000)}` +
+              (snap.optical?.rx_dbm != null ? `, fibre ${snap.optical.rx_dbm} dBm` : '') +
+              (snap.wan_up === false ? ', internet DOWN' : '')
+            : 'Not read yet.'}
+          {st.error && <span className="text-rose-300"> Last poll failed: {st.error}</span>}
+          {st.paused && <span className="block text-amber-300">Polling stopped ({st.paused}). Fix the password and press Save.</span>}
+        </p>
+        {st.password_set && (
+          <details className="rounded-md bg-slate-950 p-2 ring-1 ring-slate-800">
+            <summary className="cursor-pointer text-xs text-slate-400">Advanced: explore the Hub's data (passwords and keys hidden)</summary>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <input aria-label="Hub data path" className={`${input} min-w-0 flex-1 font-mono text-xs`} value={xpath} onChange={(e) => setXpath(e.target.value)} />
+              <button className={`${btn} text-slate-200 ring-1 ring-slate-700 hover:bg-slate-800`} disabled={busy} onClick={() => void explore()}>Read</button>
+            </div>
+            <p className="mt-1 text-[11px] text-slate-500">e.g. Device/Optical/Interfaces, Device/PPP/Interfaces, Device/NAT/PortMappings</p>
+            {raw && <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-[11px] text-slate-300">{raw}</pre>}
+          </details>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 function DecoCard() {
   const [st, setSt] = useState<DecoStatus | null>(null);
   const [host, setHost] = useState('');
@@ -444,6 +562,7 @@ export function Admin() {
       )}
       {error && <p className="text-rose-400">{error}</p>}
       {settings && <SettingsCard data={settings} onSaved={setSettings} />}
+      <HubCard />
       <DecoCard />
       <SessionsCard />
       <BackupsCard onRestart={() => void waitForRestart(setNote)} />

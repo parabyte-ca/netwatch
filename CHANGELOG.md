@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-10-18
+### Added
+- Live bandwidth per device from the Decos: "top talkers" now, over 24 hours and 7 days on the
+  Overview and the map; live traffic on every map node and link (busy links thicker and
+  animated); a bandwidth chart and totals on each device page. 1-minute detail for 7 days
+  (new setting "Per-device traffic", 1-90 days), then hourly totals.
+- Bufferbloat grade (A+ to F): latency to 1.1.1.1 idle versus while downloading and uploading at
+  full speed (Cloudflare speed-test endpoints, ~30 s). Nightly 20 minutes after the update window
+  (setting "Nightly bufferbloat test") and on demand from Diagnostics, with history. Packet loss
+  caused by the test itself never opens an incident; a test that can't load the line is
+  recorded as failed instead of graded.
+- Home Hub 4000 integration (Admin → Home Hub): reads uptime, fibre receive/transmit levels and
+  link state, and the internet (PPP) session every minute, with Test connection and a raw data
+  explorer (credentials hidden). New "Home Hub" timeline events: restarts, fibre or internet
+  link down, session reconnects, weak fibre signal. New diagnosis causes: Hub restart confirmed
+  (94), Bell link down (96), Bell ended the session (88), weak fibre (72). The map's Hub node
+  shows model, firmware, uptime and fibre levels; the Bell report gains a "Bell line" section
+  (restarts, link-down periods, reconnects, fibre levels, latest bufferbloat grade).
+- Roadmap section in the README.
+
+### Fixed
+- Deco client speeds were read as bytes per second; the Deco reports kilobytes per second.
+
 ## [0.7.2] - 2026-10-18
 ### Changed
 - Diagnosis page: incidents that ended over an hour ago are diagnosed once and remembered;

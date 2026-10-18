@@ -4,6 +4,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { api, type State, type Target, type TargetStatus } from '../lib/api';
 import { fmtAgo, fmtMs, fmtPct, GROUP_LABEL, GROUP_ORDER, STATE_STYLE } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
+import { TopTalkers } from '../components/TopTalkers';
 
 function Tile({ t, s, now }: { t: Target; s: TargetStatus | undefined; now: number }) {
   const state: State = s?.state ?? 'unknown';
@@ -109,6 +110,7 @@ export function Overview() {
           </section>
         );
       })}
+      <TopTalkers />
       <section aria-label="Recent events" className="rounded-lg bg-slate-900 p-2 ring-1 ring-slate-800">
         <div className="flex items-center justify-between px-2 pb-1">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Last 24 hours</h2>

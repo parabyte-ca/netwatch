@@ -124,7 +124,14 @@ async def report(
     st = request.app.state
     start_ms, end_ms = _range(start, end, 30)
     r = await asyncio.to_thread(
-        build_report, st.diagnoser, st.throughput_store, start_ms, end_ms, scope=scope
+        build_report,
+        st.diagnoser,
+        st.throughput_store,
+        start_ms,
+        end_ms,
+        scope=scope,
+        hub_store=st.hub_store,
+        bufferbloat_store=st.bufferbloat_store,
     )
     if format == "md":
         return PlainTextResponse(

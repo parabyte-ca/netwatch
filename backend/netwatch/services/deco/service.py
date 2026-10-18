@@ -17,6 +17,7 @@ from ..discovery.packets import Observation, clean_name
 from ..events import SECURITY, WIFI, EventLog
 from ..secrets import SecretBox
 from ..storage import Store
+from ..traffic import TrafficStore
 from .client import DecoClient, DecoError, DecoKeyChanged, DecoLoginError
 
 log = logging.getLogger(__name__)
@@ -81,6 +82,14 @@ def normalize_deco(d: dict) -> dict:
     }
 
 
+def _num(v) -> float:
+    try:
+        f = float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return f if 0 <= f < 1e9 else 0.0
+
+
 def normalize_client(c: dict, deco_mac: str) -> dict:
     conn = (clean_name(str(c.get("connection_type") or ""), 20) or "").lower()
     ip = clean_name(c.get("ip"), 45)
@@ -93,8 +102,9 @@ def normalize_client(c: dict, deco_mac: str) -> dict:
         "wired": conn == "wired",
         "guest": c.get("interface") == "guest",
         "deco_mac": deco_mac,
-        "down_bps": (c.get("down_speed") or 0) * 8,
-        "up_bps": (c.get("up_speed") or 0) * 8,
+        # The Deco reports current speeds in kilobytes per second.
+        "down_bps": _num(c.get("down_speed")) * 8000,
+        "up_bps": _num(c.get("up_speed")) * 8000,
     }
 
 
@@ -111,12 +121,14 @@ class DecoService:
         secrets: SecretBox,
         *,
         client_factory: ClientFactory | None = None,
+        traffic: TrafficStore | None = None,
     ) -> None:
         self.store = store
         self.events = events
         self.devices = devices
         self.inventory = inventory
         self.secrets = secrets
+        self.traffic = traffic
         self.client_factory = client_factory or (lambda host, pw: DecoClient(host, pw))
         self.decos: dict[str, dict] = {}
         self.clients: dict[str, dict] = {}
@@ -312,6 +324,10 @@ class DecoService:
                 )
             )
         self.inventory.apply(obs)
+        if self.traffic is not None:
+            self.traffic.record(
+                {c["mac"]: (c["down_bps"], c["up_bps"]) for c in new_clients.values()}, now
+            )
 
     def _monitored(self) -> dict[str, str]:
         """MAC → label for devices with a ping target (merged MACs included)."""

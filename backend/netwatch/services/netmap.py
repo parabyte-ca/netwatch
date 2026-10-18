@@ -148,7 +148,9 @@ class NetMap:
             state=a["state"],
             members=[member(t) for t in inet_ts],
         )
-        node("isp", "isp", "Bell network", inferred=True, state=a["state"])
+        hub_snap = getattr(getattr(st, "hub", None), "last", None) if at_ms is None else None
+        isp_state = "down" if hub_snap and hub_snap.get("wan_up") is False else a["state"]
+        node("isp", "isp", "Bell network", inferred=not hub_snap, state=isp_state)
         hub_ts = by_layer[GATEWAY] + by_layer[GATEWAY_DNS]
         h = agg(by_layer[GATEWAY]) if by_layer[GATEWAY] else agg(hub_ts)
         node(
@@ -157,7 +159,7 @@ class NetMap:
             "Bell Home Hub",
             state=h["state"],
             members=[member(t) for t in hub_ts],
-            info={"ip": route},
+            info={"ip": route, **self._hub_info()},
         )
         nics = [n for n in st.nic.status() if n.get("present")]
         host_state = (
@@ -329,12 +331,82 @@ class NetMap:
             )
             edge(parent, nid, "logical")
 
+        if at_ms is None and st.deco and st.deco.clients:
+            self._add_traffic(nodes, edges, rows)
+
         return {
             "generated_ms": now,
             "at_ms": at_ms,
             "deco_api": bool(deco_state),
             "nodes": list(nodes.values()),
             "edges": edges,
+        }
+
+    def _add_traffic(self, nodes: dict, edges: list, rows: list[dict]) -> None:
+        """Live rates from the Decos on every node, summed up the tree, and on each link."""
+        device_of = {m: d["id"] for d in rows for m in d["macs"]}
+        own: dict[str, list[float]] = {}
+
+        def add(nid: str, d: float, u: float) -> None:
+            r = own.setdefault(nid, [0.0, 0.0])
+            r[0] += d
+            r[1] += u
+
+        groups = {
+            dev["device_id"]: n["id"]
+            for n in nodes.values()
+            if n["kind"] == "group"
+            for dev in n["info"].get("devices", [])
+        }
+        for mac, c in self.st.deco.clients.items():
+            did = device_of.get(mac)
+            nid = f"dev:{did}" if did is not None and f"dev:{did}" in nodes else groups.get(did)
+            if nid is None:  # e.g. a device not in the inventory yet: count it on its Deco
+                nid = f"deco:{c['deco_mac']}" if f"deco:{c['deco_mac']}" in nodes else "hub"
+            add(nid, c["down_bps"], c["up_bps"])
+        children: dict[str, list[str]] = {}
+        for e in edges:
+            if e["target"] not in ("isp", "internet"):
+                children.setdefault(e["source"], []).append(e["target"])
+
+        def total(nid: str, seen: frozenset = frozenset()) -> list[float]:
+            t = list(own.get(nid, [0.0, 0.0]))
+            for ch in children.get(nid, []):
+                if ch not in seen:
+                    sub = total(ch, seen | {nid})
+                    t[0] += sub[0]
+                    t[1] += sub[1]
+            return t
+
+        for nid, n in nodes.items():
+            if n["kind"] in ("internet", "isp", "switch", "host"):
+                continue
+            d, u = total(nid)
+            if d or u:
+                n["traffic"] = {"down_bps": round(d), "up_bps": round(u)}
+        hub = nodes.get("hub", {}).get("traffic")
+        for e in edges:
+            t = nodes.get(e["target"], {}).get("traffic")
+            if e["target"] in ("isp", "internet") and hub:
+                t = hub  # everything the Decos carry goes through the Hub to Bell
+            if t:
+                e["traffic"] = t
+
+    def _hub_info(self) -> dict:
+        """The Hub's own report (model, firmware, uptime, fibre levels), when connected."""
+        hub = getattr(self.st, "hub", None)
+        snap = hub.last if hub else None
+        if not snap:
+            return {}
+        opt = snap.get("optical") or {}
+        return {
+            "model": snap.get("model"),
+            "firmware": snap.get("firmware"),
+            "uptime_s": snap.get("uptime_s"),
+            "rx_dbm": opt.get("rx_dbm"),
+            "tx_dbm": opt.get("tx_dbm"),
+            "wan_up": snap.get("wan_up"),
+            "wan_ip": snap.get("wan_ip"),
         }
 
     @staticmethod

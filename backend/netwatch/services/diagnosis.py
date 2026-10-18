@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from .events import ANOMALY, LOSS, NIC_ERRORS, NIC_LINK, NIC_SPEED, OUTAGE, WIFI, EventLog
+from .events import ANOMALY, HUB, LOSS, NIC_ERRORS, NIC_LINK, NIC_SPEED, OUTAGE, WIFI, EventLog
 from .netinfo import DefaultRoute
 from .pathtest import PathStore
 from .stats import aggregate, merge
@@ -103,6 +103,7 @@ class Incident:
     anomalies: list[dict] = field(default_factory=list)
     path_tests: list[dict] = field(default_factory=list)
     wifi_events: list[dict] = field(default_factory=list)
+    hub_events: list[dict] = field(default_factory=list)
     causes: list[Cause] = field(default_factory=list)
 
     @property
@@ -130,6 +131,7 @@ class Incident:
             "nic_events": [_brief(e) for e in self.nic_events],
             "anomalies": [_brief(e) for e in self.anomalies],
             "wifi_events": [_brief(e) for e in self.wifi_events],
+            "hub_events": [_brief(e) for e in self.hub_events],
             "path_tests": [
                 {k: t.get(k) for k in ("id", "ts_ms", "host", "first_loss_hop", "reached")}
                 for t in self.path_tests
@@ -213,7 +215,7 @@ class Diagnoser:
             ctx_events = self.events.list(
                 todo[0].start_ms - ANOMALY_PAD_MS,
                 max((g.end_ms or now) for g in todo) + ANOMALY_PAD_MS,
-                kinds=[NIC_LINK, NIC_SPEED, NIC_ERRORS, ANOMALY, WIFI],
+                kinds=[NIC_LINK, NIC_SPEED, NIC_ERRORS, ANOMALY, WIFI, HUB],
                 limit=50_000,
             )
             wifi = self._wifi_map()
@@ -267,7 +269,9 @@ class Diagnoser:
                 if _overlaps(e, start - ANOMALY_PAD_MS, end + ANOMALY_PAD_MS):
                     inc.anomalies.append(e)
             elif _overlaps(e, start - CONTEXT_PAD_MS, end + CONTEXT_PAD_MS):
-                (inc.wifi_events if e["kind"] == WIFI else inc.nic_events).append(e)
+                {WIFI: inc.wifi_events, HUB: inc.hub_events}.get(e["kind"], inc.nic_events).append(
+                    e
+                )
         tests = self.paths.list(start_ms=start - 60_000, end_ms=end + CONTEXT_PAD_MS, limit=20)
         linked = {t["id"] for t in tests}
         ev_ids = [ev["id"] for ev in inc.events]
@@ -628,6 +632,74 @@ def diagnose(inc: Incident, now_ms: int) -> list[Cause]:
                     [
                         "Look for a common Deco: devices on the same unit dropping together point "
                         "at that unit's radio or backhaul."
+                    ],
+                )
+            )
+
+    # The Home Hub's own reports: hard evidence where the other rules can only infer.
+    for e in inc.hub_events:
+        typ, d = e["details"].get("type"), e["details"]
+        if typ == "hub_restart":
+            causes.append(
+                Cause(
+                    "hub_restart_confirmed",
+                    "Home Hub restarted (confirmed by the Hub's own uptime)",
+                    GATEWAY,
+                    94,
+                    [e["title"], f"Failing at the same time: {_names(inc.failing) or 'none'}."],
+                    [
+                        "If you didn't restart it: check its power and placement (overheating), "
+                        "and whether Bell pushed a firmware update at this time.",
+                        "Repeated restarts: ask Bell to replace the Hub; this report is the "
+                        "evidence.",
+                    ],
+                )
+            )
+        elif typ == "wan_down":
+            fibre = "fibre" in e["title"].lower()
+            causes.append(
+                Cause(
+                    "bell_line_down",
+                    "Bell fibre link down (reported by the Home Hub)"
+                    if fibre
+                    else "Bell internet connection down (reported by the Home Hub)",
+                    ISP,
+                    96,
+                    [e["title"]]
+                    + ([f"Last error: {d['last_error']}"] if d.get("last_error") else []),
+                    [
+                        "Nothing at home caused this: call Bell with this report.",
+                        "If the Hub's fibre light was red, mention a possible line or "
+                        "outside-plant fault.",
+                    ],
+                )
+            )
+        elif typ == "ppp_reconnect":
+            causes.append(
+                Cause(
+                    "bell_session",
+                    "Bell ended the internet session; the Hub reconnected",
+                    ISP,
+                    88,
+                    [e["title"]]
+                    + ([f"Last error: {d['last_error']}"] if d.get("last_error") else []),
+                    [
+                        "Session drops with the fibre link up point at Bell's side "
+                        "(authentication or network maintenance). Report the times to Bell.",
+                    ],
+                )
+            )
+        elif typ == "weak_signal":
+            causes.append(
+                Cause(
+                    "weak_fibre",
+                    f"Weak fibre signal ({d.get('rx_dbm')} dBm): connector or fibre problem",
+                    ISP,
+                    72,
+                    [e["title"]],
+                    [
+                        "Check that the fibre cable into the Hub isn't bent tightly or pinched.",
+                        "Ask Bell to test the line: a weak signal causes drops that come and go.",
                     ],
                 )
             )

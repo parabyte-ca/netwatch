@@ -32,6 +32,8 @@ def build_report(
     *,
     scope: str = "all",
     now_ms: int | None = None,
+    hub_store=None,
+    bufferbloat_store=None,
 ) -> dict:
     now = now_ms or int(time.time() * 1000)
     end_ms = min(end_ms, now)
@@ -107,6 +109,10 @@ def build_report(
             f"{len(isp_incidents)} incidents attributed to the Bell network."
         )
 
+    line = _line_evidence(diag, hub_store, bufferbloat_store, start_ms, end_ms, local)
+    if line.get("hub_restarts") is not None and line["hub_restarts"] == 0:
+        ruled_out.append("The Home Hub did not restart during the period (its own uptime).")
+
     rows = [_incident_row(i, now, local) for i in incidents]
     report = {
         "generated_at": local(now),
@@ -131,6 +137,7 @@ def build_report(
         "patterns": diag.patterns(incidents),
         "targets": targets,
         "speeds": speeds,
+        "line": line,
         "ruled_out": ruled_out,
         "incidents": rows,
     }
@@ -251,6 +258,26 @@ def render_markdown(r: dict) -> str:
                 f"| {t['name']} | {t['host']} | {t['layer_label']} | {t['probes']} | "
                 f"{t['loss_pct']} % | {_ms(t['median_ms'])} | {_ms(t['p95_ms'])} |"
             )
+    ln = r.get("line") or {}
+    if ln:
+        lines += ["", "## Bell line (from the Home Hub) and latency under load", ""]
+        if ln.get("hub_restarts") is not None:
+            lines.append(f"- Home Hub restarts: {ln['hub_restarts']}")
+            lines.append(f"- Link down periods reported by the Hub: {ln['wan_down']}")
+            lines.append(f"- Internet session reconnects: {ln['ppp_reconnects']}")
+        if ln.get("rx_dbm_min") is not None:
+            lines.append(
+                f"- Fibre receive level: {ln['rx_dbm_avg']} dBm average, "
+                f"{ln['rx_dbm_min']} dBm lowest"
+            )
+        for e in ln.get("events", [])[:20]:
+            lines.append(f"  - {e['when']}: {e['title']}")
+        if ln.get("bufferbloat"):
+            b = ln["bufferbloat"]
+            lines.append(
+                f"- Latency under load: grade {b['grade']} (idle {_ms(b['idle_ms'])}, "
+                f"downloading {_ms(b['down_ms'])}, uploading {_ms(b['up_ms'])}; {b['when']})"
+            )
     if r["speeds"]:
         lines += [
             "",
@@ -266,6 +293,44 @@ def render_markdown(r: dict) -> str:
             )
     lines.append("")
     return "\n".join(lines)
+
+
+def _line_evidence(diag, hub_store, bufferbloat_store, start_ms, end_ms, local) -> dict:
+    """What the Home Hub itself reported, and the latest bufferbloat grade."""
+    out: dict = {}
+    if hub_store is not None:
+        hist = hub_store.history(start_ms, end_ms, limit=200_000)
+        if hist:
+            rx = [h["rx_dbm"] for h in hist if h["rx_dbm"] is not None]
+            hub_ev = diag.events.list(start_ms, end_ms, kinds=["hub"], limit=2000)
+            by_type: dict[str, int] = {}
+            for e in hub_ev:
+                t = e["details"].get("type")
+                by_type[t] = by_type.get(t, 0) + 1
+            out.update(
+                hub_restarts=by_type.get("hub_restart", 0),
+                wan_down=by_type.get("wan_down", 0),
+                ppp_reconnects=by_type.get("ppp_reconnect", 0),
+                rx_dbm_min=min(rx) if rx else None,
+                rx_dbm_avg=round(sum(rx) / len(rx), 2) if rx else None,
+                events=[
+                    {"when": local(e["start_ms"]), "title": e["title"]}
+                    for e in sorted(hub_ev, key=lambda e: e["start_ms"])
+                ],
+            )
+    if bufferbloat_store is not None:
+        tests = [
+            t
+            for t in bufferbloat_store.list(500)
+            if t["status"] == "ok" and start_ms <= t["ts_ms"] < end_ms
+        ]
+        if tests:
+            b = tests[0]
+            out["bufferbloat"] = {k: b[k] for k in ("grade", "idle_ms", "down_ms", "up_ms")} | {
+                "when": local(b["ts_ms"]),
+                "tests": len(tests),
+            }
+    return out
 
 
 def report_filename(r: dict) -> str:

@@ -41,6 +41,12 @@ function mockApi(calls: { url: string; method: string; body?: unknown }[]) {
       return json({ backups: [{ name: 'netwatch-20261017-v0.5.0.db', bytes: 1048576, modified: 1792270000 }], restore_pending: false, database_bytes: 2097152 });
     }
     if (url === '/api/admin/security-log') return json([]);
+    if (url === '/api/admin/hub') {
+      return json({ host: '', enabled: false, password_set: false, last_poll_ms: null, last_ok_ms: null, error: null, paused: null, snapshot: null, suggestion: '192.168.2.1' });
+    }
+    if (url === '/api/admin/hub/test') {
+      return json({ ok: true, method: 'sha512', snapshot: { model: 'Home Hub 4000', firmware: '2.13.1', uptime_s: 90000, optical: { status: 'Up', rx_dbm: -19.2, tx_dbm: 2.1 }, ppp: null, wan_ip: null } });
+    }
     if (url === '/api/admin/deco/test') return json({ ok: false, error: 'wrong owner password (9 attempts left before lockout)' });
     if (url === '/api/admin/deco') {
       const saved = method === 'PUT' ? JSON.parse(String(init?.body)) : { host: '', enabled: false };
@@ -98,7 +104,7 @@ describe('Admin', () => {
     render(<MemoryRouter><Admin /></MemoryRouter>);
     fireEvent.click(await screen.findByRole('button', { name: '192.168.2.10' }));
     fireEvent.change(screen.getByLabelText('Owner password'), { target: { value: 'pw' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
+    fireEvent.click(within(screen.getByRole('region', { name: 'Deco mesh' })).getByRole('button', { name: 'Test connection' }));
     expect(await screen.findByText(/Test failed: wrong owner password/)).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('Poll every 30 s'));
     fireEvent.click(within(screen.getByRole('region', { name: 'Deco mesh' })).getByRole('button', { name: 'Save' }));
@@ -107,5 +113,16 @@ describe('Admin', () => {
     expect(JSON.parse(String(put.body))).toEqual({ host: '192.168.2.10', enabled: true, password: 'pw' });
     expect(await screen.findByText(/Owner password \(saved\)/)).toBeInTheDocument();
     expect(screen.getByLabelText('Owner password')).toHaveValue('');
+  });
+
+  it('tests the Home Hub with the suggested gateway address', async () => {
+    const calls: { url: string; method: string; body?: unknown }[] = [];
+    mockApi(calls);
+    render(<MemoryRouter><Admin /></MemoryRouter>);
+    const hub = await screen.findByRole('region', { name: 'Home Hub' });
+    expect(within(hub).getByLabelText('Hub address')).toHaveValue('192.168.2.1');
+    fireEvent.change(within(hub).getByLabelText('Hub admin password'), { target: { value: 'pw' } });
+    fireEvent.click(within(hub).getByRole('button', { name: 'Test connection' }));
+    expect(await within(hub).findByText(/Connected \(SHA512\): Home Hub 4000 2\.13\.1, up 1 d 1 h 0 min, fibre -19\.2 dBm|Connected \(SHA512\): Home Hub 4000/)).toBeInTheDocument();
   });
 });

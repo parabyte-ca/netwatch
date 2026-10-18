@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { HopTable } from '../components/HopTable';
-import { api, type IperfServer, type IperfServerInput } from '../lib/api';
-import { fmtBps, fmtTime } from '../lib/format';
+import { api, type BufferbloatTest, type IperfServer, type IperfServerInput } from '../lib/api';
+import { fmtBps, fmtMs, fmtTime } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
 
 const input = 'rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-100 focus:border-sky-500 focus:outline-none';
@@ -203,10 +203,116 @@ function ThroughputSection() {
   );
 }
 
+const GRADE_STYLE: Record<string, string> = {
+  'A+': 'text-emerald-300 ring-emerald-500/50', A: 'text-emerald-300 ring-emerald-500/50',
+  B: 'text-lime-300 ring-lime-500/50', C: 'text-amber-300 ring-amber-500/50',
+  D: 'text-orange-300 ring-orange-500/50', F: 'text-rose-300 ring-rose-500/50',
+};
+
+const GRADE_HINT: Record<string, string> = {
+  'A+': 'Excellent: latency barely moves under load.',
+  A: 'Very good: calls and games stay smooth while the line is busy.',
+  B: 'Good: a big download may cause the occasional hiccup.',
+  C: 'Fair: video calls and games will lag while something downloads or uploads.',
+  D: 'Poor: the line becomes sluggish whenever it is busy.',
+  F: 'Bad: heavy use makes everything else nearly unusable.',
+};
+
+function BufferbloatSection() {
+  const { data, error, refresh } = usePolling(api.bufferbloat, 5_000);
+  const [err, setErr] = useState<string | null>(null);
+  const latest = data?.tests.find((t) => t.status === 'ok');
+  const last = data?.tests[0];
+  const run = async () => {
+    setErr(null);
+    try {
+      await api.runBufferbloat();
+      await refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const phase = (label: string, ms: number | null | undefined, base?: number | null) => (
+    <div className="rounded-md bg-slate-950 p-2 ring-1 ring-slate-800">
+      <div className="text-[11px] uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="text-lg tabular-nums text-slate-100">{fmtMs(ms ?? null)}</div>
+      {base != null && ms != null && <div className="text-xs text-slate-400">+{fmtMs(ms - base)}</div>}
+    </div>
+  );
+  return (
+    <Section title="Latency under load (bufferbloat)">
+      <div className="space-y-4 text-sm">
+        <p className="text-xs text-slate-400">
+          Pings 1.1.1.1 while the line is idle, then while it is saturated downloading and uploading (about 30 s, a few GB on
+          gigabit fibre). A big rise means the Hub's buffers fill up under load, which is what makes calls stutter while
+          something downloads. {data?.nightly ? 'Runs nightly after the update window.' : 'Nightly runs are off (Admin → settings).'}
+        </p>
+        <div className="flex flex-wrap items-center gap-4">
+          {latest?.grade && (
+            <div className={`flex h-16 w-16 items-center justify-center rounded-xl bg-slate-950 text-3xl font-bold ring-2 ${GRADE_STYLE[latest.grade] ?? ''}`} aria-label={`Grade ${latest.grade}`}>
+              {latest.grade}
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            {latest ? (
+              <>
+                <p className="text-slate-200">{GRADE_HINT[latest.grade ?? ''] ?? ''}</p>
+                <p className="text-xs text-slate-500">
+                  {fmtTime(latest.ts_ms)} · ↓ {fmtBps(latest.down_bps)} · ↑ {fmtBps(latest.up_bps)} · {latest.trigger}
+                </p>
+              </>
+            ) : (
+              <p className="text-slate-400">No test yet.</p>
+            )}
+          </div>
+          <button className={`${btn} bg-sky-600 text-white hover:bg-sky-500`} disabled={!data || data.running} onClick={() => void run()}>
+            {data?.running ? 'Testing… (30 s)' : 'Run now'}
+          </button>
+        </div>
+        {latest && (
+          <div className="grid grid-cols-3 gap-2">
+            {phase('Idle', latest.idle_ms)}
+            {phase('Downloading', latest.down_ms, latest.idle_ms)}
+            {phase('Uploading', latest.up_ms, latest.idle_ms)}
+          </div>
+        )}
+        {last?.status === 'error' && <p className="text-xs text-rose-300">Last test failed: {last.error}</p>}
+        {(err || error) && <p className="text-xs text-rose-400">{err || error}</p>}
+        {data && data.tests.length > 1 && <BloatHistory tests={data.tests} />}
+      </div>
+    </Section>
+  );
+}
+
+function BloatHistory({ tests }: { tests: BufferbloatTest[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead className="text-left uppercase tracking-wide text-slate-500">
+          <tr><th className="py-1 pr-3">When</th><th className="pr-3">Grade</th><th className="pr-3">Idle</th><th className="pr-3">+Down</th><th className="pr-3">+Up</th><th>Speed ↓/↑</th></tr>
+        </thead>
+        <tbody className="divide-y divide-slate-800">
+          {tests.slice(0, 14).map((t) => (
+            <tr key={t.id}>
+              <td className="py-1 pr-3 text-slate-400">{fmtTime(t.ts_ms)}</td>
+              <td className={`pr-3 font-semibold ${GRADE_STYLE[t.grade ?? '']?.split(' ')[0] ?? 'text-slate-500'}`}>{t.grade ?? '—'}</td>
+              <td className="pr-3 tabular-nums">{fmtMs(t.idle_ms)}</td>
+              <td className="pr-3 tabular-nums">{t.down_ms != null && t.idle_ms != null ? fmtMs(t.down_ms - t.idle_ms) : '—'}</td>
+              <td className="pr-3 tabular-nums">{t.up_ms != null && t.idle_ms != null ? fmtMs(t.up_ms - t.idle_ms) : '—'}</td>
+              <td className="tabular-nums text-slate-400">{t.status === 'ok' ? `${fmtBps(t.down_bps)} / ${fmtBps(t.up_bps)}` : t.error}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function Diagnostics() {
   return (
     <div className="space-y-5">
       <h1 className="text-xl font-semibold text-white">Diagnostics</h1>
+      <BufferbloatSection />
       <NicSection />
       <PathSection />
       <ThroughputSection />

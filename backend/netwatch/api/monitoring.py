@@ -244,3 +244,24 @@ async def list_iperf_tests(
     return await asyncio.to_thread(
         request.app.state.throughput_store.list_tests, server_id=server_id, limit=limit
     )
+
+
+# ── bufferbloat ───────────────────────────────────────────────────────────────
+
+
+@router.get("/bufferbloat")
+async def bufferbloat(request: Request) -> dict:
+    st = request.app.state
+    tests = await asyncio.to_thread(st.bufferbloat_store.list, 60)
+    return {
+        "running": st.bufferbloat.running,
+        "nightly": st.settings.bufferbloat_nightly,
+        "tests": tests,
+    }
+
+
+@router.post("/bufferbloat/run", status_code=status.HTTP_202_ACCEPTED)
+async def run_bufferbloat(request: Request) -> dict:
+    if not request.app.state.bufferbloat.start_now():
+        raise HTTPException(status.HTTP_409_CONFLICT, "a bufferbloat test is already running")
+    return {"started": True}

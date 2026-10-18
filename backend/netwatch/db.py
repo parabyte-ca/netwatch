@@ -237,6 +237,64 @@ device_ips = Table(
     sqlite_with_rowid=False,
 )
 
+# Per-device traffic from the Deco API (rates in bits/s). One row per MAC and minute; older
+# data is kept as hourly byte totals.
+device_traffic = Table(
+    "device_traffic",
+    metadata,
+    Column("mac", String(17), primary_key=True),
+    Column("bucket_ts", Integer, primary_key=True),  # epoch seconds, minute aligned
+    Column("down_bps", Float, nullable=False),  # average over the polls in the minute
+    Column("up_bps", Float, nullable=False),
+    Column("down_peak", Float, nullable=False),
+    Column("up_peak", Float, nullable=False),
+    Column("n", Integer, nullable=False),
+    sqlite_with_rowid=False,
+)
+
+device_traffic_1h = Table(
+    "device_traffic_1h",
+    metadata,
+    Column("mac", String(17), primary_key=True),
+    Column("bucket_ts", Integer, primary_key=True),  # epoch seconds, hour aligned
+    Column("down_bytes", Float, nullable=False),
+    Column("up_bytes", Float, nullable=False),
+    Column("down_peak", Float, nullable=False),
+    Column("up_peak", Float, nullable=False),
+    sqlite_with_rowid=False,
+)
+
+# Latency under load ("bufferbloat"): idle vs loaded latency, graded A+..F.
+bufferbloat_tests = Table(
+    "bufferbloat_tests",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("ts_ms", Integer, nullable=False),
+    Column("trigger", String(16), nullable=False),  # scheduled | manual
+    Column("status", String(8), nullable=False),  # ok | error
+    Column("grade", String(2)),
+    Column("idle_ms", Float),
+    Column("down_ms", Float),  # median latency while downloading
+    Column("up_ms", Float),
+    Column("down_bps", Float),
+    Column("up_bps", Float),
+    Column("error", String(200)),
+    Column("details", Text, nullable=False, default="{}"),
+)
+
+# Home Hub readings, one row per poll (fibre optical levels, uptime, WAN state).
+hub_stats = Table(
+    "hub_stats",
+    metadata,
+    Column("ts_ms", Integer, primary_key=True),
+    Column("uptime_s", Integer),
+    Column("wan_up", Boolean),
+    Column("rx_dbm", Float),
+    Column("tx_dbm", Float),
+    Column("details", Text, nullable=False, default="{}"),
+    sqlite_with_rowid=False,
+)
+
 Index("ix_sessions_user", sessions.c.user_id)
 Index("ix_events_start", events.c.start_ms)
 Index("ix_events_target", events.c.target_id)
@@ -249,6 +307,7 @@ Index("ix_throughput_tests_ts", throughput_tests.c.ts_ms)
 Index("ix_devices_last_seen", devices.c.last_seen_ms)
 Index("ix_devices_target", devices.c.target_id)
 Index("ix_devices_merged", devices.c.merged_into)
+Index("ix_bufferbloat_ts", bufferbloat_tests.c.ts_ms)
 Index("ix_events_open", events.c.start_ms, sqlite_where=events.c.end_ms.is_(None))
 
 
