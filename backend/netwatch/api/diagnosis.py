@@ -90,12 +90,17 @@ async def diagnosis(
     st = request.app.state
     start_ms, end_ms = _range(start, end, 7)
     now = int(time.time() * 1000)
-    incidents = await asyncio.to_thread(st.diagnoser.incidents, start_ms, end_ms, now)
+
+    def build() -> tuple[list, list]:
+        incidents = st.diagnoser.incidents(start_ms, end_ms, now)
+        return st.diagnoser.patterns(incidents), [i.as_dict(now) for i in incidents[-300:][::-1]]
+
+    patterns, incidents = await asyncio.to_thread(build)
     return {
         "now_ms": now,
         "topology": await asyncio.to_thread(_topology, request),
-        "patterns": st.diagnoser.patterns(incidents),
-        "incidents": [i.as_dict(now) for i in reversed(incidents)][:300],
+        "patterns": patterns,
+        "incidents": incidents,
     }
 
 

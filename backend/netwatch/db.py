@@ -237,17 +237,19 @@ device_ips = Table(
     sqlite_with_rowid=False,
 )
 
-Index("ix_samples_ts", samples.c.ts_ms)
-Index("ix_rollup_1m_ts", rollup_1m.c.bucket_ts)
 Index("ix_sessions_user", sessions.c.user_id)
 Index("ix_events_start", events.c.start_ms)
 Index("ix_events_target", events.c.target_id)
 Index("ix_nic_stats_ts", nic_stats.c.bucket_ts)
 Index("ix_path_tests_ts", path_tests.c.ts_ms)
 Index("ix_path_tests_host", path_tests.c.host)
+Index("ix_path_tests_event", path_tests.c.event_id)
+Index("ix_path_tests_target_ts", path_tests.c.target_id, path_tests.c.ts_ms)
 Index("ix_throughput_tests_ts", throughput_tests.c.ts_ms)
 Index("ix_devices_last_seen", devices.c.last_seen_ms)
-Index("ix_device_ips_ip", device_ips.c.ip)
+Index("ix_devices_target", devices.c.target_id)
+Index("ix_devices_merged", devices.c.merged_into)
+Index("ix_events_open", events.c.start_ms, sqlite_where=events.c.end_ms.is_(None))
 
 
 def _set_pragmas(dbapi_conn, _record) -> None:

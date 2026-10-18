@@ -49,6 +49,7 @@ log = logging.getLogger(__name__)
 
 ACTIVE_KEY = "discovery_active"
 LEARNING_KEY = "discovery_learning_until_ms"
+PROBE_MAC_KEY = "discovery_probe_mac"
 LEARNING_MS = 3600_000  # no "new device" events during the first hour (initial inventory)
 NEIGH_EVERY_MS = 30_000
 DNS_NAMES = ("www.google.com", "www.cloudflare.com", "www.bell.ca", "github.com")
@@ -153,6 +154,27 @@ class DiscoveryService:
     def set_active(self, enabled: bool) -> None:
         self.store.kv_set(ACTIVE_KEY, bool(enabled))
 
+    def _probe_mac(self) -> str:
+        """One made-up client address for the DHCP probe, kept for good: a fresh one per scan
+        would leave a phantom client in the router's list every hour."""
+        m = self.store.kv_get(PROBE_MAC_KEY, None)
+        if not isinstance(m, str):
+            m = random_private_mac()
+            self.store.kv_set(PROBE_MAC_KEY, m)
+        return m
+
+    def _on_local_network(self, ip: str) -> bool:
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        nets = list(self.networks()[0])
+        if self.local:
+            nets.append(self.local.network)
+        if not nets:  # interface unknown: at least stay on private addresses
+            return addr.is_private and not addr.is_loopback and not addr.is_link_local
+        return any(addr in n for n in nets)
+
     def networks(self) -> tuple[list[ipaddress.IPv4Network], list[str]]:
         return scan_networks(self.settings.discovery_subnet_list, self.local)
 
@@ -225,7 +247,11 @@ class DiscoveryService:
         obs: list[Observation] = []
         own = self.own_macs()
         for ts, frame, outgoing in frames:
-            parsed = parse_frame(frame, ts, outgoing=outgoing)
+            try:
+                parsed = parse_frame(frame, ts, outgoing=outgoing)
+            except Exception:  # a frame no parser expected must not drop the whole batch
+                self.counts["unparsable"] += 1
+                continue
             for o in parsed:
                 self.counts[o.proto] += 1
             # What this host sends describes only itself (the DHCP probe carries a made-up
@@ -236,7 +262,10 @@ class DiscoveryService:
             obs.extend(self.neighbours(now))
         for o in obs:
             self.anomalies.observe(o)
+        before = self.inventory.flood_dropped
         changes = self.inventory.apply(obs)
+        if self.inventory.flood_dropped > before:
+            self.anomalies.mac_flood(self.inventory.flood_dropped - before, now)
         self.anomalies.tick(now)
         return changes
 
@@ -272,7 +301,9 @@ class DiscoveryService:
                 return
             label = device_label(fresh)
             new_ip = fresh["last_ip"]
-            self.anomalies.ip_changed(fresh["mac"], label, ch.old_ip or "", new_ip or "", now)
+            await asyncio.to_thread(
+                self.anomalies.ip_changed, fresh["mac"], label, ch.old_ip or "", new_ip or "", now
+            )
             primary = fresh
             if fresh.get("merged_into"):
                 primary = await asyncio.to_thread(self.devices.get, fresh["merged_into"]) or fresh
@@ -283,6 +314,11 @@ class DiscoveryService:
         """Keep a monitored device's ping target pointing at its current address."""
         target = await asyncio.to_thread(self.store.get_target, device["target_id"])
         if target is None or target["host"] == new_ip:
+            return
+        if not self._on_local_network(new_ip):
+            # A spoofed packet can claim any address for a device; only follow it within the
+            # networks NetWatch watches.
+            log.warning("not following device to an outside address", extra={"ip": new_ip})
             return
         await asyncio.to_thread(self.store.update_target, target["id"], {"host": new_ip})
         await asyncio.to_thread(
@@ -350,7 +386,8 @@ class DiscoveryService:
             except OSError as exc:
                 errors.append(f"ARP sweep: {exc}")
             try:
-                probe = dhcp_discover(own_mac, secrets.randbits(32), random_private_mac())
+                probe_mac = await asyncio.to_thread(self._probe_mac)
+                probe = dhcp_discover(own_mac, secrets.randbits(32), probe_mac)
                 await asyncio.to_thread(self._send_frames, [probe])
             except OSError as exc:
                 errors.append(f"DHCP probe: {exc}")
@@ -402,12 +439,17 @@ class DiscoveryService:
             and now - r["last_seen_ms"] < 86_400_000
         ][:limit]  # fmt: skip
         found: list[Observation] = []
-        for r in todo:
-            status, names = await self.dns_query(
-                gw, dns.reversename.from_address(r["last_ip"]).to_text(), "PTR"
-            )
+        sem = asyncio.Semaphore(8)  # a dead resolver must not hold the scan for minutes
+
+        async def lookup(r: dict) -> None:
+            async with sem:
+                status, names = await self.dns_query(
+                    gw, dns.reversename.from_address(r["last_ip"]).to_text(), "PTR"
+                )
             if status == "ok" and names:
                 found.append(Observation(now, "rdns", r["mac"], info={"ptr": names[0][:64]}))
+
+        await asyncio.gather(*(lookup(r) for r in todo))
         if found:
             await asyncio.to_thread(self.inventory.apply, found)
         return len(found)

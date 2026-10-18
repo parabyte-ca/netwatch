@@ -9,6 +9,8 @@ import time
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..services.diagnosis import MERGE_GAP_MS
+
 router = APIRouter(prefix="/api/map")
 
 LAYOUT_KEY = "map_layout"
@@ -25,10 +27,19 @@ def _incident(st, incident: str | None, event_id: int | None, now: int):
         start = int(incident.removeprefix("i"))
     except ValueError:
         return None
-    for inc in st.diagnoser.incidents(start - 1, start + 1, now):
-        if inc.start_ms == start:
-            return inc
-    return None
+    # Failures merged into the incident later start after it: widen the window until the
+    # incident found no longer grows, so it matches what the Diagnosis page shows.
+    window_end = start + 1
+    for _ in range(20):
+        match = next((i for i in st.diagnoser.incidents(start - 1, window_end, now)
+                      if i.start_ms == start), None)  # fmt: skip
+        if match is None:
+            return None
+        reach = (match.end_ms or now) + MERGE_GAP_MS + 1
+        if reach <= window_end or match.end_ms is None:
+            return match
+        window_end = reach
+    return match
 
 
 @router.get("")

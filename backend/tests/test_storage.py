@@ -60,9 +60,15 @@ def test_rollup_pending_aggregates_complete_minutes_only(store):
     assert rows[0]["count"] == 10 and rows[0]["lost"] == 0 and rows[0]["min"] == 10.0
     assert rows[1]["count"] == 1 and rows[1]["lost"] == 1 and rows[1]["median"] is None
     assert store.kv_get(WATERMARK_KEY) == m2
-    # Re-running is a no-op; advancing time picks up minute 2.
-    assert store.rollup_pending(m2 + 20, raw_retention_days=7) == 0
-    assert store.rollup_pending(m2 + 80, raw_retention_days=7) == 1
+    # Re-running only rewrites the recent minutes (idempotent); advancing time adds minute 2.
+    assert store.rollup_pending(m2 + 20, raw_retention_days=7) == 2
+    assert store.rollups(t["id"], m0, m2 + 60) == rows
+    assert store.rollup_pending(m2 + 80, raw_retention_days=7) == 3
+    # A probe that started in minute 1 but timed out and was written late is still counted.
+    store.insert_samples([ProbeResult(t["id"], (m1 + 50) * 1000, False, error="timeout")])
+    store.rollup_pending(m2 + 90, raw_retention_days=7)
+    late = store.rollups(t["id"], m1, m1 + 60)[0]
+    assert late["count"] == 2 and late["lost"] == 2
 
 
 def test_purge_respects_retention(store):
@@ -103,3 +109,36 @@ def test_backup_database(store, tmp_path):
         assert conn.execute("SELECT count(*) FROM samples").fetchone() == (1,)
     finally:
         conn.close()
+
+
+def test_sql_rollup_merge_matches_python(store):
+    import random
+    from collections import defaultdict
+
+    from netwatch.services.series import build_series
+    from netwatch.services.stats import merge
+
+    t = make_target(store)
+    rnd = random.Random(7)
+    base = _minute(0)
+    store.insert_samples(
+        ProbeResult(t["id"], (base + i * 7) * 1000, ok := rnd.random() > 0.1,
+                    rnd.uniform(1, 50) if ok else None, error=None if ok else "x")
+        for i in range(3000)
+    )  # fmt: skip
+    store.kv_set(WATERMARK_KEY, base)
+    store.rollup_pending(base + 3000 * 7 + 120, raw_retention_days=7)
+    rows = store.rollups(t["id"], base, base + 90_000)
+    approx = lambda a, b: all(  # noqa: E731
+        (a[k] is None and b[k] is None) or abs(a[k] - b[k]) < 1e-3 for k in a
+    )
+    assert approx(store.rollup_merged(t["id"], base, base + 90_000), merge(rows))
+    grouped = defaultdict(list)
+    for r in rows:
+        grouped[(r["bucket_ts"] - base) // 600 * 600 + base].append(r)
+    sql = store.rollup_buckets(t["id"], base, base + 90_000, 600)
+    assert sql.keys() == grouped.keys()
+    assert all(approx(sql[k], merge(v)) for k, v in grouped.items())
+    s = build_series(store, t, base, base + 30 * 86400, now=base + 3000 * 7 + 200,
+                     raw_retention_days=7)  # fmt: skip
+    assert s["source"] == "rollup" and s["summary"]["count"] == 3000

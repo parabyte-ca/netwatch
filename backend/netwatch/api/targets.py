@@ -157,7 +157,12 @@ def export(
     start, end = _time_range(start, end, 86400)
     if end - start > MAX_EXPORT_RANGE_S:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "range too large (max 31 days)")
-    rows = store.raw_samples(target_id, start * 1000, end * 1000)
+
+    def rows() -> Iterator[tuple]:
+        # An hour at a time: a month at 1 s would otherwise sit in memory (millions of rows).
+        for t0 in range(start * 1000, end * 1000, 3_600_000):
+            yield from store.raw_samples(target_id, t0, min(t0 + 3_600_000, end * 1000))
+
     safe = "".join(c if c.isalnum() else "-" for c in target["name"]).strip("-") or "target"
     filename = f"netwatch-{safe}-{start}-{end}.{fmt}"
 
@@ -165,7 +170,7 @@ def export(
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(["ts_ms", "rtt_ms", "ok", "error"])
-        for ts_ms, rtt, ok, err in rows:
+        for ts_ms, rtt, ok, err in rows():
             w.writerow([ts_ms, "" if rtt is None else rtt, int(ok), err or ""])
             if buf.tell() > 65536:
                 yield buf.getvalue()
@@ -175,7 +180,7 @@ def export(
 
     def as_json() -> Iterator[str]:
         yield json.dumps({"target": target, "start": start, "end": end})[:-1] + ', "samples": ['
-        for i, (ts_ms, rtt, ok, err) in enumerate(rows):
+        for i, (ts_ms, rtt, ok, err) in enumerate(rows()):
             yield ("," if i else "") + json.dumps(
                 {"ts_ms": ts_ms, "rtt_ms": rtt, "ok": bool(ok), "error": err}
             )

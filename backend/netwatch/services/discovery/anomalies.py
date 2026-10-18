@@ -27,9 +27,15 @@ IP_CHANGE_THRESHOLD = 3
 STORM_WINDOW_S = 10
 STORM_QUIET_S = 30
 COOLDOWN_MS = 3600_000
+MAX_PER_TYPE_PER_HOUR = 10  # beyond this, findings of one type are dropped (flood guard)
+PRUNE_EVERY_MS = 60_000
 GATEWAY_KEY = "discovery_gateway"
 
 HINTS = {
+    "mac_flood": "Many never-seen hardware addresses appeared at once. Something on the "
+    "network is sending packets with made-up addresses (a misbehaving or compromised device, "
+    "or a MAC-flooding tool). NetWatch stopped recording new devices for the moment; look for "
+    "the culprit by unplugging or disconnecting devices until it stops.",
     "duplicate_ip": "Two devices answer for the same address. Usually a static IP inside the "
     "DHCP range, or a device that kept an old lease. Traffic to that address flips between them.",
     "dhcp_server": "More than one DHCP server is handing out addresses. With Decos in AP mode "
@@ -99,6 +105,9 @@ class AnomalyDetector:
         self._storm_quiet_since: int | None = None
         self._storm_peak = 0.0
         self._last_emit: dict[str, int] = {}
+        self._type_emits: dict[str, deque[int]] = defaultdict(deque)
+        self._gateway: tuple[str, str] | None = None  # (ip, mac), cached from kv
+        self._last_prune_ms = 0
         self.suppress_storm_until_ms = 0  # set while NetWatch's own ARP sweep runs
         self.findings: deque[Finding] = deque(maxlen=50)
 
@@ -108,6 +117,13 @@ class AnomalyDetector:
         key = f"{f.type}:{f.key}"
         if ts_ms - self._last_emit.get(key, -(10**15)) < cooldown_ms:
             return False
+        # Keys can be attacker-chosen (spoofed addresses), so cap each type as a whole too.
+        recent = self._type_emits[f.type]
+        while recent and recent[0] <= ts_ms - 3600_000:
+            recent.popleft()
+        if len(recent) >= MAX_PER_TYPE_PER_HOUR:
+            return False
+        recent.append(ts_ms)
         self._last_emit[key] = ts_ms
         self.findings.append(f)
         self.events.instant(
@@ -164,17 +180,23 @@ class AnomalyDetector:
         if not gw or obs.ip != gw:
             return
         # Remembered per gateway address: a new router on a new address is a fresh baseline.
-        stored = self.kv_get(GATEWAY_KEY, None)
-        known = stored.get("mac") if isinstance(stored, dict) and stored.get("ip") == gw else None
-        if known is None:
-            self.kv_set(GATEWAY_KEY, {"ip": gw, "mac": obs.mac})
-            return
+        # Cached in memory: this runs for every ARP packet from the gateway.
+        if self._gateway is None or self._gateway[0] != gw:
+            stored = self.kv_get(GATEWAY_KEY, None)
+            if isinstance(stored, dict) and stored.get("ip") == gw and stored.get("mac"):
+                self._gateway = (gw, stored["mac"])
+            else:
+                self._gateway = (gw, obs.mac)
+                self.kv_set(GATEWAY_KEY, {"ip": gw, "mac": obs.mac})
+                return
+        known = self._gateway[1]
         if obs.mac == known:
             return
+        self._gateway = (gw, obs.mac)
         self._emit(
             Finding(
                 "gateway_mac",
-                f"{known}>{obs.mac}",
+                gw,  # per gateway, not per address pair: spoofed addresses can't multiply it
                 "critical",
                 f"Gateway {gw} changed hardware address",
                 {
@@ -260,7 +282,36 @@ class AnomalyDetector:
 
     # ── periodic: ARP storm open/close ───────────────────────────────────────
 
+    def mac_flood(self, dropped: int, now_ms: int) -> None:
+        self._emit(
+            Finding(
+                "mac_flood",
+                "flood",
+                "warning",
+                f"Flood of new hardware addresses: {dropped} ignored",
+                {"ignored": dropped},
+            ),
+            now_ms,
+        )
+
+    def _prune(self, now_ms: int) -> None:
+        """Per-address state is keyed by values anyone on the LAN can make up: drop old keys."""
+        self._last_prune_ms = now_ms
+        for ip in [ip for ip, c in self._claims.items()
+                   if not c or now_ms - max(c.values()) > DUPLICATE_WINDOW_MS]:  # fmt: skip
+            del self._claims[ip]
+        for d, window in (
+            (self._joins, DHCP_JOIN_WINDOW_MS),
+            (self._ip_changes, IP_CHANGE_WINDOW_MS),
+        ):
+            for k in [k for k, q in d.items() if not q or now_ms - q[-1] > window]:
+                del d[k]
+        for k in [k for k, t in self._last_emit.items() if now_ms - t > 24 * 3600_000]:
+            del self._last_emit[k]
+
     def tick(self, now_ms: int) -> None:
+        if now_ms - self._last_prune_ms >= PRUNE_EVERY_MS:
+            self._prune(now_ms)
         now_s = now_ms // 1000
         for sec in [s for s in self._arp_secs if s < now_s - 60]:
             self._arp_secs.pop(sec, None)

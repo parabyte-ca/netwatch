@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
+from collections import OrderedDict, deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
@@ -14,7 +16,11 @@ from ...db import device_ips, devices
 from .classify import classify, is_randomised, mergeable_name, vendor_for
 from .packets import Observation, usable_ip
 
+log = logging.getLogger(__name__)
+
 ONLINE_MS = 15 * 60_000  # seen within this long = online
+MAX_CACHE = 4096  # devices kept in memory (least recently seen dropped first)
+MAX_NEW_PER_MINUTE = 30  # new devices recorded per minute at most (flood guard)
 WRITE_EVERY_MS = 60_000  # last-seen timestamps are written at most this often per device
 _MAX_LIST = 12
 
@@ -209,8 +215,10 @@ class Inventory:
         self.store = store
         self.own_macs = own_macs
         self.gateway_ip = gateway_ip
-        self._cache: dict[str, _Cached] = {}
+        self._cache: OrderedDict[str, _Cached] = OrderedDict()  # LRU, bounded
         self._lock = threading.Lock()
+        self._new: deque[int] = deque()  # creation times, for the flood guard
+        self.flood_dropped = 0  # observations of new MACs ignored by the flood guard
 
     def forget(self, mac: str | None = None) -> None:
         """Drop cached state (after an API edit) so the next observation reloads the row."""
@@ -224,16 +232,28 @@ class Inventory:
         changes: list[Change] = []
         with self._lock:
             for obs in observations:
-                changes.extend(self._apply(obs))
+                try:
+                    changes.extend(self._apply(obs))
+                except Exception:  # one odd packet must not cost the rest of the batch
+                    log.exception("could not apply observation", extra={"mac": obs.mac})
         return changes
 
-    def _load(self, mac: str, ts_ms: int) -> tuple[_Cached, bool]:
+    def _load(self, mac: str, ts_ms: int) -> tuple[_Cached | None, bool]:
         c = self._cache.get(mac)
         if c is not None:
+            self._cache.move_to_end(mac)
             return c, False
         row = self.store.get_by_mac(mac)
         created = False
         if row is None:
+            # Flood guard: a device sending packets with made-up addresses would otherwise
+            # create a row (and a "new device" event) per packet.
+            while self._new and self._new[0] <= ts_ms - 60_000:
+                self._new.popleft()
+            if len(self._new) >= MAX_NEW_PER_MINUTE:
+                self.flood_dropped += 1
+                return None, False
+            self._new.append(ts_ms)
             vendor = vendor_for(mac)
             values = {
                 "mac": mac,
@@ -252,10 +272,14 @@ class Inventory:
             created = True
         c = _Cached(row["id"], row.get("last_ip"), row["last_seen_ms"], row)
         self._cache[mac] = c
+        while len(self._cache) > MAX_CACHE:
+            self._cache.popitem(last=False)
         return c, created
 
     def _apply(self, obs: Observation) -> list[Change]:
         c, created = self._load(obs.mac, obs.ts_ms)
+        if c is None:
+            return []
         row = c.row
         det = dict(row.get("details") or {})
         upd: dict = {}
@@ -280,7 +304,8 @@ class Inventory:
             det["dhcp_server"] = True
         elif obs.proto == "mdns":
             names = info.get("names") or []
-            if names and row.get("mdns_name") not in names:
+            # Compare as stored (64 chars): a longer name must not rewrite the row every packet.
+            if names and row.get("mdns_name") not in {n[:64] for n in names}:
                 upd["mdns_name"] = names[0][:64]
             add_to("services", info.get("services") or [])
             if info.get("model") and info["model"] != row.get("model"):

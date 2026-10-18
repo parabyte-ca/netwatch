@@ -11,13 +11,19 @@ import { fmtAxisMs, fmtMs, fmtPct } from '../lib/format';
 export function SmokeChart({ data, height = 320 }: { data: SeriesResponse; height?: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const plot = useRef<uPlot | null>(null);
+  // The chart is built once (per height) and then only fed new data: polling every few
+  // seconds must not tear down and rebuild the canvas.
+  const dataRef = useRef(data);
+  dataRef.current = data;
+
+  useEffect(() => {
+    plot.current?.setData(align(data));
+  }, [data]);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const s = data.series;
-    const lossBars = s.loss_pct.map((v) => (v ? v : null));
-    const aligned: uPlot.AlignedData = [s.ts, s.p95, s.p75, s.median, s.p25, s.p5, lossBars];
+    const aligned = align(dataRef.current);
     const axisStyle = { stroke: '#94a3b8', grid: { stroke: '#1e293b' }, ticks: { stroke: '#334155' } };
 
     const opts: uPlot.Options = {
@@ -25,7 +31,7 @@ export function SmokeChart({ data, height = 320 }: { data: SeriesResponse; heigh
       height,
       cursor: { drag: { x: true, y: false } },
       scales: {
-        x: { time: true, range: () => [data.start, data.end] },
+        x: { time: true, range: () => [dataRef.current.start, dataRef.current.end] },
         ms: { auto: true, range: (_u, _min, max) => [0, Math.max(1, (max ?? 1) * 1.1)] },
         loss: { range: [0, 100] },
       },
@@ -68,6 +74,7 @@ export function SmokeChart({ data, height = 320 }: { data: SeriesResponse; heigh
         drawClear: [
           (u) => {
             const ctx = u.ctx;
+            const data = dataRef.current;
             for (const ev of data.events ?? []) {
               const startS = Math.max(ev.start_ms / 1000, data.start);
               const endS = Math.min((ev.end_ms ?? Date.now()) / 1000, data.end);
@@ -94,7 +101,13 @@ export function SmokeChart({ data, height = 320 }: { data: SeriesResponse; heigh
       plot.current?.destroy();
       plot.current = null;
     };
-  }, [data, height]);
+  }, [height]);
 
   return <div ref={ref} className="w-full" data-testid="smoke-chart" />;
+}
+
+function align(data: SeriesResponse): uPlot.AlignedData {
+  const s = data.series;
+  const lossBars = s.loss_pct.map((v) => (v ? v : null));
+  return [s.ts, s.p95, s.p75, s.median, s.p25, s.p5, lossBars];
 }

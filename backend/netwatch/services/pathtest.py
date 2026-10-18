@@ -133,6 +133,7 @@ class PathStore:
         *,
         target_id: int | None = None,
         event_id: int | None = None,
+        event_ids: list[int] | None = None,
         start_ms: int | None = None,
         end_ms: int | None = None,
         limit: int = 50,
@@ -142,6 +143,8 @@ class PathStore:
             stmt = stmt.where(path_tests.c.target_id == target_id)
         if event_id is not None:
             stmt = stmt.where(path_tests.c.event_id == event_id)
+        if event_ids is not None:
+            stmt = stmt.where(path_tests.c.event_id.in_(event_ids))
         if start_ms is not None:
             stmt = stmt.where(path_tests.c.ts_ms >= start_ms)
         if end_ms is not None:

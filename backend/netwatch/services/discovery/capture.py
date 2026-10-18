@@ -132,7 +132,8 @@ class Sniffer:
             return
         while not self._stop.is_set():
             try:
-                frame, addr = sock.recvfrom(4096)
+                # Full frames: large mDNS answers (Apple devices) exceed 4 KiB.
+                frame, addr = sock.recvfrom(65535)
             except TimeoutError:
                 continue
             except OSError as exc:
