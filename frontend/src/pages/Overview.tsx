@@ -4,6 +4,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { api, type State, type Target, type TargetStatus } from '../lib/api';
 import { fmtAgo, fmtMs, fmtPct, GROUP_LABEL, GROUP_ORDER, STATE_STYLE } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
+import { ScoreRing } from '../components/ScoreRing';
 import { TopTalkers } from '../components/TopTalkers';
 
 function Tile({ t, s, now }: { t: Target; s: TargetStatus | undefined; now: number }) {
@@ -48,6 +49,7 @@ export function Overview() {
   const targets = usePolling(api.targets, 30_000);
   const status = usePolling(api.status, 3_000);
   const active = usePolling(api.activeEvents, 5_000);
+  const score = usePolling(() => api.score(7), 300_000);
   const recent = usePolling(() => api.events({ start: Math.floor(Date.now() / 1000) - 86_400, limit: 6, kind: ['outage', 'degraded', 'nic_link', 'nic_speed', 'nic_errors'] }), 30_000);
 
   if (targets.error) return <p className="text-rose-400">Could not load targets: {targets.error}</p>;
@@ -75,6 +77,12 @@ export function Overview() {
           down.length ? 'bg-rose-950/40 ring-rose-800' : degraded.length ? 'bg-amber-950/30 ring-amber-800/60' : 'bg-emerald-950/30 ring-emerald-800/50'
         }`}
       >
+        {typeof score.data?.score === 'number' && (
+          <Link to="/health" className="float-right ml-3 flex items-center gap-2 rounded-md px-1 text-xs text-slate-300 hover:bg-slate-900/40" title="Network health score, last 7 days">
+            <ScoreRing score={score.data.score} size={48} />
+            <span className="hidden sm:inline">{score.data.label}<br /><span className="text-slate-500">7-day health</span></span>
+          </Link>
+        )}
         <div className="text-lg font-medium text-white">
           {down.length
             ? `${down.length} target${down.length > 1 ? 's' : ''} down`

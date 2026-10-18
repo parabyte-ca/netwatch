@@ -27,6 +27,7 @@ from .api import (
     health,
     monitoring,
     netmap,
+    score,
     system,
     targets,
     traffic,
@@ -44,12 +45,14 @@ from .services.discovery.inventory import DeviceStore
 from .services.discovery.service import DiscoveryService
 from .services.events import MONITOR, SECURITY, EventLog, IncidentRecorder, startup_events
 from .services.exposure import ExposureScanner, ExposureStore
+from .services.health import HealthService
 from .services.hub.service import HubService, HubStore
 from .services.metrics import Metrics
 from .services.netinfo import default_route
 from .services.netmap import NetMap
 from .services.nic import NicMonitor, NicStore, interfaces_to_watch
 from .services.pathtest import PATH_TEST_KINDS, PathStore, PathTester
+from .services.report import build_report
 from .services.restore import apply_pending_restore
 from .services.runtime_settings import OVERRIDES_KEY, apply_values, load_overrides
 from .services.scheduler import Monitor
@@ -190,6 +193,7 @@ def create_app(
                 "bufferbloat_tests": bufferbloat_store.purge(
                     now_ms - settings.throughput_retention_days * day_ms
                 ),
+                "health_reports": app.state.health.purge(),
                 "exposure_scans": exposure_store.purge(
                     now_ms - settings.throughput_retention_days * day_ms
                 ),
@@ -256,6 +260,20 @@ def create_app(
         exposure_store = ExposureStore(engine)
         app.state.exposure_store = exposure_store
         app.state.exposure = ExposureScanner(exposure_store, engine, events, hub=app.state.hub)
+
+        def health_report(start_ms: int, end_ms: int) -> dict:
+            return build_report(
+                app.state.diagnoser,
+                throughput_store,
+                start_ms,
+                end_ms,
+                hub_store=hub_store,
+                bufferbloat_store=bufferbloat_store,
+            )
+
+        app.state.health = HealthService(
+            engine, health_report, app.state.exposure.summary, tz=lambda: settings.tz
+        )
         app.state.netmap = NetMap(app.state)
         app.state.auth = AuthStore(engine)
         app.state.setup_token = await asyncio.to_thread(
@@ -285,6 +303,7 @@ def create_app(
             kv_get=store.kv_get,
             kv_set=store.kv_set,
         )
+        app.state.health.start_schedule()
         app.state.exposure.start_schedule(
             enabled=lambda: settings.exposure_scan_nightly,
             window=lambda: app.state.updates.policy().get("window", settings.auto_update_window),
@@ -302,6 +321,7 @@ def create_app(
             await app.state.hub.stop()
             await app.state.bufferbloat.stop()
             await app.state.exposure.stop()
+            await app.state.health.stop()
             await discovery.stop()
             await throughput.stop()
             await path_tester.stop()
@@ -396,6 +416,7 @@ def create_app(
     app.include_router(admin.router)
     app.include_router(netmap.router)
     app.include_router(traffic.router)
+    app.include_router(score.router)
 
     @app.get("/metrics", include_in_schema=False)
     def metrics_endpoint(request: Request) -> Response:

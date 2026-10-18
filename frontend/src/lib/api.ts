@@ -382,6 +382,46 @@ export interface ExposureFinding {
   port?: number | null;
 }
 
+export interface ScoreComponent {
+  key: string;
+  label: string;
+  weight: number;
+  score: number;
+  detail: string;
+}
+
+export interface HealthScore {
+  score: number | null;
+  label: string;
+  components: ScoreComponent[];
+  highlights: string[];
+  start_ms: number;
+  end_ms: number;
+  days: number;
+}
+
+export interface WeeklyReportRow {
+  week_start: string;
+  created_ms: number;
+  score: number | null;
+  label: string | null;
+  previous_score: number | null;
+  highlights: string[];
+  incident_count: number;
+}
+
+export interface WeeklyReport extends Omit<HealthScore, 'start_ms' | 'end_ms' | 'days'> {
+  week_start: string;
+  created_ms: number;
+  previous_score: number | null;
+  period: { start: string; end: string; start_ms: number; end_ms: number };
+  summary: Report['summary'];
+  speeds: Report['speeds'];
+  incidents: { id: number; start: string; duration: string; cause: string; severity: string; start_ms: number }[];
+  incident_count: number;
+  markdown: string;
+}
+
 export interface ExposureSummary {
   latest: { id: number; ts_ms: number; trigger: string; status: string; hosts: number; open_ports: number } | null;
   running: boolean;
@@ -911,6 +951,11 @@ export const api = {
   bufferbloat: () => request<{ running: boolean; nightly: boolean; tests: BufferbloatTest[] }>('/api/bufferbloat'),
   runBufferbloat: () => request<{ started: boolean }>('/api/bufferbloat/run', post()),
   exposure: () => request<ExposureSummary>('/api/exposure'),
+  score: (days = 7) => request<HealthScore>(`/api/score?days=${days}`),
+  weeklyReports: () => request<{ reports: WeeklyReportRow[]; last_full_week: string }>('/api/weekly-reports'),
+  weeklyReport: (week: string) => request<WeeklyReport>(`/api/weekly-reports/${week}`),
+  weeklyReportMarkdownUrl: (week: string) => `/api/weekly-reports/${week}?format=md`,
+  generateWeeklyReport: (week_start?: string) => request<WeeklyReport>('/api/weekly-reports', post({ week_start })),
   runExposure: () => request<{ started: boolean }>('/api/exposure/scan', post()),
   trafficLive: () => request<TrafficLive>('/api/traffic/live'),
   trafficTop: (hours: number) => request<TrafficTop>(`/api/traffic/top?hours=${hours}`),

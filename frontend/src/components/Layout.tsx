@@ -6,6 +6,7 @@ import { useAuth } from './AuthGate';
 
 const NAV = [
   { to: '/', label: 'Overview', end: true },
+  { to: '/health', label: 'Health' },
   { to: '/targets', label: 'Targets' },
   { to: '/devices', label: 'Devices' },
   { to: '/exposure', label: 'Exposure' },
