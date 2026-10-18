@@ -5,8 +5,13 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import os
 import re
+import shutil
+import socket
+import tempfile
 import time
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse
@@ -233,35 +238,63 @@ async def restore_existing(name: str, request: Request) -> dict:
         src = backup_path(s.backup_dir, name)
     except (RestoreError, FileNotFoundError) as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "backup not found") from exc
-    candidate = s.data_dir / "restore-candidate.db"
-    await asyncio.to_thread(candidate.write_bytes, src.read_bytes())
-    return await _stage_and_restart(request, candidate, name)
+    async with _restore_lock(request):
+        candidate = _temp_path(s.data_dir, ".restore-candidate-")
+        await asyncio.to_thread(shutil.copyfile, src, candidate)
+        return await _stage_and_restart(request, candidate, name)
 
 
 @router.post("/restore", status_code=status.HTTP_202_ACCEPTED)
 async def restore_upload(request: Request) -> dict:
     """Upload a backup (.db, or .db.gz) as the raw request body; applied after a restart."""
     s = request.app.state.settings
-    upload = s.data_dir / "restore-upload.tmp"
-    size = 0
-    try:
-        with upload.open("wb") as f:
-            async for chunk in request.stream():
-                size += len(chunk)
-                if size > MAX_UPLOAD_BYTES:
-                    raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "file too large")
-                f.write(chunk)
-        if size == 0:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "empty upload")
-        candidate = s.data_dir / "restore-candidate.db"
-        await asyncio.to_thread(unpack_upload, upload, candidate)
-    except HTTPException:
-        upload.unlink(missing_ok=True)
-        raise
-    except OSError as exc:
-        upload.unlink(missing_ok=True)
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"bad upload: {exc}") from exc
-    return await _stage_and_restart(request, candidate, "an uploaded file")
+    lock = _restore_lock(request)
+    if lock.locked():
+        raise HTTPException(status.HTTP_409_CONFLICT, "a restore is already in progress")
+    async with lock:
+        upload = _temp_path(s.data_dir, ".restore-upload-")
+        candidate = _temp_path(s.data_dir, ".restore-candidate-")
+        size = 0
+        try:
+            with upload.open("wb") as f:
+                buf = bytearray()
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > MAX_UPLOAD_BYTES:
+                        raise HTTPException(
+                            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "file too large"
+                        )
+                    buf += chunk
+                    if len(buf) >= 1 << 22:  # write in 4 MiB slices, off the event loop
+                        await asyncio.to_thread(f.write, bytes(buf))
+                        buf.clear()
+                if buf:
+                    await asyncio.to_thread(f.write, bytes(buf))
+            if size == 0:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "empty upload")
+            await asyncio.to_thread(unpack_upload, upload, candidate)
+        except HTTPException:
+            upload.unlink(missing_ok=True)
+            candidate.unlink(missing_ok=True)
+            raise
+        except (OSError, RestoreError) as exc:
+            upload.unlink(missing_ok=True)
+            candidate.unlink(missing_ok=True)
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"bad upload: {exc}") from exc
+        return await _stage_and_restart(request, candidate, "an uploaded file")
+
+
+def _restore_lock(request: Request) -> asyncio.Lock:
+    st = request.app.state
+    if getattr(st, "restore_lock", None) is None:
+        st.restore_lock = asyncio.Lock()
+    return st.restore_lock
+
+
+def _temp_path(folder: Path, prefix: str) -> Path:
+    fd, name = tempfile.mkstemp(dir=folder, prefix=prefix, suffix=".db")
+    os.close(fd)
+    return Path(name)
 
 
 # ── Deco mesh ─────────────────────────────────────────────────────────────────
@@ -270,18 +303,33 @@ _LABEL = r"[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?"
 _HOSTNAME = re.compile(rf"^(?=.{{1,253}}$){_LABEL}(\.{_LABEL})*$")
 
 
+_LAN_NETS = tuple(
+    ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
+)
+
+
+def _on_lan(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(ip in net for net in _LAN_NETS if net.version == ip.version)
+
+
 def _deco_host(host: str) -> str:
-    """A LAN address or name only: the owner password must never leave the network."""
+    """A LAN address, or a name that only resolves to LAN addresses: the owner password must
+    never leave the network. (Blocking: call from a thread.)"""
     h = host.strip().lower()
     try:
-        ip = ipaddress.ip_address(h)
+        addrs = {ipaddress.ip_address(h)}
     except ValueError:
         if not _HOSTNAME.match(h) or h.rsplit(".", 1)[-1].isdigit():
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY, "enter the main Deco's IP address"
             ) from None
-        return h
-    if not ip.is_private or ip.is_loopback:
+        try:
+            addrs = {ipaddress.ip_address(a[4][0]) for a in socket.getaddrinfo(h, 80)}
+        except (OSError, ValueError):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, f"cannot resolve {h}"
+            ) from None
+    if not addrs or not all(_on_lan(a) for a in addrs):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "the Deco must be on your LAN")
     return h
 
@@ -315,7 +363,7 @@ class DecoIn(BaseModel):
 @router.put("/deco")
 async def put_deco(body: DecoIn, request: Request) -> dict:
     deco = request.app.state.deco
-    host = _deco_host(body.host) if body.host.strip() else ""
+    host = await asyncio.to_thread(_deco_host, body.host) if body.host.strip() else ""
     if body.enabled and not host:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "enter the main Deco's address")
     before = await asyncio.to_thread(deco.status)
@@ -344,7 +392,15 @@ class DecoTestIn(BaseModel):
 @router.post("/deco/test")
 async def test_deco(body: DecoTestIn, request: Request) -> dict:
     deco = request.app.state.deco
-    password = body.password or await asyncio.to_thread(deco.password)
+    host = await asyncio.to_thread(_deco_host, body.host)
+    saved = (await asyncio.to_thread(deco.config))["host"]
+    if body.password:
+        # Typed by the owner for the saved Deco: also (re)trusts its sign-in key.
+        return await deco.test(host, body.password, trust=host == saved)
+    if host != saved:
+        # The stored password only ever goes to the Deco it was saved for.
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "enter the owner password")
+    password = await asyncio.to_thread(deco.password)
     if not password:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "enter the owner password")
-    return await deco.test(_deco_host(body.host), password)
+    return await deco.test(host, password)

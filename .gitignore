@@ -24,3 +24,5 @@ frontend/dist/
 .vscode/
 .idea/
 .DS_Store
+/upgrade-status/
+/.state/

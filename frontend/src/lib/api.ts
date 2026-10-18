@@ -532,6 +532,7 @@ export interface DecoStatus {
   last_poll_ms: number | null;
   last_ok_ms: number | null;
   error: string | null;
+  paused: string | null;
   decos: DecoUnit[];
   clients: number;
   suggestions: { ip: string; label: string }[];

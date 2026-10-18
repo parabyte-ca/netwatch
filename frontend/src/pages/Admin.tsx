@@ -383,6 +383,11 @@ function DecoCard() {
         <p className="text-xs text-slate-400">
           {st.last_ok_ms ? `Last read ${fmtAgo(st.last_ok_ms, Date.now())}: ${st.decos.length} Decos, ${st.clients} clients.` : 'Not read yet.'}
           {st.error && <span className="text-rose-300"> Last poll failed: {st.error}</span>}
+          {st.paused && (
+            <span className="block text-amber-300">
+              Polling stopped ({st.paused}). Fix the password and press Save, or Test connection with the owner password.
+            </span>
+          )}
         </p>
       </div>
     </Card>

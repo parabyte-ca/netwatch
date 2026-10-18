@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import re
 import time
 
@@ -68,7 +69,29 @@ async def security_event(
 
 
 def _client(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    """Throttle key: the client address (an IPv6 client by its /64, which it can rotate in)."""
+    host = request.client.host if request.client else "unknown"
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return host
+    if ip.version == 6 and not ip.ipv4_mapped:
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+    return host
+
+
+def _hash_slots(request: Request) -> asyncio.Semaphore:
+    """scrypt costs ~50 ms and 16 MB: at most two at once, so sign-in attempts cannot starve
+    the thread pool every other request uses."""
+    st = request.app.state
+    if getattr(st, "hash_slots", None) is None:
+        st.hash_slots = asyncio.Semaphore(2)
+    return st.hash_slots
+
+
+async def _check_password(request: Request, username: str, password: str):
+    async with _hash_slots(request):
+        return await asyncio.to_thread(_store(request).authenticate, username, password)
 
 
 async def _new_session(request: Request, response: Response, user_id: int) -> None:
@@ -103,7 +126,10 @@ async def setup(body: Credentials, request: Request, response: Response) -> dict
     """First-run only: create the admin account and sign in."""
     if problem := password_problem(body.password):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
-    uid = await asyncio.to_thread(_store(request).create_first_user, body.username, body.password)
+    async with _hash_slots(request):
+        uid = await asyncio.to_thread(
+            _store(request).create_first_user, body.username, body.password
+        )
     if uid is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "setup has already been completed")
     await _new_session(request, response, uid)
@@ -114,14 +140,18 @@ async def setup(body: Credentials, request: Request, response: Response) -> dict
 async def login(body: Credentials, request: Request, response: Response) -> dict:
     throttle: LoginThrottle = request.app.state.login_throttle
     key = _client(request)
-    if wait := throttle.retry_after(key):
-        await security_event(request, "warning", "Sign-in refused: client locked out")
+    if wait := throttle.begin(key):
+        if throttle.retry_after(key) and throttle.log_refusal(key):
+            await security_event(request, "warning", "Sign-in refused: client locked out")
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
             f"too many failed attempts; try again in {wait} s",
             headers={"Retry-After": str(wait)},
         )
-    user = await asyncio.to_thread(_store(request).authenticate, body.username, body.password)
+    try:
+        user = await _check_password(request, body.username, body.password)
+    finally:
+        throttle.end(key)
     if user is None:
         throttle.failure(key)
         locked = throttle.retry_after(key) > 0
@@ -153,8 +183,22 @@ async def change_password(body: PasswordChange, request: Request, response: Resp
     """Change the signed-in user's password. Signs out every other session."""
     user = request.state.user
     store = _store(request)
-    if await asyncio.to_thread(store.authenticate, user.username, body.current_password) is None:
+    throttle: LoginThrottle = request.app.state.login_throttle
+    key = f"password:{user.user_id}"  # a stolen session must not brute-force the password
+    if wait := throttle.begin(key):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"too many failed attempts; try again in {wait} s",
+            headers={"Retry-After": str(wait)},
+        )
+    try:
+        ok = await _check_password(request, user.username, body.current_password) is not None
+    finally:
+        throttle.end(key)
+    if not ok:
+        throttle.failure(key)
         raise HTTPException(status.HTTP_403_FORBIDDEN, "current password is incorrect")
+    throttle.success(key)
     if problem := password_problem(body.new_password):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
     await asyncio.to_thread(store.set_password, user.user_id, body.new_password)

@@ -45,7 +45,7 @@ function mockApi(calls: { url: string; method: string; body?: unknown }[]) {
     if (url === '/api/admin/deco') {
       const saved = method === 'PUT' ? JSON.parse(String(init?.body)) : { host: '', enabled: false };
       return json({ host: saved.host, enabled: saved.enabled, password_set: method === 'PUT', last_poll_ms: null, last_ok_ms: null,
-        error: null, decos: [], clients: 0, suggestions: [{ ip: '192.168.2.10', label: 'Deco Living Room' }] });
+        error: null, paused: null, decos: [], clients: 0, suggestions: [{ ip: '192.168.2.10', label: 'Deco Living Room' }] });
     }
     if (url === '/api/admin/restart') return json({ restarting: true }, 202);
     return json({});

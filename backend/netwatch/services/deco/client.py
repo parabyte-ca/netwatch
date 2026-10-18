@@ -48,6 +48,22 @@ class DecoLoginError(DecoError):
     pass
 
 
+class DecoKeyChanged(DecoLoginError):
+    """The Deco presented a different sign-in key than the one trusted before."""
+
+
+_STOK = re.compile(r";stok=[^/?#\s]*")
+
+
+def scrub(text: str) -> str:
+    """Remove the session token from text that may be logged or shown."""
+    return _STOK.sub(";stok=…", text)
+
+
+def key_fingerprint(n: int) -> str:
+    return hashlib.sha256(format(n, "x").encode()).hexdigest()
+
+
 class _Reauth(Exception):
     """Session expired or was taken over: sign in again and retry once."""
 
@@ -108,6 +124,7 @@ class DecoClient:
         username: str = "admin",
         timeout_s: float = 15.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        key_pin: str | None = None,
     ) -> None:
         host = host.strip().rstrip("/")
         self.host = host if host.startswith(("http://", "https://")) else f"http://{host}"
@@ -116,10 +133,15 @@ class DecoClient:
         self._http = httpx.AsyncClient(
             timeout=timeout_s,
             verify=False,  # noqa: S501 - Decos use a self-signed certificate on https
-            follow_redirects=True,
+            follow_redirects=False,  # only a same-host upgrade to https is followed
             transport=transport,
         )
         self._lock = asyncio.Lock()
+        # The password is RSA-encrypted to a key the Deco sends, so anyone impersonating the
+        # Deco on the LAN could ask for it. Once a key is trusted it is pinned (by hash) and a
+        # different one is refused instead of being sent the password.
+        self.key_pin = key_pin
+        self.key_seen: str | None = None
         self._aes_key = _numeric_secret()
         self._aes_iv = _numeric_secret()
         self._pw_rsa: tuple[int, int] | None = None
@@ -173,8 +195,10 @@ class DecoClient:
                 except httpx.TimeoutException as exc:
                     if attempt == 2:
                         raise DecoError("the Deco did not answer in time") from exc
+                except httpx.HTTPStatusError as exc:
+                    raise DecoError(f"the Deco answered HTTP {exc.response.status_code}") from exc
                 except httpx.HTTPError as exc:
-                    raise DecoError(f"cannot reach the Deco: {exc}") from exc
+                    raise DecoError(f"cannot reach the Deco: {scrub(str(exc))}") from exc
         raise DecoError("unreachable")  # pragma: no cover
 
     def _clear(self) -> None:
@@ -191,18 +215,32 @@ class DecoClient:
             h["Cookie"] = self._cookie
         return h
 
+    def _check_key(self, n: int) -> None:
+        fp = key_fingerprint(n)
+        if self.key_pin and fp != self.key_pin:
+            raise DecoKeyChanged(
+                "the Deco's sign-in key changed, so the password was not sent. If the Deco was "
+                "reset or replaced, press Test connection (with the owner password) to trust "
+                "it; otherwise something on the network may be impersonating it"
+            )
+        self.key_seen = fp
+
+    async def _send(self, url: str, **kw) -> httpx.Response:
+        """POST, following one redirect only if it upgrades the same host to https."""
+        r = await self._http.post(url, **kw)
+        if r.is_redirect and httpx.URL(url).scheme == "http":
+            loc = httpx.URL(url).join(r.headers.get("location", ""))
+            if loc.scheme == "https" and loc.host == httpx.URL(self.host).host:
+                if self.host.startswith("http://"):
+                    self.host = "https://" + self.host[len("http://") :]
+                    log.warning("Deco redirected to HTTPS; using %s", self.host)
+                r = await self._http.post(str(loc), **kw)
+        if r.is_redirect:
+            raise DecoError("the Deco redirected somewhere else; not following")
+        return r
+
     async def _post(self, url: str, params: dict, body: str, *, form_encoded: bool = False):
-        r = await self._http.post(
-            url, params=params, content=body, headers=self._headers(form_encoded)
-        )
-        if (
-            r.history
-            and r.url.scheme == "https"
-            and self.host.startswith("http://")
-            and r.url.host == httpx.URL(self.host).host
-        ):
-            self.host = "https://" + self.host[len("http://") :]
-            log.warning("Deco redirected to HTTPS; using %s", self.host)
+        r = await self._send(url, params=params, content=body, headers=self._headers(form_encoded))
         for value in r.headers.get_list("set-cookie"):
             m = re.search(r"(sysauth=[A-Za-z0-9]+)", value)
             if m:
@@ -278,6 +316,7 @@ class DecoClient:
         try:
             n, e = r.json()["result"]["password"]
             self._pw_rsa = (int(n, 16), int(e, 16))
+            self._check_key(self._pw_rsa[0])
             r = await self._post(login_url, {"form": "auth"}, read)
             r.raise_for_status()
             auth = r.json()["result"]
@@ -326,7 +365,7 @@ class DecoClient:
         return "".join(out)
 
     async def _outer_post(self, params: dict, data: str = "") -> httpx.Response:
-        return await self._http.post(
+        return await self._send(
             f"{self.host}/",
             params=params,
             content=data,
@@ -351,6 +390,7 @@ class DecoClient:
         if len(key) < 4 or key[0] != "00000":
             raise DecoError("unexpected web-UI session key")
         self._outer_rsa = (int(key[2], 16), int(key[1], 16))  # (n, e)
+        self._check_key(self._outer_rsa[0])
         self._outer_seq = int(key[3])
         self._outer_key, self._outer_iv = _numeric_secret(), _numeric_secret()
         pw_md5 = hashlib.md5(self.password.encode()).hexdigest()  # noqa: S324 - protocol
@@ -378,7 +418,7 @@ class DecoClient:
         ).decode()
         sign_text = f"k={self._outer_key}&i={self._outer_iv}&s={self._outer_seq + len(enc)}"
         sign = rsa_encrypt(self._outer_rsa[0], self._outer_rsa[1], sign_text.encode())
-        r = await self._http.post(
+        r = await self._send(
             f"{self.host}/{path}",
             params={"form": form, "id": self._outer_id},
             content=f"sign={sign}&data={enc}",

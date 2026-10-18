@@ -57,6 +57,7 @@ def test_settings(tmp_path, **over) -> Settings:
         "dns_check_interval_min": 0,
         "log_format": "text",
         "flush_interval_s": 0.05,
+        "allowed_hosts": "testserver",
     }
     values.update(over)
     return Settings(**values)

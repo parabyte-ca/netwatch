@@ -195,6 +195,8 @@ class PathTester:
         event_id: int | None = None,
     ) -> dict:
         """Run mtr against host (a validated hostname/IP; never starts with '-') and store it."""
+        if not host or host.startswith("-"):  # e.g. a row from a restored database
+            raise ValueError(f"refusing to trace {host!r}")
         cmd = [
             "mtr", "--json", "--no-dns", "--report-cycles", str(self.cycles),
             "--interval", "0.2", "--max-ttl", "30", host,

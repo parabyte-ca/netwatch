@@ -24,9 +24,13 @@ class SecretBox:
         if self._fernet is None:
             if not self.path.exists():
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                with os.fdopen(fd, "wb") as f:
-                    f.write(Fernet.generate_key())
+                try:
+                    fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                except FileExistsError:
+                    pass  # created a moment ago by another thread
+                else:
+                    with os.fdopen(fd, "wb") as f:
+                        f.write(Fernet.generate_key())
             self._fernet = Fernet(self.path.read_bytes().strip())
         return self._fernet
 
