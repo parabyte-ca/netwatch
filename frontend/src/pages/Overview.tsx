@@ -1,23 +1,88 @@
+import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { EventRow } from '../components/EventRow';
 import { StatusBadge } from '../components/StatusBadge';
-import { api, type State, type Target, type TargetStatus } from '../lib/api';
+import { api, toInput, type State, type Target, type TargetStatus } from '../lib/api';
 import { fmtAgo, fmtMs, fmtPct, GROUP_LABEL, GROUP_ORDER, STATE_STYLE } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
 import { ScoreRing } from '../components/ScoreRing';
 import { TopTalkers } from '../components/TopTalkers';
 
-function Tile({ t, s, now }: { t: Target; s: TargetStatus | undefined; now: number }) {
+/** A target's name that turns into a text box when clicked (Enter saves, Esc cancels). */
+function EditableName({ t, onSaved }: { t: Target; onSaved: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(t.name);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save(e?: FormEvent) {
+    e?.preventDefault();
+    const next = name.trim();
+    if (!next || next === t.name) {
+      setEditing(false);
+      setName(t.name);
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.updateTarget(t.id, { ...toInput(t), name: next });
+      setEditing(false);
+      onSaved();
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : String(ex));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => { setName(t.name); setEditing(true); }}
+        className="group relative z-10 flex max-w-full items-center gap-1 text-left font-medium text-white hover:text-sky-300"
+        title="Rename"
+      >
+        <span className="truncate">{t.name}</span>
+        <span aria-hidden className="text-xs text-slate-500 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100">✎</span>
+        <span className="sr-only">(rename)</span>
+      </button>
+    );
+  }
+  return (
+    <form onSubmit={save} className="relative z-10">
+      <input
+        aria-label={`New name for ${t.name}`}
+        className="w-full rounded border border-sky-600 bg-slate-950 px-1.5 py-0.5 text-sm text-white focus:outline-none"
+        value={name}
+        maxLength={100}
+        autoFocus
+        disabled={busy}
+        onChange={(e) => setName(e.target.value)}
+        onBlur={() => void save()}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            setName(t.name);
+            setEditing(false);
+          }
+        }}
+      />
+      {err && <div className="mt-1 text-xs text-rose-400">{err}</div>}
+    </form>
+  );
+}
+
+function Tile({ t, s, now, onRenamed }: { t: Target; s: TargetStatus | undefined; now: number; onRenamed: () => void }) {
   const state: State = s?.state ?? 'unknown';
   const st = s?.stats;
   return (
-    <Link
-      to={`/targets/${t.id}`}
-      className={`block rounded-lg bg-slate-900 p-4 ring-1 transition hover:bg-slate-800/80 ${STATE_STYLE[state].ring}`}
-    >
+    <div className={`relative rounded-lg bg-slate-900 p-4 ring-1 transition hover:bg-slate-800/80 ${STATE_STYLE[state].ring}`}>
+      {/* The whole tile opens the target's graphs; the name above it is a rename button. */}
+      <Link to={`/targets/${t.id}`} className="absolute inset-0 rounded-lg" aria-label={`Open ${t.name}`} />
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="truncate font-medium text-white">{t.name}</div>
+          <EditableName t={t} onSaved={onRenamed} />
           <div className="truncate text-xs text-slate-500">
             {t.kind.toUpperCase()} · {t.kind === 'http' ? t.url : t.port ? `${t.host}:${t.port}` : t.host}
           </div>
@@ -41,7 +106,7 @@ function Tile({ t, s, now }: { t: Target; s: TargetStatus | undefined; now: numb
         </div>
       </dl>
       {s?.last && <div className="mt-2 text-[11px] text-slate-600">updated {fmtAgo(s.last.ts_ms, now)}</div>}
-    </Link>
+    </div>
   );
 }
 
@@ -112,7 +177,7 @@ export function Overview() {
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">{GROUP_LABEL[g]}</h2>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {items.map((t) => (
-                <Tile key={t.id} t={t} s={byId.get(t.id)} now={now} />
+                <Tile key={t.id} t={t} s={byId.get(t.id)} now={now} onRenamed={() => void targets.refresh()} />
               ))}
             </div>
           </section>

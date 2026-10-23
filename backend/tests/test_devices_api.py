@@ -148,3 +148,31 @@ def test_dns_check_endpoint(client):
     assert r.status_code == 200
     assert r.json()["resolvers"] == ["192.0.2.53"]
     assert any("non-existent" in f for f in r.json()["findings"])
+
+
+def test_renaming_a_monitored_target_renames_its_device(client):
+    feed(client, arp(1, PC, "192.168.2.20", "192.168.2.1"))
+    did = device_id(client, PC)
+    target = client.post(f"/api/devices/{did}/monitor").json()["target"]
+    body = {
+        k: target[k]
+        for k in (
+            "kind",
+            "host",
+            "port",
+            "url",
+            "dns_query",
+            "dns_rdtype",
+            "expect_status",
+            "interval_s",
+            "timeout_s",
+            "enabled",
+            "group",
+        )
+    }
+    r = client.put(f"/api/targets/{target['id']}", json={**body, "name": "Office PC"})
+    assert r.status_code == 200, r.text
+    assert client.get(f"/api/devices/{did}").json()["device"]["label"] == "Office PC"
+    # The other direction already worked: renaming the device renames the target.
+    client.patch(f"/api/devices/{did}", json={"name": "Desk PC"})
+    assert client.get(f"/api/targets/{target['id']}").json()["name"] == "Desk PC"

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { StatusResponse, Target, TimelineEvent } from '../lib/api';
@@ -68,5 +68,27 @@ describe('Overview', () => {
     const region = await screen.findByRole('region', { name: 'Active incidents' });
     expect(region).toHaveTextContent('Cloudflare unreachable');
     expect(region).toHaveTextContent(/ongoing · 1 min/);
+  });
+  it('renames a target by clicking its name', async () => {
+    const puts: { url: string; body: Record<string, unknown> }[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (init?.method === 'PUT') {
+        const body = JSON.parse(String(init.body));
+        puts.push({ url, body });
+        return new Response(JSON.stringify({ ...targets[0], ...body }), { status: 200 });
+      }
+      const body = url.startsWith('/api/status') ? { now_ms: 1, targets: [] } : url.startsWith('/api/events') ? [] : targets;
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    render(<MemoryRouter><Overview /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: /Gateway/ }));
+    const box = screen.getByRole('textbox', { name: 'New name for Gateway' });
+    fireEvent.change(box, { target: { value: 'Bell Home Hub' } });
+    fireEvent.submit(box);
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0]!.url).toBe('/api/targets/1');
+    expect(puts[0]!.body).toMatchObject({ name: 'Bell Home Hub', host: '192.168.2.1', kind: 'icmp' });
+    expect(screen.getByRole('link', { name: 'Open Cloudflare' })).toHaveAttribute('href', '/targets/2');
   });
 });

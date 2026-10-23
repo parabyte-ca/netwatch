@@ -72,12 +72,21 @@ def get_target(target_id: int, store: Store = Depends(get_store)) -> dict:
 async def update_target(
     target_id: int,
     body: TargetIn,
+    request: Request,
     store: Store = Depends(get_store),
     monitor: Monitor = Depends(get_monitor),
 ) -> dict:
     target = await asyncio.to_thread(store.update_target, target_id, body.model_dump())
     if target is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "target not found")
+    # A monitored device carries the same name as its target (renaming the device already
+    # renames the target), so a rename here shows on the Devices page too.
+    devices = getattr(request.app.state, "device_store", None)
+    if devices is not None:
+        device = await asyncio.to_thread(devices.by_target, target_id)
+        if device is not None and device.get("name") != target["name"]:
+            await asyncio.to_thread(devices.update, device["id"], {"name": target["name"]})
+            request.app.state.discovery.inventory.forget(device["mac"])
     await monitor.reload()
     return target
 

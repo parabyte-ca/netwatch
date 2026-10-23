@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] - 2026-10-23
+### Added
+- Devices page: sort by any column (device, type, IP, MAC / vendor, last seen) by clicking its
+  header; a second click reverses the order. IP addresses sort numerically, "last seen" puts
+  online devices first. The chosen order is remembered in the browser.
+- Overview: click a target's name on its tile to rename it in place (Enter saves, Esc cancels);
+  the rest of the tile still opens its graphs.
+
+### Changed
+- Renaming a monitored device's target also renames the device, so the Overview, Targets and
+  Devices pages show the same name (renaming the device already renamed the target).
+
 ## [0.9.2] - 2026-10-18
 ### Fixed
 - Bufferbloat test failing with "could not load the line": it asked Cloudflare's speed-test
