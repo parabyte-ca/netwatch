@@ -71,6 +71,11 @@ def test_vendor_lookup_and_cleanup():
         ({"services": ["_ipp._tcp"]}, "printer"),
         ({"dhcp_vendor": "android-dhcp-14"}, "phone"),
         ({"dhcp_vendor": "MSFT 5.0"}, "computer"),
+        ({"names": ["Alans-MacBook-Air"]}, "laptop"),
+        ({"names": ["DESKTOP-4F2K9"]}, "computer"),
+        ({"names": ["ThinkPad-X1"]}, "laptop"),
+        ({"names": ["Janes-MacBook-Pro"]}, "laptop"),  # not "Mac Pro" (a desktop)
+        ({"names": ["Mac-mini"]}, "computer"),
         ({"ssdp": ["urn:schemas-upnp-org:device:InternetGatewayDevice:1"]}, "router"),
         ({"vendor": "Espressif"}, "iot"),
         ({"is_gateway": True}, "router"),

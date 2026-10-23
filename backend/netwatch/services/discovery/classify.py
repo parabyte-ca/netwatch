@@ -16,6 +16,7 @@ TYPES = (
     "nas",
     "server",
     "computer",
+    "laptop",
     "phone",
     "tablet",
     "tv",
@@ -92,7 +93,15 @@ _NAME_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"android|galaxy|pixel|oneplus|xiaomi|redmi|moto[ -]?[gex]", re.I), "phone"),
     (
         re.compile(
-            r"macbook|imac|mac[-_ ]?mini|mac[-_ ]?pro|laptop|desktop|\bpc\b|-pc$|thinkpad|"
+            r"macbook|laptop|notebook|thinkpad|surface[-_ ]?(laptop|book|pro)|chromebook|"
+            r"zenbook|vivobook|ideapad|xps|latitude|elitebook|probook|spectre",
+            re.I,
+        ),
+        "laptop",
+    ),
+    (
+        re.compile(
+            r"imac|mac[-_ ]?mini|mac[-_ ]?pro|mac[-_ ]?studio|desktop|\bpc\b|-pc$|"
             r"surface|windows|ubuntu|fedora",
             re.I,
         ),

@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.10.0-blue)
+![Version](https://img.shields.io/badge/version-0.10.1-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -56,7 +56,7 @@ NetWatch. See the [Roadmap](#roadmap) for what's next.
   SSDP and mDNS queries, and reverse DNS through the gateway. Private subnets only, at most a
   /22.
 - **Device inventory:** vendor from the offline IEEE registry, names from DHCP, mDNS, UPnP and
-  reverse DNS, an explainable type guess (router, Deco access point, phone, TV, printer…), IP
+  reverse DNS, an explainable type guess (router, Deco access point, phone, laptop, TV, printer…), IP
   address history, and online/last-seen. Phones' private (randomised) Wi-Fi MACs that report
   the same hostname are merged into one device; you can merge or split by hand, rename,
   override the type and add notes. The device list sorts by any column header.

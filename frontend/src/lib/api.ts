@@ -277,6 +277,7 @@ export type DeviceType =
   | 'nas'
   | 'server'
   | 'computer'
+  | 'laptop'
   | 'phone'
   | 'tablet'
   | 'tv'

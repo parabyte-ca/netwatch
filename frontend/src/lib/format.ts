@@ -116,6 +116,7 @@ export const DEVICE_TYPE_LABEL: Record<string, string> = {
   nas: 'NAS',
   server: 'Server',
   computer: 'Computer',
+  laptop: 'Laptop',
   phone: 'Phone',
   tablet: 'Tablet',
   tv: 'TV',
