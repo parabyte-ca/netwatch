@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.10.1] - 2026-10-23
+### Added
+- "Laptop" device type: choose it on a device's page, and devices whose name says so
+  (MacBook, ThinkPad, Chromebook, ZenBook, IdeaPad, Latitude, EliteBook…) are recognised as
+  laptops automatically. Desktop names (iMac, Mac mini, DESKTOP-…) stay "Computer".
+
 ## [0.10.0] - 2026-10-23
 ### Added
 - Devices page: sort by any column (device, type, IP, MAC / vendor, last seen) by clicking its
