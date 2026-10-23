@@ -99,6 +99,56 @@ function DiscoveryPanel({ status, refresh }: { status: DiscoveryStatus; refresh:
   );
 }
 
+type SortKey = 'device' | 'type' | 'ip' | 'mac' | 'seen';
+type Sort = { key: SortKey; dir: 'asc' | 'desc' };
+const SORT_STORE = 'netwatch.devices.sort';
+
+/** IPv4 as a sortable number; devices without an address sort last. */
+function ipValue(ip: string | null): number {
+  if (!ip) return Number.POSITIVE_INFINITY;
+  return ip.split('.').reduce((n, part) => n * 256 + (Number(part) || 0), 0);
+}
+
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+function compare(a: DeviceRow, b: DeviceRow, key: SortKey): number {
+  switch (key) {
+    case 'device':
+      return collator.compare(a.label, b.label);
+    case 'type':
+      return collator.compare(DEVICE_TYPE_LABEL[a.type] ?? a.type, DEVICE_TYPE_LABEL[b.type] ?? b.type);
+    case 'ip':
+      return ipValue(a.last_ip) - ipValue(b.last_ip);
+    case 'mac':
+      return collator.compare(a.vendor ?? '~', b.vendor ?? '~') || collator.compare(a.macs[0] ?? '', b.macs[0] ?? '');
+    case 'seen':
+      return (a.online ? 1 : 0) - (b.online ? 1 : 0) || a.last_seen_ms - b.last_seen_ms;
+  }
+}
+
+function loadSort(): Sort | null {
+  try {
+    const s = JSON.parse(localStorage.getItem(SORT_STORE) ?? 'null');
+    return s && typeof s.key === 'string' && (s.dir === 'asc' || s.dir === 'desc') ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+function SortHeader({ k, label, sort, onSort, className = '', align = 'left' }: {
+  k: SortKey; label: string; sort: Sort | null; onSort: (k: SortKey) => void; className?: string; align?: 'left' | 'right';
+}) {
+  const active = sort?.key === k;
+  return (
+    <th className={`px-3 py-2 ${className}`} aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+      <button onClick={() => onSort(k)} className={`inline-flex items-center gap-1 uppercase tracking-wide hover:text-slate-200 ${active ? 'text-slate-200' : ''} ${align === 'right' ? 'flex-row-reverse' : ''}`}>
+        {label}
+        <span aria-hidden className="text-[10px]">{active ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}</span>
+      </button>
+    </th>
+  );
+}
+
 function names(d: DeviceRow) {
   const extra = [d.hostname, d.mdns_name, d.model].filter((n) => n && n !== d.label);
   return extra.length ? extra.join(' · ') : null;
@@ -108,10 +158,25 @@ export function Devices() {
   const [q, setQ] = useState('');
   const [onlineOnly, setOnlineOnly] = useState(false);
   const [type, setType] = useState('');
+  const [sort, setSort] = useState<Sort | null>(loadSort);
+  const onSort = (key: SortKey) => {
+    // First click: A→Z (or most recent first for "last seen"); second click reverses.
+    const first = key === 'seen' ? 'desc' : 'asc';
+    const next: Sort = sort?.key === key ? { key, dir: sort.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: first };
+    setSort(next);
+    try {
+      localStorage.setItem(SORT_STORE, JSON.stringify(next));
+    } catch {
+      /* private mode: the order just isn't remembered */
+    }
+  };
   const status = usePolling(api.discovery, 15_000);
   const { data, error } = usePolling(() => api.devices(q.trim() || undefined), 15_000, [q]);
 
-  const rows = (data?.devices ?? []).filter((d) => (!onlineOnly || d.online) && (!type || d.type === type));
+  const filtered = (data?.devices ?? []).filter((d) => (!onlineOnly || d.online) && (!type || d.type === type));
+  const rows = sort
+    ? [...filtered].sort((a, b) => (sort.dir === 'asc' ? 1 : -1) * compare(a, b, sort.key) || collator.compare(a.label, b.label))
+    : filtered;
   const types = [...new Set((data?.devices ?? []).map((d) => d.type))].sort();
   const now = data?.now_ms ?? Date.now();
 
@@ -146,11 +211,11 @@ export function Devices() {
         <table className="w-full text-sm">
           <thead className="bg-slate-900 text-left text-xs uppercase tracking-wide text-slate-500">
             <tr>
-              <th className="px-3 py-2">Device</th>
-              <th className="hidden px-3 py-2 sm:table-cell">Type</th>
-              <th className="px-3 py-2">IP</th>
-              <th className="hidden px-3 py-2 md:table-cell">MAC / vendor</th>
-              <th className="px-3 py-2 text-right">Last seen</th>
+              <SortHeader k="device" label="Device" sort={sort} onSort={onSort} />
+              <SortHeader k="type" label="Type" sort={sort} onSort={onSort} className="hidden sm:table-cell" />
+              <SortHeader k="ip" label="IP" sort={sort} onSort={onSort} />
+              <SortHeader k="mac" label="MAC / vendor" sort={sort} onSort={onSort} className="hidden md:table-cell" />
+              <SortHeader k="seen" label="Last seen" sort={sort} onSort={onSort} className="text-right" align="right" />
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800">

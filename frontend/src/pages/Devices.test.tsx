@@ -82,4 +82,30 @@ describe('Devices', () => {
     fireEvent.change(screen.getByLabelText('Search devices'), { target: { value: 'deco' } });
     await waitFor(() => expect(urls).toContain('/api/devices?q=deco'));
   });
+  it('sorts by any column header and reverses on a second click', async () => {
+    localStorage.clear();
+    const devices = [
+      device(1, { label: 'Printer', last_ip: '192.168.2.100', type: 'printer', online: false, last_seen_ms: now - 3_600_000 }),
+      device(2, { label: 'apple TV', last_ip: '192.168.2.9', type: 'tv' }),
+      device(3, { label: 'Laptop', last_ip: '192.168.2.20', type: 'computer', online: false, last_seen_ms: now - 60_000 }),
+    ];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      const body = url.startsWith('/api/discovery') ? status : { now_ms: now, devices };
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    render(<MemoryRouter><Devices /></MemoryRouter>);
+    await screen.findByRole('link', { name: 'Printer' });
+    const order = () => screen.getAllByRole('link').map((a) => a.textContent);
+    fireEvent.click(screen.getByRole('button', { name: /^Device/ }));
+    expect(order()).toEqual(['apple TV', 'Laptop', 'Printer']);
+    fireEvent.click(screen.getByRole('button', { name: /^Device/ }));
+    expect(order()).toEqual(['Printer', 'Laptop', 'apple TV']);
+    fireEvent.click(screen.getByRole('button', { name: /^IP/ }));
+    expect(order()).toEqual(['apple TV', 'Laptop', 'Printer']); // .9 < .20 < .100 numerically
+    fireEvent.click(screen.getByRole('button', { name: /^Last seen/ }));
+    expect(order()).toEqual(['apple TV', 'Laptop', 'Printer']); // online first, then most recent
+    expect(screen.getByRole('columnheader', { name: /Last seen/ })).toHaveAttribute('aria-sort', 'descending');
+    expect(JSON.parse(localStorage.getItem('netwatch.devices.sort')!)).toEqual({ key: 'seen', dir: 'desc' });
+  });
 });

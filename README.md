@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.9.2-blue)
+![Version](https://img.shields.io/badge/version-0.10.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -29,7 +29,7 @@ NetWatch. See the [Roadmap](#roadmap) for what's next.
 - **SmokePing-style graphs:** median line, p5–p95 and p25–p75 "smoke", and packet-loss bars,
   from 15 minutes to 90 days. Periods without data show as gaps.
 - **Live overview:** health summary and status tiles grouped as gateway, mesh, internet,
-  DNS, devices and custom.
+  DNS, devices and custom. Click a tile's name to rename it in place.
 - **Run test now** for any target, plus CSV/JSON export of raw samples.
 - **Outage detection with hysteresis:** a target is *down* after 3 consecutive failed probes and
   only recovers after 3 consecutive successes, so single lost pings never open an outage;
@@ -59,7 +59,7 @@ NetWatch. See the [Roadmap](#roadmap) for what's next.
   reverse DNS, an explainable type guess (router, Deco access point, phone, TV, printer…), IP
   address history, and online/last-seen. Phones' private (randomised) Wi-Fi MACs that report
   the same hostname are merged into one device; you can merge or split by hand, rename,
-  override the type and add notes.
+  override the type and add notes. The device list sorts by any column header.
 - **Monitor this device:** one click creates a ping target that follows the device when its IP
   address changes.
 - **Anomaly alerts** on the timeline, each with the evidence and the usual cause: duplicate IP
