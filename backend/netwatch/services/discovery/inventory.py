@@ -406,7 +406,14 @@ class Inventory:
 
     # ── read model for the API ────────────────────────────────────────────────
 
-    def listing(self, now_ms: int, *, q: str | None = None) -> list[dict]:
+    def listing(
+        self,
+        now_ms: int,
+        *,
+        q: str | None = None,
+        group_id: int | None = None,
+        tag: str | None = None,
+    ) -> list[dict]:
         rows = self.store.all()
         by_id = {r["id"]: r for r in rows}
         groups: dict[int, list[dict]] = {}
@@ -414,11 +421,17 @@ class Inventory:
             primary = r["merged_into"] if r["merged_into"] in by_id else r["id"]
             groups.setdefault(primary, []).append(r)
         wanted = self.store.search_ids(q) if q else None
+        gstore = getattr(self, "groups", None)  # GroupStore, set in main.py
+        if gstore is not None and (group_id is not None or tag):
+            only = gstore.members_of(group_id, tag)["primaries"]
+            wanted = only if wanted is None else wanted & only
         out = []
         for pid, members in groups.items():
             if wanted is not None and pid not in wanted:
                 continue
             out.append(summarise_group(by_id[pid], members, now_ms))
+        if gstore is not None:
+            gstore.decorate(out)
         out.sort(key=lambda d: (not d["online"], d["label"].lower()))
         return out
 

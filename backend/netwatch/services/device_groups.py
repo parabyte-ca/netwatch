@@ -217,6 +217,41 @@ class GroupStore:
         with self.engine.connect() as conn:
             return [{"tag": t, "devices": n} for t, n in conn.execute(stmt)]
 
+    # ── read model ───────────────────────────────────────────────────────────
+
+    def decorate(self, summaries: list[dict]) -> list[dict]:
+        """Add ``group`` ({id, name, colour, icon} or None) and ``tags`` to device summaries."""
+        groups = {g["id"]: {k: g[k] for k in ("id", "name", "colour", "icon")} for g in self.list()}
+        tags = self.tags_of([d["id"] for d in summaries])
+        for d in summaries:
+            d["group"] = groups.get(d.get("group_id"))
+            d["tags"] = tags.get(d["id"], [])
+        return summaries
+
+    def members_of(self, group_id: int | None = None, tag: str | None = None) -> dict:
+        """Device ids (primaries and their merged rows), MACs and target ids for a group or tag.
+        ``group_id=0`` means ungrouped."""
+        cond = []
+        if group_id is not None:
+            cond.append(devices.c.group_id.is_(None) if group_id == 0
+                        else devices.c.group_id == group_id)  # fmt: skip
+        if tag:
+            tagged = select(device_tags.c.device_id).where(device_tags.c.tag == tag.lower())
+            cond.append(devices.c.id.in_(tagged))
+        with self.engine.connect() as conn:
+            prim = [r[0] for r in conn.execute(
+                select(devices.c.id).where(devices.c.merged_into.is_(None), *cond))]  # fmt: skip
+            rows = conn.execute(
+                select(devices.c.id, devices.c.mac, devices.c.target_id).where(
+                    (devices.c.id.in_(prim)) | (devices.c.merged_into.in_(prim)))
+            ).all() if prim else []  # fmt: skip
+        return {
+            "primaries": set(prim),
+            "ids": {r[0] for r in rows},
+            "macs": {r[1] for r in rows},
+            "targets": {r[2] for r in rows if r[2] is not None},
+        }
+
     # ── suggestions ──────────────────────────────────────────────────────────
 
     def suggestions(self) -> list[dict]:

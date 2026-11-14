@@ -10,6 +10,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..services.device_groups import GroupError
 from ..services.discovery.classify import TYPES
 from ..services.discovery.inventory import device_label, summarise_group
 from ..services.events import ANOMALY, DEVICE, EXPOSURE
@@ -43,10 +44,18 @@ async def _primary(request: Request, device_id: int) -> tuple[dict, list[dict]]:
 
 
 @router.get("/devices")
-async def list_devices(request: Request, q: str | None = None) -> dict:
+async def list_devices(
+    request: Request,
+    q: str | None = None,
+    group_id: int | None = Query(default=None, ge=0),
+    tag: str | None = Query(default=None, max_length=24),
+) -> dict:
     now = _now_ms()
     q = (q or "").strip()[:64] or None
-    rows = await asyncio.to_thread(_state(request).discovery.inventory.listing, now, q=q)
+    inv = _state(request).discovery.inventory
+    rows = await asyncio.to_thread(
+        lambda: inv.listing(now, q=q, group_id=group_id, tag=(tag or None))
+    )
     return {"now_ms": now, "devices": rows}
 
 
@@ -77,8 +86,9 @@ async def device_detail(device_id: int, request: Request) -> dict:
         if e["details"].get("device_id") in {m["id"] for m in members}
         or any(mac in json.dumps(e["details"]) for mac in macs)
     ][:100]
+    [summary] = await asyncio.to_thread(st.groups.decorate, [summarise_group(d, members, now)])
     return {
-        "device": summarise_group(d, members, now),
+        "device": summary,
         "members": members,
         "ips": ips,
         "target": target,
@@ -92,6 +102,8 @@ class DeviceEdit(BaseModel):
     name: str | None = Field(default=None, max_length=64)
     type_override: DeviceType | None = None
     notes: str | None = Field(default=None, max_length=500)
+    group_id: int | None = Field(default=None, ge=1)
+    tags: list[str] | None = Field(default=None, max_length=12)
 
 
 @router.get("/devices/{device_id}/dns")
@@ -114,6 +126,15 @@ async def edit_device(device_id: int, body: DeviceEdit, request: Request) -> dic
     st = _state(request)
     d, _ = await _primary(request, device_id)
     values = {k: (v or None) for k, v in body.model_dump(exclude_unset=True).items()}
+    group_set = "group_id" in values
+    group_id, tags = values.pop("group_id", None), values.pop("tags", None)
+    try:
+        if group_set:
+            await asyncio.to_thread(st.groups.assign, [d["id"]], group_id)
+        if "tags" in body.model_fields_set:
+            await asyncio.to_thread(st.groups.set_tags, d["id"], tags or [])
+    except GroupError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
     if values:
         await asyncio.to_thread(st.device_store.update, d["id"], values)
         st.discovery.inventory.forget(d["mac"])
