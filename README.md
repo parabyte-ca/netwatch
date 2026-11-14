@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.13.0-blue)
+![Version](https://img.shields.io/badge/version-0.14.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -20,8 +20,8 @@ admin panel; **v0.7** the network map with incident replay and the Deco mesh int
 **v0.8** live per-device bandwidth, the bufferbloat grade and the Home Hub integration;
 **v0.9** the exposure scan, the network health score with weekly reports, and Ask NetWatch;
 **v0.10** a sortable Devices page and in-place renaming; **v0.11** the AdGuard Home integration
-and the DNS page; **v0.12** AdGuard Home in the device inventory; **v0.13 (this release)**
-optional AdGuard Home actions. See the [Roadmap](#roadmap) for what's next.
+and the DNS page; **v0.12** AdGuard Home in the device inventory; **v0.13** optional AdGuard Home actions;
+**v0.14 (this release)** device groups and tags, and every device on the map. See the [Roadmap](#roadmap) for what's next.
 
 ## Features
 - **Probes:** ICMP (from every 1 s), DNS query latency/failures, TCP connect, and HTTP checks,
@@ -78,10 +78,20 @@ optional AdGuard Home actions. See the [Roadmap](#roadmap) for what's next.
   when a path test shows loss starting beyond the Hub), one destination only, Home Hub DNS, a
   single Deco or the whole mesh, one device, IP conflicts, switching loops and rogue DHCP.
 - **Network map:** an interactive map of the home network (Internet → Bell → Home Hub → switch
-  → TrueNAS, the main Deco and its satellites, and the devices on each Deco). Monitored and
-  named devices are nodes; the rest are counted per Deco and listed when you tap the group.
-  Links show median latency and are coloured by packet loss, Wi-Fi links are dashed, and tapping
-  a node opens its details. The layout is automatic; drag nodes to tidy it (saved, with a reset).
+  → TrueNAS, the main Deco and its satellites, and every device on each Deco). Devices are
+  coloured by their group (or by status or live bandwidth) and show their tags; a Deco with many
+  devices gets them in a tidy grid, grouped together. Group chips above the map highlight one
+  group or fold it into a single node, recently offline devices can be shown, and the current
+  setup can be saved as a named view. Links show median latency and are coloured by packet loss,
+  Wi-Fi links are dashed, and tapping a node opens its details. The layout is automatic; drag
+  nodes to tidy it (positions and folded groups are saved in NetWatch, with a reset).
+- **Device groups and tags:** put devices in groups you name (for example "Smart home",
+  "Family", "Kids", or one child's phone, tablet and laptop), each with a colour and an icon,
+  and give them tags (`upstairs`, `guest`, `work`). Assign one device on its page or many at
+  once from the Devices page; NetWatch suggests groups from the device type. Filter the Devices
+  page and the timeline by group or tag. Groups and tags stay with a device when its address or
+  private MAC changes, keep it from being forgotten as stale, are in the backups, and can be
+  exported and imported (matched by hardware address).
 - **Incident replay:** move a time slider or pick an incident to see the map as it was, with the
   likely cause and the failing nodes highlighted ("Show on map" from Diagnosis and events).
 - **Deco mesh integration (optional):** reads the Decos' local API with the owner password to
@@ -348,6 +358,15 @@ Every change asks you to confirm exactly what will happen, and every change (and
 attempt) is written to the security log on the timeline. AdGuard Home has no read-only accounts,
 so with actions on, NetWatch uses the admin rights of the user you entered.
 
+### Groups and tags
+On **Devices**, open **Groups…** to create groups (name, colour, icon) or accept a suggestion
+from the banner (untick any device that doesn't belong first). Tick devices in the list to set
+their group or add or remove a tag in one go, or edit one device's group and tags on its page.
+**Export groups and tags** saves the set-up as a file; **Import** brings it back on a new
+install (devices are matched by MAC, unknown ones are listed). On the **Map**, the group chips
+highlight a group (click the name) or fold it into one node (click the arrow), and **Save view
+as…** keeps the colouring, filters and folded groups under a name.
+
 ### Ask NetWatch
 Create an API key at [console.anthropic.com](https://console.anthropic.com) (usage is billed to
 that account), then under **Admin → Ask NetWatch** paste it, pick the model and effort, press
@@ -579,8 +598,9 @@ Planned, in order (suggestions welcome):
 | Version | Feature |
 |---|---|
 | Next | **AdGuard Home per device and per group:** give a device (or several) its own AdGuard Home settings from NetWatch, such as an exception so nothing is blocked for it, using AdGuard Home's persistent clients |
-| Next | **Device groups and tags**, defined once and used everywhere: groups you name (for example "Smart home", "Family", "Kids", or one child's phone, tablet and laptop), each with a colour and an icon, plus free tags (a device can have several, e.g. `upstairs`, `guest`, `work`). Assign one device or many at once from the Devices page; groups are suggested from the device type (smart plugs and switches → "Smart home"). Stored in the database, kept when a device changes address or uses a private MAC (merged devices), included in backups, exportable as JSON. Used by: Devices page filters and a group column, timeline and alert filters (e.g. mute new-device alerts for "Smart home"), bandwidth and DNS per group, the weekly report per group ("Smart home: 3 short outages"), and AdGuard Home settings per group (one persistent client per group) |
-| Next | **Every device on the map:** each device as its own node under the Deco, switch or Home Hub it connects through, coloured by group (or by status or bandwidth), with tags as badges. Groups can be collapsed into one node and expanded again; filter by group or tag; drag devices to arrange them, with positions saved in NetWatch (the same on every browser and phone); saved views (e.g. "Kids only", "Smart home") |
+| Next (v0.15) | **More from groups:** quiet groups (mute new-device and anomaly alerts for, say, "Smart home"), bandwidth and DNS totals per group, and the weekly report per group |
+| Done in 0.14 | **Device groups and tags**, defined once and used everywhere: groups you name (for example "Smart home", "Family", "Kids", or one child's phone, tablet and laptop), each with a colour and an icon, plus free tags (a device can have several, e.g. `upstairs`, `guest`, `work`). Assign one device or many at once from the Devices page; groups are suggested from the device type (smart plugs and switches → "Smart home"). Stored in the database, kept when a device changes address or uses a private MAC (merged devices), included in backups, exportable as JSON. Used by: Devices page filters and a group column, timeline and alert filters (e.g. mute new-device alerts for "Smart home"), bandwidth and DNS per group, the weekly report per group ("Smart home: 3 short outages"), and AdGuard Home settings per group (one persistent client per group) |
+| Done in 0.14 | **Every device on the map:** each device as its own node under the Deco, switch or Home Hub it connects through, coloured by group (or by status or bandwidth), with tags as badges. Groups can be collapsed into one node and expanded again; filter by group or tag; drag devices to arrange them, with positions saved in NetWatch (the same on every browser and phone); saved views (e.g. "Kids only", "Smart home") |
 | Next | **YouTube controls per device or group:** force YouTube Restricted Mode, block or allow YouTube as a whole, optionally on a schedule. Allowing only chosen channels or videos is not possible with DNS: every video comes from the same YouTube domains |
 | Next | **Who's home:** pick the phones (or other devices) that belong to each person; NetWatch shows who is home from whether those devices are on the Wi-Fi, with arrival and departure times on the timeline and a "home now" list on the Overview. Phones that sleep their Wi-Fi are smoothed over (away only after a set time without being seen). Stays on the LAN: nothing is sent anywhere |
 | Next | **Per-group schedules:** time rules for a group or device through AdGuard Home, for example Kids' internet off from 21:00 to 07:00 on school nights, or YouTube and games blocked during homework hours, with exceptions you can grant from NetWatch ("15 more minutes"). Changes are confirmed and written to the security log like the other AdGuard Home actions |
