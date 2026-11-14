@@ -42,6 +42,7 @@ class FakeAdGuard:
             "top_upstreams_responses": [{"tls://1.1.1.1:853": 700}, {"8.8.8.8:53": 150}],
             "top_upstreams_avg_time": [{"tls://1.1.1.1:853": 0.015}, {"8.8.8.8:53": 0.020}],
         }  # fmt: skip
+        self.dhcp: dict | None = None  # None: no DHCP support (404)
         self.fail: int | None = None  # HTTP status to answer with
         self.requests: list[httpx.Request] = []
 
@@ -91,6 +92,8 @@ class FakeAdGuard:
             )
         if path == "/control/clients":
             return httpx.Response(200, json={**self.clients, "supported_tags": []})
+        if path == "/control/dhcp/status" and self.dhcp is not None:
+            return httpx.Response(200, json=self.dhcp)
         return httpx.Response(404)
 
 
@@ -110,6 +113,48 @@ async def test_status_stats_and_clients():
     ids = {x["id"]: x["name"] for x in await c.clients()}
     assert ids == {"192.168.2.20": "Office PC", "192.168.2.30": "tv.lan"}
     assert all(r.method == "GET" for r in fake.requests)
+    await c.aclose()
+
+
+async def test_clients_are_grouped_and_ids_classified():
+    fake = FakeAdGuard()
+    fake.clients = {
+        "clients": [{"name": "Laptop", "ids": ["AA-BB-CC-DD-EE-01", "192.168.2.40"]},
+                    {"name": "Kids", "ids": ["192.168.2.0/28", "kid-tablet"]}],
+        "auto_clients": [{"ip": "192.168.2.30", "name": ""}, {"ip": "fe80::1"}],
+    }  # fmt: skip
+    c = client_for(fake)
+    got = await c.clients()
+    assert got[0] == {"id": "aa:bb:cc:dd:ee:01", "kind": "mac", "name": "Laptop", "group": 0}
+    assert got[1] == {"id": "192.168.2.40", "kind": "ip", "name": "Laptop", "group": 0}
+    assert [g["kind"] for g in got[2:4]] == ["other", "other"]
+    assert got[4] == {"id": "192.168.2.30", "kind": "ip", "name": None, "group": None}
+    assert got[5]["kind"] == "other"
+    await c.aclose()
+
+
+async def test_dhcp_status_leases_or_not_available():
+    fake = FakeAdGuard()
+    c = client_for(fake)
+    assert await c.dhcp_status() == {"available": False, "enabled": False, "leases": []}
+    fake.dhcp = {
+        "enabled": True, "interface_name": "eth0",
+        "leases": [{"mac": "AA:BB:CC:DD:EE:02", "ip": "192.168.2.101", "hostname": "pixel-9",
+                    "expires": "2026-11-15T12:00:00Z"},
+                   {"mac": "not-a-mac", "ip": "192.168.2.102", "hostname": "x"}],
+        "static_leases": [{"mac": "aa-bb-cc-dd-ee-03", "ip": "192.168.2.15", "hostname": ""}],
+    }  # fmt: skip
+    d = await c.dhcp_status()
+    assert d["available"] and d["enabled"]
+    assert d["leases"] == [
+        {"mac": "aa:bb:cc:dd:ee:02", "ip": "192.168.2.101", "hostname": "pixel-9", "static": False},
+        {"mac": "aa:bb:cc:dd:ee:03", "ip": "192.168.2.15", "hostname": None, "static": True},
+    ]
+    fake.dhcp["enabled"] = False
+    assert (await c.dhcp_status())["enabled"] is False
+    fake.fail = 401
+    with pytest.raises(AdGuardLoginError):
+        await c.dhcp_status()
     await c.aclose()
 
 
