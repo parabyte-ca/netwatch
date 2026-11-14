@@ -183,6 +183,50 @@ def test_store_roundtrip_and_purge(store):
     assert DNS == "dns" and DNS in KINDS
 
 
+def test_client_store_hours_summary_purge_and_strip(store):
+    from netwatch.services.adguard.clients import HOUR_MS, ClientStore, hour_of
+    from netwatch.services.discovery.inventory import DeviceStore
+
+    devs = DeviceStore(store.engine)
+    d1 = devs.insert({"mac": "aa:bb:cc:00:00:01", "first_seen_ms": 0, "last_seen_ms": 0})
+    cs = ClientStore(store.engine)
+    h0, h1 = 10 * HOUR_MS, 11 * HOUR_MS
+    assert hour_of(h1 + 1234) == h1
+    cs.put([
+        {"hour_ms": h0, "client": "192.168.2.20", "device_id": d1, "queries": 100, "blocked": 10,
+         "failed": 2, "domains": {"a.com": 50, "b.com": 20}, "blocked_domains": {"ads.x": 10}},
+        {"hour_ms": h0, "client": "192.168.2.99", "device_id": None, "queries": 7, "blocked": 0,
+         "failed": 0, "domains": {"a.com": 7}, "blocked_domains": {}},
+    ])  # fmt: skip
+    # The current hour is rewritten every poll.
+    row = {"hour_ms": h1, "client": "192.168.2.20", "device_id": d1, "queries": 5, "blocked": 0,
+           "failed": 0, "domains": {"b.com": 5}, "blocked_domains": {}}  # fmt: skip
+    cs.put([row])
+    cs.put([{**row, "queries": 40, "domains": {"b.com": 40}}])
+    assert cs.hour(h1)[0]["queries"] == 40 and cs.hour(h1)[0]["domains"] == {"b.com": 40}
+    s = cs.summary([d1], h0, h1 + HOUR_MS)
+    assert s["queries"] == 140 and s["blocked_pct"] == round(1000 / 140, 1)
+    assert [h["queries"] for h in s["hourly"]] == [100, 40]
+    assert s["top_domains"][0] == {"domain": "b.com", "queries": 60}
+    assert s["top_blocked"] == [{"domain": "ads.x", "queries": 10}]
+    n = cs.network(h0, h1 + HOUR_MS)
+    assert n["unknown_clients"] == [{"client": "192.168.2.99", "queries": 7}]
+    assert n["top_domains"][0]["domain"] == "b.com"
+    assert cs.device_hours(0) == {d1: [(100, 10), (40, 0)]} or sorted(cs.device_hours(0)[d1]) == [
+        (40, 0),
+        (100, 10),
+    ]
+    # After 7 days the names go, the counts stay; after the rollup retention the rows go.
+    assert cs.strip_domains(h1) == 2
+    s = cs.summary([d1], h0, h1 + HOUR_MS)
+    assert s["queries"] == 140 and s["top_domains"] == [{"domain": "b.com", "queries": 40}]
+    assert cs.strip_domains(h1) == 0
+    assert cs.purge(h1) == 2 and cs.summary([d1], 0, h1 + HOUR_MS)["queries"] == 40
+    # Deleting the device keeps its history as an unknown client.
+    devs.delete(d1)
+    assert cs.hour(h1)[0]["device_id"] is None
+
+
 # ── service ───────────────────────────────────────────────────────────────────
 
 T = datetime(2026, 11, 14, 12, 0, tzinfo=UTC)
