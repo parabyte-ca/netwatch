@@ -39,6 +39,7 @@ from .auth import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, AuthStore, LoginThrottle
 from .config import Settings, get_settings
 from .db import make_engine, run_migrations
 from .probes import Prober
+from .services.adguard.service import AdGuardService, AdGuardStore
 from .services.assistant import Assistant
 from .services.bufferbloat import BufferbloatStore, BufferbloatTester
 from .services.deco.service import DecoService
@@ -238,6 +239,9 @@ def create_app(
                 ),
                 "traffic": rollup_and_purge_traffic(int(now)),
                 "hub_stats": hub_store.purge(now_ms - settings.rollup_retention_days * day_ms),
+                "adguard_stats": adguard_store.purge(
+                    now_ms - settings.rollup_retention_days * day_ms
+                ),
                 "bufferbloat_tests": bufferbloat_store.purge(
                     now_ms - settings.throughput_retention_days * day_ms
                 ),
@@ -284,6 +288,7 @@ def create_app(
             raw_retention_days=settings.raw_retention_days,
             tz=settings.tz,
             devices=device_store,
+            local_dns=lambda: {app.state.adguard.config()["host"]} - {""},
         )
         app.state.discovery = discovery
         app.state.traffic = traffic_store
@@ -297,6 +302,11 @@ def create_app(
         hub_store = HubStore(engine)
         app.state.hub_store = hub_store
         app.state.hub = HubService(store, events, hub_store, SecretBox(settings.data_dir))
+        adguard_store = AdGuardStore(engine)
+        app.state.adguard_store = adguard_store
+        app.state.adguard = AdGuardService(
+            store, events, adguard_store, SecretBox(settings.data_dir)
+        )
         app.state.deco = DecoService(
             store,
             events,
@@ -317,6 +327,7 @@ def create_app(
                 end_ms,
                 hub_store=hub_store,
                 bufferbloat_store=bufferbloat_store,
+                adguard_store=app.state.adguard_store,
             )
 
         app.state.health = HealthService(
@@ -347,6 +358,7 @@ def create_app(
         await discovery.start()
         app.state.deco.start()
         app.state.hub.start()
+        app.state.adguard.start()
         app.state.bufferbloat.start_schedule(
             enabled=lambda: settings.bufferbloat_nightly,
             window=lambda: app.state.updates.policy().get("window", settings.auto_update_window),
@@ -370,6 +382,7 @@ def create_app(
             await app.state.updates.stop()
             await app.state.deco.stop()
             await app.state.hub.stop()
+            await app.state.adguard.stop()
             await app.state.bufferbloat.stop()
             await app.state.exposure.stop()
             await app.state.health.stop()

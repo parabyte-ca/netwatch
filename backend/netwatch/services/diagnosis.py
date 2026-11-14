@@ -19,7 +19,18 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from .events import ANOMALY, HUB, LOSS, NIC_ERRORS, NIC_LINK, NIC_SPEED, OUTAGE, WIFI, EventLog
+from .events import (
+    ANOMALY,
+    DNS,
+    HUB,
+    LOSS,
+    NIC_ERRORS,
+    NIC_LINK,
+    NIC_SPEED,
+    OUTAGE,
+    WIFI,
+    EventLog,
+)
 from .netinfo import DefaultRoute
 from .pathtest import PathStore
 from .stats import aggregate, merge
@@ -36,6 +47,10 @@ HEALTHY_MAX_LOSS = 20.0  # % loss during the incident below which a target count
 HOST, LAN, GATEWAY, GATEWAY_DNS, MESH, DEVICE, ISP, INTERNET, PUBLIC_DNS = (
     "host", "lan", "gateway", "gateway_dns", "mesh", "device", "isp", "internet", "public_dns",
 )  # fmt: skip
+LOCAL_DNS = "local_dns"  # AdGuard Home (or another resolver on the LAN)
+DNS_LAYERS = frozenset({GATEWAY_DNS, PUBLIC_DNS, LOCAL_DNS})
+# AdGuard Home reports that start an incident on their own (DNS can fail with every probe fine).
+DNS_SEED_TYPES = frozenset({"adguard_unreachable", "upstream_failing"})
 
 LAYER_LABEL = {
     HOST: "TrueNAS network link",
@@ -47,6 +62,7 @@ LAYER_LABEL = {
     ISP: "Bell network",
     INTERNET: "Internet destinations",
     PUBLIC_DNS: "Public DNS",
+    LOCAL_DNS: "AdGuard Home",
 }
 
 # Tree for the UI: (layer, parent)
@@ -60,12 +76,17 @@ TOPOLOGY = (
     (ISP, GATEWAY),
     (INTERNET, ISP),
     (PUBLIC_DNS, ISP),
+    (LOCAL_DNS, LAN),
 )
 
 
-def target_layer(t: dict, gateway_ip: str | None) -> str:
+def target_layer(
+    t: dict, gateway_ip: str | None, local_dns: frozenset[str] | set[str] = frozenset()
+) -> str:
     g, host = t["group"], t["host"]
     if t["kind"] == "dns":
+        if host in local_dns:
+            return LOCAL_DNS
         return GATEWAY_DNS if host == gateway_ip else PUBLIC_DNS
     if g == "gateway" or (gateway_ip and host == gateway_ip):
         return GATEWAY
@@ -104,6 +125,7 @@ class Incident:
     path_tests: list[dict] = field(default_factory=list)
     wifi_events: list[dict] = field(default_factory=list)
     hub_events: list[dict] = field(default_factory=list)
+    dns_events: list[dict] = field(default_factory=list)
     causes: list[Cause] = field(default_factory=list)
 
     @property
@@ -132,6 +154,7 @@ class Incident:
             "anomalies": [_brief(e) for e in self.anomalies],
             "wifi_events": [_brief(e) for e in self.wifi_events],
             "hub_events": [_brief(e) for e in self.hub_events],
+            "dns_events": [_brief(e) for e in self.dns_events],
             "path_tests": [
                 {k: t.get(k) for k in ("id", "ts_ms", "host", "first_loss_hop", "reached")}
                 for t in self.path_tests
@@ -161,6 +184,7 @@ class Diagnoser:
         raw_retention_days: int = 7,
         tz: str = "America/Toronto",
         devices=None,
+        local_dns: Callable[[], set[str]] | None = None,
     ) -> None:
         self.store = store
         self.events = events
@@ -169,9 +193,14 @@ class Diagnoser:
         self.raw_retention_days = raw_retention_days
         self.tz = ZoneInfo(tz)
         self.devices = devices  # DeviceStore: which Deco a monitored device was on
+        self.local_dns = local_dns or set  # addresses of LAN resolvers (AdGuard Home)
         # Incidents that ended long enough ago that nothing around them can change any more
         # are diagnosed once: a poll then only works on open and recent incidents.
         self._done: OrderedDict[tuple, Incident] = OrderedDict()
+
+    def layer(self, t: dict, gateway_ip: str | None) -> str:
+        """target_layer with this NetWatch's LAN resolvers (AdGuard Home) taken into account."""
+        return target_layer(t, gateway_ip, frozenset(self.local_dns()))
 
     # ── incidents ────────────────────────────────────────────────────────────
 
@@ -179,6 +208,11 @@ class Diagnoser:
         """Incidents overlapping [start_ms, end_ms), oldest first, each diagnosed."""
         now = now_ms or int(time.time() * 1000)
         failures = self.events.list(start_ms, end_ms, kinds=[OUTAGE, LOSS], limit=5000)
+        failures += [
+            e
+            for e in self.events.list(start_ms, end_ms, kinds=[DNS], limit=2000)
+            if e["details"].get("type") in DNS_SEED_TYPES
+        ]
         failures.sort(key=lambda e: e["start_ms"])
         groups: list[Incident] = []
         for ev in failures:
@@ -196,8 +230,10 @@ class Diagnoser:
         targets = {t["id"]: t for t in self.store.list_targets()}
         route = self.gateway()
         gw = route.gateway if route else None
+        local = frozenset(self.local_dns())
         sig = (
             gw,
+            local,
             tuple((t["id"], t["host"], t["group"], t["kind"], t["name"]) for t in targets.values()),
         )
         out: list[Incident] = []
@@ -215,12 +251,12 @@ class Diagnoser:
             ctx_events = self.events.list(
                 todo[0].start_ms - ANOMALY_PAD_MS,
                 max((g.end_ms or now) for g in todo) + ANOMALY_PAD_MS,
-                kinds=[NIC_LINK, NIC_SPEED, NIC_ERRORS, ANOMALY, WIFI, HUB],
+                kinds=[NIC_LINK, NIC_SPEED, NIC_ERRORS, ANOMALY, WIFI, HUB, DNS],
                 limit=50_000,
             )
             wifi = self._wifi_map()
             for inc in todo:
-                self._context(inc, targets, gw, ctx_events, wifi, now)
+                self._context(inc, targets, gw, ctx_events, wifi, now, local)
                 inc.causes = diagnose(inc, now)
                 if inc.end_ms is not None and inc.end_ms + ANOMALY_PAD_MS + 60_000 < now:
                     key = (inc.start_ms, inc.end_ms, tuple(e["id"] for e in inc.events), sig)
@@ -237,6 +273,7 @@ class Diagnoser:
         ctx_events: list,
         wifi: dict[int, dict],
         now: int,
+        local: frozenset[str] = frozenset(),
     ) -> None:
         start, end = inc.start_ms, inc.end_ms or now
         for ev in inc.events:
@@ -245,7 +282,12 @@ class Diagnoser:
                 continue
             entry = inc.failing.setdefault(
                 t["id"],
-                {"name": t["name"], "host": t["host"], "layer": target_layer(t, gw), "kinds": []},
+                {
+                    "name": t["name"],
+                    "host": t["host"],
+                    "layer": target_layer(t, gw, local),
+                    "kinds": [],
+                },
             )
             if ev["kind"] not in entry["kinds"]:
                 entry["kinds"].append(ev["kind"])
@@ -260,7 +302,7 @@ class Diagnoser:
                 inc.healthy[t["id"]] = {
                     "name": t["name"],
                     "host": t["host"],
-                    "layer": target_layer(t, gw),
+                    "layer": target_layer(t, gw, local),
                     "loss_pct": lp,
                     "deco_mac": wifi.get(t["id"], _NO_WIFI)["deco_mac"],
                 }
@@ -269,9 +311,9 @@ class Diagnoser:
                 if _overlaps(e, start - ANOMALY_PAD_MS, end + ANOMALY_PAD_MS):
                     inc.anomalies.append(e)
             elif _overlaps(e, start - CONTEXT_PAD_MS, end + CONTEXT_PAD_MS):
-                {WIFI: inc.wifi_events, HUB: inc.hub_events}.get(e["kind"], inc.nic_events).append(
-                    e
-                )
+                {WIFI: inc.wifi_events, HUB: inc.hub_events, DNS: inc.dns_events}.get(
+                    e["kind"], inc.nic_events
+                ).append(e)
         tests = self.paths.list(start_ms=start - 60_000, end_ms=end + CONTEXT_PAD_MS, limit=20)
         linked = {t["id"] for t in tests}
         ev_ids = [ev["id"] for ev in inc.events]
@@ -426,7 +468,7 @@ def diagnose(inc: Incident, now_ms: int) -> list[Cause]:
         )
 
     # Everything including the Home Hub failed.
-    if GATEWAY in fail and not (ok - {GATEWAY_DNS, PUBLIC_DNS}) and not link_down:
+    if GATEWAY in fail and not (ok - DNS_LAYERS) and not link_down:
         causes.append(
             Cause(
                 "lan",
@@ -536,8 +578,7 @@ def diagnose(inc: Incident, now_ms: int) -> list[Cause]:
             )
 
     # DNS only.
-    dns_layers = {GATEWAY_DNS, PUBLIC_DNS}
-    if fail and fail <= dns_layers:
+    if fail and fail <= DNS_LAYERS:
         dns_anoms = [
             a["title"]
             for a in inc.anomalies
@@ -566,7 +607,9 @@ def diagnose(inc: Incident, now_ms: int) -> list[Cause]:
                 Cause(
                     "dns",
                     "DNS resolution failing while connectivity was fine",
-                    PUBLIC_DNS if GATEWAY_DNS not in fail else GATEWAY_DNS,
+                    GATEWAY_DNS
+                    if GATEWAY_DNS in fail
+                    else (LOCAL_DNS if LOCAL_DNS in fail else PUBLIC_DNS),
                     70,
                     [f"Failing: {_names(inc.failing)}.", *dns_anoms],
                     [
@@ -703,6 +746,9 @@ def diagnose(inc: Incident, now_ms: int) -> list[Cause]:
                     ],
                 )
             )
+
+    # AdGuard Home's own reports: "DNS is the cause" when the network itself was fine.
+    causes += _dns_causes(inc, fail, ok, bool(link_down))
 
     # Deco API: units going offline, devices sharing a Deco, Wi-Fi drops and roaming.
     wifi = inc.wifi_events
@@ -867,6 +913,70 @@ def diagnose(inc: Incident, now_ms: int) -> list[Cause]:
         if c.id not in best or c.confidence > best[c.id].confidence:
             best[c.id] = c
     return sorted(best.values(), key=lambda c: -c.confidence)
+
+
+def _dns_causes(inc: Incident, fail: set[str], ok: set[str], link_down: bool) -> list[Cause]:
+    """Causes from AdGuard Home's events. Only when the TrueNAS link and the Home Hub were
+    healthy: if they failed too, the network is the problem and DNS merely suffered with it."""
+    if not inc.dns_events or link_down or GATEWAY in fail:
+        return []
+    by_type: dict[str, list[dict]] = {}
+    for e in inc.dns_events:
+        by_type.setdefault(e["details"].get("type"), []).append(e)
+    healthy = _names(inc.healthy)
+    working = [f"Working at the same time: {healthy}."] if healthy else []
+    hub_ok = (
+        ["The Home Hub stayed reachable, so the local network was fine."] if GATEWAY in ok else []
+    )
+    out: list[Cause] = []
+    if by_type.get("adguard_unreachable"):
+        out.append(
+            Cause(
+                "adguard_down",
+                "DNS is the cause: AdGuard Home was unreachable, so names could not be resolved",
+                LOCAL_DNS,
+                93,
+                [e["title"] for e in by_type["adguard_unreachable"][:3]] + hub_ok + working,
+                [
+                    "Check the Raspberry Pi: power supply, SD card, and that the AdGuard Home "
+                    "service is running (sudo systemctl status AdGuardHome).",
+                    "Hand out a second DNS server in DHCP so devices can fall back when the Pi "
+                    "is down.",
+                ],
+            )
+        )
+    failing = by_type.get("upstream_failing", []) + by_type.get("dns_errors", [])
+    if failing:
+        out.append(
+            Cause(
+                "dns_upstream",
+                "DNS is the cause: AdGuard Home's upstream resolvers were failing",
+                LOCAL_DNS,
+                90,
+                [e["title"] for e in failing[:5]] + hub_ok + working,
+                [
+                    "In AdGuard Home (Settings, DNS settings), test the upstreams and switch "
+                    "the failing one, or add a second upstream and a fallback DNS server.",
+                    "Encrypted upstreams (DoT, DoH) can fail when port 853 or the provider is "
+                    "blocked; try a plain DNS upstream to compare.",
+                ],
+            )
+        )
+    if by_type.get("latency_spike"):
+        out.append(
+            Cause(
+                "dns_slow",
+                "DNS was slow: AdGuard Home took much longer than usual to answer",
+                LOCAL_DNS,
+                70,
+                [e["title"] for e in by_type["latency_spike"][:3]] + working,
+                [
+                    "Check the Pi's load and the upstreams' response times in AdGuard Home; "
+                    "enable parallel requests or a faster upstream.",
+                ],
+            )
+        )
+    return out
 
 
 def _path_evidence(inc: Incident) -> tuple[str, int] | None:

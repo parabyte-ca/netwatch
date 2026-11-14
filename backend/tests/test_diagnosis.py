@@ -230,3 +230,74 @@ def test_window_stats_combines_rollups_and_recent_raw(store, diag, net):
     samples(store, t, NOW - 300_000, NOW - 240_000, ok=False)  # after the watermark: raw
     st = diag.window_stats(t["id"], old - 60_000, NOW, NOW)
     assert st["count"] == 30 + 30 and st["lost"] == 30
+
+
+# ── AdGuard Home: "DNS is the cause" ──────────────────────────────────────────
+
+AGH = "192.168.2.53"
+
+
+def dns_event(diag, typ, title, start, end=None, **details):
+    if end is None and typ in ("dns_errors", "latency_spike", "new_client"):
+        return diag.events.instant("dns", "warning", start, title, details={"type": typ, **details})
+    return diag.events.open("dns", "warning", start, title, details={"type": typ, **details},
+                            end_ms=end if end is not None else start + 120_000)  # fmt: skip
+
+
+def test_dns_upstream_blamed_when_link_and_hub_are_healthy(store, diag, net):
+    # Web checks fail (they need DNS), the Hub and both Decos answer, AdGuard reports failures.
+    web = make_target(store, name="Google web", kind="http", host="www.google.com",
+                      url="https://www.google.com", group="public")  # fmt: skip
+    net = {**net, "web": web}
+    dns_event(diag, "upstream_failing", "DNS upstream tls://1.1.1.1:853 is failing (40 of 41)",
+              T0 + 5_000, upstream="tls://1.1.1.1:853")  # fmt: skip
+    dns_event(diag, "dns_errors", "DNS errors spiked: 40 of 60 queries failed", T0 + 10_000)
+    c = top(scenario(store, diag, net, {"web"}))
+    assert c.id == "dns_upstream" and c.layer == "local_dns" and c.confidence == 90
+    assert c.title.startswith("DNS is the cause")
+    assert any("tls://1.1.1.1:853" in e for e in c.evidence)
+    assert any("Home Hub stayed reachable" in e for e in c.evidence)
+    assert any("Deco Living" in e for e in c.evidence)  # the mesh was fine
+
+
+def test_adguard_down_opens_an_incident_with_every_probe_healthy(store, diag, net):
+    for t in net.values():
+        samples(store, t, T0 - 300_000, T0 + 300_000, ok=True)
+    dns_event(diag, "adguard_unreachable", "AdGuard Home is unreachable", T0, T0 + 180_000)
+    incs = diag.incidents(T0 - 600_000, NOW, NOW)
+    c = top(incs)
+    assert c.id == "adguard_down" and c.confidence == 93 and c.layer == "local_dns"
+    assert incs[0].dns_events and incs[0].as_dict(NOW)["dns_events"][0]["type"] == (
+        "adguard_unreachable"
+    )
+
+
+def test_no_dns_verdict_when_the_hub_failed_too(store, diag, net):
+    dns_event(diag, "upstream_failing", "DNS upstream x is failing", T0 + 5_000, upstream="x")
+    incs = scenario(store, diag, net, {"hub", "cf", "goog", "dns_hub", "dns_cf", "deco1", "deco2"})
+    ids = [c.id for c in incs[0].causes]
+    assert "dns_upstream" not in ids and ids[0] != "adguard_down"
+
+
+def test_protection_off_and_new_clients_do_not_start_incidents(store, diag, net):
+    dns_event(diag, "protection_disabled", "AdGuard Home protection is off", T0, T0 + 60_000)
+    dns_event(diag, "new_client", "New DNS client: 192.168.2.99", T0)
+    assert diag.incidents(T0 - 600_000, NOW, NOW) == []
+
+
+def test_dns_target_at_adguard_is_its_own_layer(store, net):
+    from netwatch.services.diagnosis import LOCAL_DNS, target_layer
+
+    t = make_target(store, name="DNS via AdGuard", kind="dns", host=AGH, group="dns",
+                    dns_query="example.com", dns_rdtype="A")  # fmt: skip
+    assert target_layer(t, GW) == "public_dns"
+    assert target_layer(t, GW, {AGH}) == LOCAL_DNS
+    d = Diagnoser(store, EventLog(store.engine), PathStore(store.engine),
+                  gateway=lambda: DefaultRoute("br0", GW), local_dns=lambda: {AGH})  # fmt: skip
+    samples(store, t, T0 - 300_000, T0, ok=True)
+    samples(store, t, T0, T0 + 120_000, ok=False)
+    for _key, other in net.items():
+        samples(store, other, T0 - 300_000, T0 + 120_000, ok=True)
+    outage(d, t, T0, T0 + 120_000)
+    c = top(d.incidents(T0 - 600_000, NOW, NOW))
+    assert c.id == "dns" and c.layer == LOCAL_DNS

@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.10.1-blue)
+![Version](https://img.shields.io/badge/version-0.11.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -18,8 +18,9 @@ and iperf3 throughput tests; **v0.4** device discovery, an inventory and network
 alerts; **v0.5** the root-cause diagnosis engine and an incident report for Bell; **v0.6** the
 admin panel; **v0.7** the network map with incident replay and the Deco mesh integration;
 **v0.8** live per-device bandwidth, the bufferbloat grade and the Home Hub integration;
-**v0.9 (this release)** the exposure scan, the network health score with weekly reports, and Ask
-NetWatch. See the [Roadmap](#roadmap) for what's next.
+**v0.9** the exposure scan, the network health score with weekly reports, and Ask NetWatch;
+**v0.10** a sortable Devices page and in-place renaming; **v0.11 (this release)** the AdGuard
+Home integration and the DNS page. See the [Roadmap](#roadmap) for what's next.
 
 ## Features
 - **Probes:** ICMP (from every 1 s), DNS query latency/failures, TCP connect, and HTTP checks,
@@ -102,6 +103,14 @@ NetWatch. See the [Roadmap](#roadmap) for what's next.
   become timeline events and top-confidence diagnosis causes, and the Bell incident report gains
   a "Bell line" section. Read-only; an advanced explorer shows the Hub's raw data with
   passwords hidden.
+- **AdGuard Home integration (read-only):** reads your AdGuard Home DNS server every minute:
+  query volume, block rate, SERVFAIL and other errors, response time (average and 95th
+  percentile) and the health of each upstream resolver. "AdGuard Home unreachable", "protection
+  off", "upstream failing", DNS error and response-time spikes, and new unknown clients become
+  timeline events; an AdGuard outage or failing upstream opens an incident even when every probe
+  is healthy, and the diagnosis can then say "DNS is the cause". The **DNS** page graphs response
+  time and block rate and lists upstream health and the busiest clients. Alerts stay on the
+  dashboard (no email or push).
 - **Exposure scan:** every night (and on demand) NetWatch checks about 30 well-known ports on
   each LAN device with a plain TCP connection and reads the Home Hub's port forwards, UPnP
   mappings and DMZ. Findings are ranked: a risky service forwarded to the internet (RDP, SMB,
@@ -261,6 +270,52 @@ The Hub's API is undocumented and firmware-dependent; NetWatch detects the sign-
 **Advanced: explore the Hub's data** (e.g. `Device/Optical/Interfaces`) and send the output
 (passwords and keys are hidden) so the mapping can be adjusted. After 3 failed sign-ins NetWatch
 stops trying until you save the settings again, so a changed password can't lock the Hub.
+
+### AdGuard Home
+Under **Admin → AdGuard Home**, enter the address and web interface port of your AdGuard Home
+server, tick **HTTPS** only if you set up encryption with a certificate, enter a username and
+password, press **Test connection**, then tick **Poll every minute** and **Save**. The test
+reports the version, whether protection is on and whether the query log is enabled (NetWatch
+needs it for response times and per-upstream health; without it, counts are estimated from
+AdGuard's statistics). NetWatch only sends GET requests. The password is encrypted like the Hub's,
+is never shown again, and is only ever sent to the address, port and protocol it was saved for:
+change any of them and you must enter the password again. After 3 failed sign-ins NetWatch stops
+trying until you save the settings again.
+
+#### AdGuard Home on a Raspberry Pi
+Any Raspberry Pi 3 or newer is plenty for a home network.
+
+1. Install Raspberry Pi OS Lite (64-bit) and give the Pi a fixed address: reserve one for it in
+   the Home Hub's DHCP settings (for example `192.168.2.53`).
+2. Install AdGuard Home with the official script:
+   ```bash
+   curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
+   ```
+3. Open `http://<pi-address>:3000` and follow the first-run wizard. Keep DNS on port 53. The web
+   interface port you pick here (80 by default, or 3000) is the port to enter in NetWatch.
+4. In AdGuard Home, check **Settings → DNS settings** (upstream servers, for example
+   `tls://1.1.1.1` and `https://dns.quad9.net/dns-query`) and make sure the query log is on under
+   **Settings → General settings → Logs configuration** (24 hours is enough for NetWatch).
+5. Point the network's devices at the Pi. If the Home Hub lets you change the DNS server its DHCP
+   hands out, set it to the Pi's address. Bell's Home Hub 4000 firmware may not offer this; in
+   that case turn on AdGuard's own DHCP server (**Settings → DHCP settings**) and then turn off the
+   Hub's DHCP server, in that order so devices always get an address. Devices pick up the change
+   when they renew their lease (reconnect them to speed it up).
+6. Create a separate user for NetWatch. AdGuard Home has no read-only accounts, so every user can
+   change settings; a separate password at least lets you revoke NetWatch's access on its own.
+   Users are kept in `AdGuardHome.yaml`:
+   ```bash
+   sudo apt install apache2-utils
+   htpasswd -B -C 10 -n -b netwatch 'a-long-random-password'   # prints netwatch:$2y$10$...
+   sudo /opt/AdGuardHome/AdGuardHome -s stop
+   sudo nano /opt/AdGuardHome/AdGuardHome.yaml   # under "users:", add  - name: netwatch / password: <the $2y$... part>
+   sudo /opt/AdGuardHome/AdGuardHome -s start
+   ```
+7. Enter the Pi's address, the web interface port, `netwatch` and the password under
+   **Admin → AdGuard Home** in NetWatch, test, and save.
+
+Optionally add a DNS target aimed at the Pi under **Targets**: probes against it are grouped as
+the "AdGuard Home" layer, so the diagnosis can tell the Pi apart from public DNS.
 
 ### Ask NetWatch
 Create an API key at [console.anthropic.com](https://console.anthropic.com) (usage is billed to
@@ -487,6 +542,8 @@ Planned, in order (suggestions welcome):
 
 | Version | Feature |
 |---|---|
+| 0.12 | **AdGuard Home inventory:** AdGuard's client list feeds device discovery, per-device query counts and top domains, query-rate and blocked-rate anomaly alerts, and DHCP leases when AdGuard is the DHCP server |
+| 0.13 | **AdGuard Home actions (opt-in, off by default):** pause protection for a set time (resumes after a restart too), allow or block a domain, switch upstream; each confirmed in the UI and recorded in the security log |
 | Later | **Wi-Fi coverage view:** a floor plan with the Decos placed and each device's signal and roaming per room |
 | Later | **Speed tests against your plan:** nightly tests reported as a share of the plan's speed, with a 90-day trend |
 

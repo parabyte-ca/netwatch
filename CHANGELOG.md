@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.11.0] - 2026-11-14
+### Added
+- AdGuard Home integration (read-only). Under Admin → AdGuard Home, enter the address, port,
+  HTTPS option, username and password of your AdGuard Home server, test and save. NetWatch reads
+  its status, statistics, query log and client list every minute and records query volume, block
+  rate, SERVFAIL and other errors, response time (average and 95th percentile) and per-upstream
+  health. The password is encrypted, never shown again, and only sent to the address, port and
+  protocol it was saved for; polling stops after 3 failed sign-ins.
+- DNS timeline events: AdGuard Home unreachable, protection off, upstream resolver failing, DNS
+  error spikes and response-time spikes (each with a 30 minute cooldown), and new unknown clients.
+- Diagnosis: "DNS is the cause" verdicts when AdGuard Home was unreachable or its upstream
+  resolvers were failing while the Home Hub stayed reachable, and a "slow DNS" cause. AdGuard
+  outages and failing upstreams now open incidents even when every probe is healthy. DNS targets
+  aimed at AdGuard Home get their own "AdGuard Home" layer instead of counting as public DNS.
+- New DNS page: response time and block rate over 6 hours, 24 hours or 7 days, upstream health
+  and the busiest clients, with warnings when AdGuard Home is down or protection is off.
+- Incident report: a "DNS (AdGuard Home)" section, and "AdGuard Home stayed reachable" under
+  ruled out when it did.
+- README: setting up AdGuard Home on a Raspberry Pi.
+
+### Changed
+- The "must be on your LAN" error now names the device it is about (Deco, Home Hub or AdGuard
+  Home) instead of always saying "the Deco".
+
+### Database
+- Migration 0008 adds the `adguard_stats` table (one row per poll, kept as long as the 1-minute
+  rollups).
+
 ## [0.10.1] - 2026-10-23
 ### Added
 - "Laptop" device type: choose it on a device's page, and devices whose name says so

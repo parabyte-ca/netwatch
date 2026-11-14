@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 
 from .. import __version__
-from .diagnosis import INTERNET, ISP, LAYER_LABEL, Diagnoser, Incident, target_layer
+from .diagnosis import INTERNET, ISP, LAYER_LABEL, Diagnoser, Incident
 from .stats import loss_pct
 from .throughput import ThroughputStore
 
@@ -34,6 +34,7 @@ def build_report(
     now_ms: int | None = None,
     hub_store=None,
     bufferbloat_store=None,
+    adguard_store=None,
 ) -> dict:
     now = now_ms or int(time.time() * 1000)
     end_ms = min(end_ms, now)
@@ -56,8 +57,8 @@ def build_report(
                 "name": t["name"],
                 "host": t["host"],
                 "kind": t["kind"],
-                "layer": target_layer(t, gw),
-                "layer_label": LAYER_LABEL[target_layer(t, gw)],
+                "layer": diag.layer(t, gw),
+                "layer_label": LAYER_LABEL[diag.layer(t, gw)],
                 "probes": st["count"],
                 "loss_pct": loss_pct(st),
                 "median_ms": st["median"],
@@ -110,6 +111,9 @@ def build_report(
         )
 
     line = _line_evidence(diag, hub_store, bufferbloat_store, start_ms, end_ms, local)
+    dns = _dns_evidence(diag, adguard_store, start_ms, end_ms, local)
+    if dns and not dns["unreachable"] and not dns["upstream_failures"]:
+        ruled_out.append("AdGuard Home stayed reachable and its upstream resolvers kept answering.")
     if line.get("hub_restarts") is not None and line["hub_restarts"] == 0:
         ruled_out.append("The Home Hub did not restart during the period (its own uptime).")
 
@@ -138,6 +142,7 @@ def build_report(
         "targets": targets,
         "speeds": speeds,
         "line": line,
+        "dns": dns,
         "ruled_out": ruled_out,
         "incidents": rows,
     }
@@ -278,6 +283,21 @@ def render_markdown(r: dict) -> str:
                 f"- Latency under load: grade {b['grade']} (idle {_ms(b['idle_ms'])}, "
                 f"downloading {_ms(b['down_ms'])}, uploading {_ms(b['up_ms'])}; {b['when']})"
             )
+    dns = r.get("dns") or {}
+    if dns:
+        lines += ["", "## DNS (AdGuard Home)", ""]
+        lines.append(
+            f"- Queries: {dns['queries']}, blocked {dns['blocked_pct']} %, "
+            f"failed {dns['failed_pct']} %"
+        )
+        lines.append(
+            f"- Response time: {_ms(dns['avg_ms'])} average, {_ms(dns['peak_ms'])} worst minute"
+        )
+        lines.append(f"- Unreachable periods: {dns['unreachable']}")
+        lines.append(f"- Upstream failures: {dns['upstream_failures']}")
+        lines.append(f"- Error and latency spikes: {dns['error_spikes'] + dns['latency_spikes']}")
+        for e in dns.get("events", [])[:20]:
+            lines.append(f"  - {e['when']}: {e['title']}")
     if r["speeds"]:
         lines += [
             "",
@@ -331,6 +351,41 @@ def _line_evidence(diag, hub_store, bufferbloat_store, start_ms, end_ms, local) 
                 "tests": len(tests),
             }
     return out
+
+
+def _dns_evidence(diag, adguard_store, start_ms, end_ms, local) -> dict:
+    """What AdGuard Home recorded over the period (empty when it isn't set up)."""
+    if adguard_store is None:
+        return {}
+    rows = [r for r in adguard_store.history(start_ms, end_ms, limit=200_000) if r["reachable"]]
+    if not rows:
+        return {}
+    q = sum(r["queries"] or 0 for r in rows)
+    blocked = sum(r["blocked"] or 0 for r in rows)
+    failed = sum((r["servfail"] or 0) + (r["errors"] or 0) for r in rows)
+    avgs = [(r["avg_ms"], r["queries"] or 1) for r in rows if r["avg_ms"] is not None]
+    evs = diag.events.list(start_ms, end_ms, kinds=["dns"], limit=2000)
+    count: dict[str, int] = {}
+    for e in evs:
+        t = e["details"].get("type")
+        count[t] = count.get(t, 0) + 1
+    answered = max(q - blocked, 1)
+    return {
+        "queries": q,
+        "blocked_pct": round(100 * blocked / q, 1) if q else 0.0,
+        "failed_pct": round(100 * failed / answered, 2) if q else 0.0,
+        "avg_ms": round(sum(a * n for a, n in avgs) / sum(n for _, n in avgs), 1) if avgs else None,
+        "peak_ms": max((a for a, _ in avgs), default=None),
+        "unreachable": count.get("adguard_unreachable", 0),
+        "upstream_failures": count.get("upstream_failing", 0),
+        "error_spikes": count.get("dns_errors", 0),
+        "latency_spikes": count.get("latency_spike", 0),
+        "events": [
+            {"when": local(e["start_ms"]), "title": e["title"]}
+            for e in sorted(evs, key=lambda e: e["start_ms"])
+            if e["details"].get("type") != "new_client"
+        ],
+    }
 
 
 def report_filename(r: dict) -> str:

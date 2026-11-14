@@ -17,7 +17,6 @@ from ..services.diagnosis import (
     LAN,
     LAYER_LABEL,
     TOPOLOGY,
-    target_layer,
 )
 from ..services.netinfo import default_route
 from ..services.report import build_report, report_filename
@@ -45,7 +44,7 @@ def _topology(request: Request) -> list[dict]:
     members: dict[str, list[dict]] = {layer: [] for layer, _ in TOPOLOGY}
     for t in st.store.list_targets(enabled_only=True):
         s = st.monitor.target_status(t["id"], now)
-        members[target_layer(t, gw)].append(
+        members[st.diagnoser.layer(t, gw)].append(
             {"target_id": t["id"], "name": t["name"], "host": t["host"], "state": s["state"]}
         )
 
@@ -132,6 +131,7 @@ async def report(
         scope=scope,
         hub_store=st.hub_store,
         bufferbloat_store=st.bufferbloat_store,
+        adguard_store=st.adguard_store,
     )
     if format == "md":
         return PlainTextResponse(

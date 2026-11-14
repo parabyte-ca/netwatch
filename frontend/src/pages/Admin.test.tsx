@@ -46,6 +46,12 @@ function mockApi(calls: { url: string; method: string; body?: unknown }[]) {
       return json({ enabled: true, model: 'claude-opus-5-5', effort: 'medium', key_set: saved, models: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'], efforts: ['low', 'medium', 'high'] });
     }
     if (url === '/api/admin/assistant/test') return json({ ok: true, model: 'claude-opus-5-5', display_name: 'Claude Opus 5.5' });
+    if (url === '/api/admin/adguard/test') return json({ ok: true, version: 'v0.107.55', protection: true, queries_24h: 12345, querylog: true });
+    if (url === '/api/admin/adguard') {
+      const saved = method === 'PUT' ? JSON.parse(String(init?.body)) : { host: '192.168.2.53', port: 80, https: false, username: 'netwatch', enabled: true };
+      return json({ host: saved.host, port: saved.port, https: saved.https, username: saved.username, enabled: saved.enabled, password_set: true,
+        last_poll_ms: null, last_ok_ms: null, error: null, paused: null, status: null, latest: null });
+    }
     if (url === '/api/admin/hub') {
       return json({ host: '', enabled: false, password_set: false, last_poll_ms: null, last_ok_ms: null, error: null, paused: null, snapshot: null, suggestion: '192.168.2.1' });
     }
@@ -130,6 +136,32 @@ describe('Admin', () => {
     fireEvent.click(within(hub).getByRole('button', { name: 'Test connection' }));
     expect(await within(hub).findByText(/Connected \(SHA512\): Home Hub 4000 2\.13\.1, up 1 d 1 h 0 min, fibre -19\.2 dBm|Connected \(SHA512\): Home Hub 4000/)).toBeInTheDocument();
   });
+  it('tests and saves AdGuard Home without ever showing the password', async () => {
+    const calls: { url: string; method: string; body?: unknown }[] = [];
+    mockApi(calls);
+    render(<MemoryRouter><Admin /></MemoryRouter>);
+    const card = await screen.findByRole('region', { name: 'AdGuard Home' });
+    expect(within(card).getByLabelText('AdGuard address')).toHaveValue('192.168.2.53');
+    expect(within(card).getByLabelText('AdGuard password')).toHaveValue('');
+    expect(within(card).getByText(/Password \(saved\)/)).toBeInTheDocument();
+    // Saved password, same address: the test may use it.
+    fireEvent.click(within(card).getByRole('button', { name: 'Test connection' }));
+    expect(await within(card).findByText(/Connected: AdGuard Home v0\.107\.55, protection on, 12,345 queries/)).toBeInTheDocument();
+    const t = calls.find((c) => c.url === '/api/admin/adguard/test')!;
+    expect(JSON.parse(String(t.body))).toEqual({ host: '192.168.2.53', port: 80, https: false, username: 'netwatch' });
+    // A new address needs the password again.
+    fireEvent.change(within(card).getByLabelText('AdGuard address'), { target: { value: '192.168.2.54' } });
+    expect(within(card).getByRole('button', { name: 'Test connection' })).toBeDisabled();
+    expect(within(card).getByText(/enter the password to test or save/)).toBeInTheDocument();
+    fireEvent.change(within(card).getByLabelText('AdGuard port'), { target: { value: '3000' } });
+    fireEvent.change(within(card).getByLabelText('AdGuard password'), { target: { value: 'pw' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/admin/adguard' && c.method === 'PUT')).toBe(true));
+    const put = calls.find((c) => c.url === '/api/admin/adguard' && c.method === 'PUT')!;
+    expect(JSON.parse(String(put.body))).toEqual({ host: '192.168.2.54', port: 3000, https: false, username: 'netwatch', enabled: true, password: 'pw' });
+    await waitFor(() => expect(within(card).getByLabelText('AdGuard password')).toHaveValue(''));
+  });
+
   it('saves the Anthropic key without showing it again and tests it', async () => {
     const calls: { url: string; method: string; body?: unknown }[] = [];
     mockApi(calls);

@@ -332,3 +332,17 @@ def test_chunked_bodies_are_accepted_but_capped(client):
         headers={"Content-Type": "application/json"},
     )
     assert r.status_code == 413
+
+
+def test_adguard_password_stays_on_the_lan_and_with_its_address(client, monkeypatch):
+    import socket
+
+    ag = client.app.state.adguard
+    payload = {"host": "dns.example.com", "port": 80, "https": False, "username": "netwatch",
+               "enabled": False}  # fmt: skip
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [(0, 0, 0, "", ("8.8.8.8", 80))])
+    r = client.put("/api/admin/adguard", json=payload)
+    assert r.status_code == 422 and "AdGuard Home must be on your LAN" in r.text
+    ag.save("192.168.2.53", 80, False, "netwatch", False, "secret-pw-1")
+    client.put("/api/admin/adguard", json={**payload, "host": "192.168.2.53", "port": 3000})
+    assert ag.password() is None  # a new address never inherits the stored password

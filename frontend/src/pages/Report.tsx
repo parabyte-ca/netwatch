@@ -72,6 +72,21 @@ export function Report() {
             </section>
           )}
 
+          {r.dns?.queries != null && (
+            <section aria-label="DNS (AdGuard Home)">
+              <h2 className="mb-1 text-base font-semibold text-white print:text-black">DNS (AdGuard Home)</h2>
+              <ul className="list-disc space-y-0.5 pl-5">
+                <li>{r.dns.queries.toLocaleString()} queries, {r.dns.blocked_pct} % blocked, {r.dns.failed_pct} % failed</li>
+                {r.dns.avg_ms != null && <li>Average response {fmtMs(r.dns.avg_ms)} (worst minute {fmtMs(r.dns.peak_ms ?? null)})</li>}
+                <li>
+                  Unreachable {r.dns.unreachable ?? 0} times, upstream failures {r.dns.upstream_failures ?? 0}, error spikes {r.dns.error_spikes ?? 0},
+                  slow periods {r.dns.latency_spikes ?? 0}
+                </li>
+                {(r.dns.events ?? []).slice(0, 20).map((e) => <li key={e.when + e.title}>{e.when}: {e.title}</li>)}
+              </ul>
+            </section>
+          )}
+
           <section aria-label="Incidents">
             <h2 className="mb-1 text-base font-semibold text-white print:text-black">Incidents</h2>
             {r.incidents.length === 0 ? <p className="text-slate-400">None in this period.</p> : (

@@ -107,6 +107,7 @@ export const EVENT_LABEL: Record<string, string> = {
   wifi: 'Wi-Fi',
   hub: 'Home Hub',
   exposure: 'Exposure',
+  dns: 'DNS',
 };
 
 export const DEVICE_TYPE_LABEL: Record<string, string> = {

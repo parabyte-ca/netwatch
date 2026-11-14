@@ -269,6 +269,11 @@ async def exposure(request: Request) -> dict:
     return out
 
 
+@router.get("/adguard")
+async def adguard_summary(request: Request, hours: int = Query(24, ge=1, le=168)) -> dict:
+    return await asyncio.to_thread(request.app.state.adguard.summary, hours)
+
+
 @router.post("/exposure/scan", status_code=status.HTTP_202_ACCEPTED)
 async def run_exposure(request: Request) -> dict:
     if not request.app.state.exposure.start_now():
