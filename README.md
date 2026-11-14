@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.11.0-blue)
+![Version](https://img.shields.io/badge/version-0.12.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -19,8 +19,8 @@ alerts; **v0.5** the root-cause diagnosis engine and an incident report for Bell
 admin panel; **v0.7** the network map with incident replay and the Deco mesh integration;
 **v0.8** live per-device bandwidth, the bufferbloat grade and the Home Hub integration;
 **v0.9** the exposure scan, the network health score with weekly reports, and Ask NetWatch;
-**v0.10** a sortable Devices page and in-place renaming; **v0.11 (this release)** the AdGuard
-Home integration and the DNS page. See the [Roadmap](#roadmap) for what's next.
+**v0.10** a sortable Devices page and in-place renaming; **v0.11** the AdGuard Home integration
+and the DNS page; **v0.12 (this release)** AdGuard Home in the device inventory. See the [Roadmap](#roadmap) for what's next.
 
 ## Features
 - **Probes:** ICMP (from every 1 s), DNS query latency/failures, TCP connect, and HTTP checks,
@@ -109,8 +109,15 @@ Home integration and the DNS page. See the [Roadmap](#roadmap) for what's next.
   off", "upstream failing", DNS error and response-time spikes, and new unknown clients become
   timeline events; an AdGuard outage or failing upstream opens an incident even when every probe
   is healthy, and the diagnosis can then say "DNS is the cause". The **DNS** page graphs response
-  time and block rate and lists upstream health and the busiest clients. Alerts stay on the
-  dashboard (no email or push).
+  time and block rate and lists upstream health, the busiest clients, the top and top blocked
+  domains, and clients that match no known device. Alerts stay on the dashboard (no email or
+  push).
+- **AdGuard Home in the device inventory:** names you give clients in AdGuard Home, and its DHCP
+  leases when it is the DHCP server, feed the device list (names, hostnames, addresses). Each
+  device page shows its DNS queries, block rate and top (blocked) domains over 24 hours or 7
+  days, and a device that suddenly makes far more queries than usual, or has most of them
+  blocked, raises an anomaly alert. Domain names are kept as long as raw samples (7 days by
+  default); query counts as long as the 1-minute rollups.
 - **Exposure scan:** every night (and on demand) NetWatch checks about 30 well-known ports on
   each LAN device with a plain TCP connection and reads the Home Hub's port forwards, UPnP
   mappings and DMZ. Findings are ranked: a risky service forwarded to the internet (RDP, SMB,
@@ -300,7 +307,10 @@ Any Raspberry Pi 3 or newer is plenty for a home network.
    hands out, set it to the Pi's address. Bell's Home Hub 4000 firmware may not offer this; in
    that case turn on AdGuard's own DHCP server (**Settings → DHCP settings**) and then turn off the
    Hub's DHCP server, in that order so devices always get an address. Devices pick up the change
-   when they renew their lease (reconnect them to speed it up).
+   when they renew their lease (reconnect them to speed it up). When AdGuard Home is the DHCP
+   server, NetWatch reads its leases every 5 minutes, so new devices get their hostnames and
+   addresses from it. Expect one "2 DHCP servers" alert while both answer; it stops 24 hours after
+   the Hub's DHCP is off.
 6. Create a separate user for NetWatch. AdGuard Home has no read-only accounts, so every user can
    change settings; a separate password at least lets you revoke NetWatch's access on its own.
    Users are kept in `AdGuardHome.yaml`:
@@ -542,7 +552,6 @@ Planned, in order (suggestions welcome):
 
 | Version | Feature |
 |---|---|
-| 0.12 | **AdGuard Home inventory:** AdGuard's client list feeds device discovery, per-device query counts and top domains, query-rate and blocked-rate anomaly alerts, and DHCP leases when AdGuard is the DHCP server |
 | 0.13 | **AdGuard Home actions (opt-in, off by default):** pause protection for a set time (resumes after a restart too), allow or block a domain, switch upstream; each confirmed in the UI and recorded in the security log |
 | Later | **Wi-Fi coverage view:** a floor plan with the Decos placed and each device's signal and roaming per room |
 | Later | **Speed tests against your plan:** nightly tests reported as a share of the plan's speed, with a 90-day trend |
