@@ -14,7 +14,7 @@ const PAUSES = [
   { minutes: 480, label: '8 hours' },
 ];
 
-const clock = (ms: number) => new Date(ms).toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' });
+const clock = (ms: number) => new Date(ms).toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit', hour12: false });
 const code = (s: string) => <code className="break-all rounded bg-slate-800 px-1 font-mono text-xs">{s}</code>;
 
 export function ruleConfirm(domain: string, kind: 'allow' | 'block', run: () => Promise<void>): Confirm {
@@ -62,8 +62,9 @@ function Block({ title, children }: { title: string; children: ReactNode }) {
 
 /** Pause protection, allow or block domains, switch the upstream DNS. Every change asks first and
  * is written to the security log by the server. */
-export function AdGuardControls({ protection, onChanged }: { protection: boolean | null | undefined; onChanged: () => void }) {
-  const { data, error, refresh } = usePolling(api.adguardActions, 15_000);
+export function AdGuardControls({ protection, onChanged, reload = 0 }: { protection: boolean | null | undefined; onChanged: () => void; reload?: number }) {
+  // `reload` changes when a rule was added elsewhere on the page (the Allow and Block links).
+  const { data, error, refresh } = usePolling(api.adguardActions, 15_000, [reload]);
   const [ask, setAsk] = useState<Confirm | null>(null);
   const [domain, setDomain] = useState('');
   const [preset, setPreset] = useState('');

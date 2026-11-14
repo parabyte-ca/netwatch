@@ -124,7 +124,11 @@ function Charts({ data }: { data: AdGuardSummary }) {
 export function Dns() {
   const [hours, setHours] = useState(24);
   const { data, error, refresh } = usePolling(() => api.adguardSummary(hours), 60_000, [hours]);
-  const rules = useRuleAction(() => void refresh());
+  const [reload, setReload] = useState(0);
+  const rules = useRuleAction(() => {
+    void refresh();
+    setReload((n) => n + 1);
+  });
   const configured = !!data && !!data.host && data.password_set;
   const down = data?.latest && !data.latest.reachable;
   // The last minute with answers (an idle minute has no response time).
@@ -190,7 +194,7 @@ export function Dns() {
           </Section>
 
           <Section title="Controls">
-            <AdGuardControls protection={data.latest?.reachable ? data.latest.protection : null} onChanged={() => void refresh()} />
+            <AdGuardControls protection={data.latest?.reachable ? data.latest.protection : null} onChanged={() => void refresh()} reload={reload} />
           </Section>
 
           <Section title="Upstream resolvers">
