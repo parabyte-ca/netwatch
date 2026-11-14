@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
@@ -33,49 +33,69 @@ function Stat({ label, value, tone = 'text-slate-100' }: { label: string; value:
 const ms = (v: number | null | undefined) => (v == null ? '–' : `${Math.round(v)} ms`);
 const pct = (v: number | null | undefined) => (v == null ? '–' : `${v}%`);
 
-/** Response time (average and 95th percentile) and block rate per minute. */
-function LatencyChart({ data }: { data: AdGuardSummary }) {
+type Line = { label: string; stroke: string; fill?: string; values: (number | null)[]; fmt: (v: number | null | undefined) => string };
+
+/** One uPlot time chart over the selected period. */
+function TimeChart({ data, lines, height, yMax, unit, testId }: {
+  data: AdGuardSummary; lines: Line[]; height: number; yMax: (max: number) => number; unit: (v: number) => string; testId: string;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
-    const s = data.series;
     const end = Math.floor(Date.now() / 1000);
-    const few = s.length < 3;
+    const few = data.series.length < 3;
     const axis = { stroke: '#94a3b8', grid: { stroke: '#1e293b' }, ticks: { stroke: '#334155' } };
-    const rate = s.map((p) => (p.reachable && p.queries ? (100 * (p.blocked ?? 0)) / p.queries : null));
     const plot = new uPlot(
       {
         width: el.clientWidth || 600,
-        height: 220,
-        scales: {
-          x: { time: true, range: () => [end - data.hours * 3600, end] },
-          y: { range: (_u, _min, max) => [0, Math.max(50, (max ?? 0) * 1.1)] },
-          pct: { range: [0, 100] },
-        },
-        axes: [
-          axis,
-          { ...axis, size: 60, values: (_u, vals) => vals.map((v) => `${v} ms`) },
-          { ...axis, scale: 'pct', side: 1, size: 50, grid: { show: false }, values: (_u, vals) => vals.map((v) => `${v}%`) },
-        ],
-        series: [
-          {},
-          { label: 'average', stroke: '#38bdf8', fill: 'rgba(56,189,248,0.12)', width: 1.5, points: { show: few, size: 6 }, value: (_u, v) => ms(v) },
-          { label: '95th percentile', stroke: '#f59e0b', width: 1, points: { show: few, size: 5 }, value: (_u, v) => ms(v) },
-          { label: 'blocked', scale: 'pct', stroke: '#a78bfa', width: 1, dash: [4, 4], points: { show: few, size: 5 }, value: (_u, v) => (v == null ? '–' : `${v.toFixed(1)}%`) },
-        ],
+        height,
+        scales: { x: { time: true, range: () => [end - data.hours * 3600, end] }, y: { range: (_u, _min, max) => [0, yMax(max ?? 0)] } },
+        axes: [axis, { ...axis, size: 60, values: (_u, vals) => vals.map(unit) }],
+        series: [{}, ...lines.map((l) => ({ label: l.label, stroke: l.stroke, fill: l.fill, width: 1.5, points: { show: few, size: 6 }, value: (_u: uPlot, v: number | null) => l.fmt(v) }))],
       },
-      [s.map((p) => p.ts_ms / 1000), s.map((p) => p.avg_ms), s.map((p) => p.p95_ms), rate],
+      [data.series.map((p) => p.ts_ms / 1000), ...lines.map((l) => l.values)],
       el,
     );
-    const ro = new ResizeObserver(() => plot.setSize({ width: el.clientWidth, height: 220 }));
+    const ro = new ResizeObserver(() => plot.setSize({ width: el.clientWidth, height }));
     ro.observe(el);
     return () => {
       ro.disconnect();
       plot.destroy();
     };
+  }, [data, lines, height, yMax, unit]);
+  return <div ref={ref} className="w-full" data-testid={testId} />;
+}
+
+const latencyMax = (max: number) => Math.max(50, max * 1.1);
+const rateMax = (max: number) => Math.min(100, Math.max(25, max * 1.2));
+const msUnit = (v: number) => `${v} ms`;
+const pctUnit = (v: number) => `${v}%`;
+
+/** Response time (average and 95th percentile), then block rate, per minute. */
+function Charts({ data }: { data: AdGuardSummary }) {
+  const [latency, rate] = useMemo<[Line[], Line[]]>(() => {
+    const s = data.series;
+    return [
+      [
+        { label: 'average', stroke: '#38bdf8', fill: 'rgba(56,189,248,0.12)', values: s.map((p) => p.avg_ms), fmt: ms },
+        { label: '95th percentile', stroke: '#f59e0b', values: s.map((p) => p.p95_ms), fmt: ms },
+      ],
+      [
+        {
+          label: 'blocked', stroke: '#a78bfa', fill: 'rgba(167,139,250,0.12)',
+          values: s.map((p) => (p.reachable && p.queries ? Math.round((1000 * (p.blocked ?? 0)) / p.queries) / 10 : null)),
+          fmt: (v: number | null | undefined) => (v == null ? '–' : `${v}%`),
+        },
+      ],
+    ];
   }, [data]);
-  return <div ref={ref} className="w-full" data-testid="dns-chart" />;
+  return (
+    <div className="space-y-2">
+      <TimeChart data={data} lines={latency} height={200} yMax={latencyMax} unit={msUnit} testId="dns-chart" />
+      <TimeChart data={data} lines={rate} height={110} yMax={rateMax} unit={pctUnit} testId="block-chart" />
+    </div>
+  );
 }
 
 /** The LAN's DNS server (AdGuard Home): response time, block rate, upstream health and busiest clients. */
@@ -84,6 +104,8 @@ export function Dns() {
   const { data, error } = usePolling(() => api.adguardSummary(hours), 60_000, [hours]);
   const configured = !!data && !!data.host && data.password_set;
   const down = data?.latest && !data.latest.reachable;
+  // The last minute with answers (an idle minute has no response time).
+  const recent = data && !down ? [...data.series].reverse().find((p) => p.avg_ms != null)?.avg_ms : null;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -136,11 +158,11 @@ export function Dns() {
             <Stat label="Queries" value={data.queries.toLocaleString()} />
             <Stat label="Blocked" value={pct(data.blocked_pct)} />
             <Stat label="Failed" value={pct(data.failed_pct)} tone={(data.failed_pct ?? 0) >= 5 ? 'text-rose-300' : 'text-slate-100'} />
-            <Stat label="Response time now" value={ms(data.latest?.reachable ? data.latest.avg_ms : null)} />
+            <Stat label="Response time now" value={ms(recent)} />
           </div>
 
           <Section title="Response time and block rate">
-            {data.series.length ? <LatencyChart data={data} /> : <p className="text-sm text-slate-400">No readings in this period yet.</p>}
+            {data.series.length ? <Charts data={data} /> : <p className="text-sm text-slate-400">No readings in this period yet.</p>}
           </Section>
 
           <Section title="Upstream resolvers">
