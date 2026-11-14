@@ -45,6 +45,9 @@ def _worst(states: list[str]) -> str:
     return max(states, key=lambda s: _RANK.get(s, 0)) if states else "unknown"
 
 
+OFFLINE_WINDOW_MS = 24 * 3_600_000  # "show offline" adds devices seen in the last day
+
+
 class NetMap:
     def __init__(self, state) -> None:
         self.st = state  # app.state: store, monitor, nic, discovery, deco, events, diagnoser
@@ -82,7 +85,9 @@ class NetMap:
 
     # ── build ────────────────────────────────────────────────────────────────
 
-    def build(self, *, at_ms: int | None = None, now_ms: int | None = None) -> dict:
+    def build(
+        self, *, at_ms: int | None = None, now_ms: int | None = None, show_offline: bool = False
+    ) -> dict:
         now = now_ms or int(time.time() * 1000)
         st = self.st
         route = st.discovery.gateway_ip()
@@ -264,8 +269,9 @@ class NetMap:
             )
             edge(main_id or "hub", nid, "logical", **self._edge_stats(t, tview))
 
-        # Key devices and groups
-        groups: dict[str, list[dict]] = defaultdict(list)
+        # Every device is its own node (online ones; recently seen offline ones on request),
+        # under the Deco it is connected to, or the Hub.
+        group_nodes: dict[int, dict] = {}
         for d in rows:
             det = d.get("details") or {}
             if det.get("is_deco") or any(m in deco_state for m in d["macs"]):
@@ -274,16 +280,16 @@ class NetMap:
                 continue  # the Hub itself
             if d.get("type_reason") == "this NetWatch host":
                 continue
-            parent = deco_nodes.get(det.get("deco_mac") or "") or "hub"
-            key = bool(d.get("target_id") or d.get("name"))
-            if not key:
-                if d["online"]:
-                    groups[parent].append(d)
+            if not d["online"] and not (
+                show_offline and now - d["last_seen_ms"] <= OFFLINE_WINDOW_MS
+            ):
                 continue
+            parent = deco_nodes.get(det.get("deco_mac") or "") or "hub"
             t = target_by_id.get(d["target_id"]) if d.get("target_id") else None
             v = tview.get(t["id"], {}) if t else {}
             state = v.get("state", "unknown") if t else "up" if d["online"] else "unknown"
             nid = f"dev:{d['id']}"
+            group = d.get("group")
             node(
                 nid,
                 "device",
@@ -297,8 +303,15 @@ class NetMap:
                     "vendor": d.get("vendor"),
                     "connection": det.get("connection"),
                     "online": d["online"],
+                    "last_seen_ms": d["last_seen_ms"],
+                    "group": group,
+                    "tags": d.get("tags") or [],
+                    "parent": parent,
                 },
             )
+            if group:
+                g = group_nodes.setdefault(group["id"], {**group, "nodes": []})
+                g["nodes"].append(nid)
             conn = det.get("connection")
             medium = ("wired" if conn == "wired" else "wireless") if parent != "hub" else "logical"
             edge(
@@ -308,28 +321,6 @@ class NetMap:
                 **self._edge_stats(t, tview),
                 label=conn if medium == "wireless" else None,
             )
-        for parent, members in groups.items():
-            nid = f"group:{parent}"
-            node(
-                nid,
-                "group",
-                f"{len(members)} more device{'s' if len(members) != 1 else ''}",
-                state="up",
-                info={
-                    "count": len(members),
-                    "devices": [
-                        {
-                            "device_id": m["id"],
-                            "label": m["label"],
-                            "ip": m.get("last_ip"),
-                            "type": m.get("type"),
-                            "connection": (m.get("details") or {}).get("connection"),
-                        }
-                        for m in sorted(members, key=lambda m: m["label"].lower())
-                    ],
-                },
-            )
-            edge(parent, nid, "logical")
 
         if at_ms is None and st.deco and st.deco.clients:
             self._add_traffic(nodes, edges, rows)
@@ -337,6 +328,8 @@ class NetMap:
         return {
             "generated_ms": now,
             "at_ms": at_ms,
+            "show_offline": show_offline,
+            "groups": sorted(group_nodes.values(), key=lambda g: g["name"].lower()),
             "deco_api": bool(deco_state),
             "nodes": list(nodes.values()),
             "edges": edges,

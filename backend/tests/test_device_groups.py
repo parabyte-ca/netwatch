@@ -203,3 +203,46 @@ def test_groups_api_bulk_filters_and_audit(client):
 def test_groups_api_needs_sign_in(anon_client):
     for path in ("/api/device-groups", "/api/device-tags", "/api/device-groups/export"):
         assert anon_client.get(path).status_code == 401
+
+
+def test_map_shows_every_device_with_groups_and_saves_views(client):
+    import time as _time
+
+    st = client.app.state
+    now = int(_time.time() * 1000)
+    on = add(
+        st.device_store, "aa:00:00:00:00:60", type="iot", hostname="kasa-plug", last_seen_ms=now
+    )
+    off = add(st.device_store, "aa:00:00:00:00:61", type="phone", last_seen_ms=now - 3_600_000)
+    gone = add(
+        st.device_store, "aa:00:00:00:00:62", type="phone", last_seen_ms=now - 3 * 86_400_000
+    )
+    home = client.post("/api/device-groups", json={"name": "Smart home", "colour": "emerald",
+                                                   "icon": "plug"}).json()  # fmt: skip
+    client.post("/api/devices/bulk", json={"ids": [on, off], "group_id": home["id"],
+                                           "add_tags": ["garage"]})  # fmt: skip
+    st.discovery.inventory.forget()
+    g = client.get("/api/map").json()
+    ids = {n["id"] for n in g["nodes"]}
+    assert f"dev:{on}" in ids and f"dev:{off}" not in ids and f"dev:{gone}" not in ids
+    n = next(n for n in g["nodes"] if n["id"] == f"dev:{on}")
+    assert n["info"]["group"]["name"] == "Smart home" and n["info"]["tags"] == ["garage"]
+    assert n["info"]["parent"] == "hub"
+    assert g["groups"] == [{**{k: home[k] for k in ("id", "name", "colour", "icon")},
+                            "nodes": [f"dev:{on}"]}]  # fmt: skip
+    g = client.get("/api/map?show_offline=true").json()
+    ids = {n["id"] for n in g["nodes"]}
+    assert f"dev:{off}" in ids and f"dev:{gone}" not in ids and g["show_offline"] is True
+    # Collapsed groups are kept with the positions; views are a named list.
+    r = client.put("/api/map/layout", json={"positions": {}, "collapsed": [f"{home['id']}@hub"]})
+    assert r.json()["collapsed"] == [f"{home['id']}@hub"]
+    client.put("/api/map/layout", json={"positions": {"hub": {"x": 1, "y": 2}}})
+    assert client.get("/api/map/layout").json()["collapsed"] == [f"{home['id']}@hub"]
+    view = {"name": "Smart home only", "colour_by": "group", "groups": [home["id"]], "tags": [],
+            "collapsed": [], "show_offline": False}  # fmt: skip
+    assert client.put("/api/map/views", json={"views": [view]}).status_code == 200
+    assert client.get("/api/map/views").json()["views"] == [view]
+    dup = client.put("/api/map/views", json={"views": [view, {**view, "name": "smart home ONLY"}]})
+    assert dup.status_code == 422
+    bad = client.put("/api/map/views", json={"views": [{**view, "colour_by": "rainbow"}]})
+    assert bad.status_code == 422
