@@ -176,7 +176,8 @@ export type EventKind =
   | 'security'
   | 'wifi'
   | 'hub'
-  | 'exposure';
+  | 'exposure'
+  | 'dns';
 
 export interface TimelineEvent {
   id: number;
@@ -552,6 +553,7 @@ export interface Incident {
   nic_events: BriefEvent[];
   anomalies: BriefEvent[];
   wifi_events?: BriefEvent[];
+  dns_events?: BriefEvent[];
   path_tests: { id: number; ts_ms: number; host: string; first_loss_hop: number | null; reached: boolean | null }[];
   causes: Cause[];
 }
@@ -614,6 +616,57 @@ export interface BufferbloatTest {
   up_bps: number | null;
   error: string | null;
   details: { anchor?: string; added_ms?: number | null; idle?: BufferbloatPhase; download?: BufferbloatPhase; upload?: BufferbloatPhase };
+}
+
+export interface AdGuardRow {
+  ts_ms: number;
+  reachable: boolean;
+  queries: number | null;
+  blocked: number | null;
+  avg_ms: number | null;
+  p95_ms: number | null;
+}
+
+export interface AdGuardStatus {
+  host: string;
+  port: number;
+  https: boolean;
+  username: string;
+  enabled: boolean;
+  password_set: boolean;
+  last_poll_ms: number | null;
+  last_ok_ms: number | null;
+  error: string | null;
+  paused: string | null;
+  status: { version: string | null; protection: boolean } | null;
+  latest: (AdGuardRow & { protection: boolean | null; source: string; details: { version?: string | null } }) | null;
+}
+
+export interface AdGuardTestResult {
+  ok: boolean;
+  error?: string;
+  version?: string | null;
+  protection?: boolean;
+  queries_24h?: number | null;
+  querylog?: boolean;
+}
+
+export interface AdGuardUpstream {
+  name: string;
+  queries: number;
+  failed: number;
+  failed_pct: number;
+  avg_ms: number | null;
+}
+
+export interface AdGuardSummary extends AdGuardStatus {
+  hours: number;
+  series: AdGuardRow[];
+  queries: number;
+  blocked_pct: number | null;
+  failed_pct: number | null;
+  upstreams: AdGuardUpstream[];
+  top_clients: { client: string; queries: number; device_id: number | null; label: string | null }[];
 }
 
 export interface HubSnapshot {
@@ -796,6 +849,18 @@ export interface Report {
     events?: { when: string; title: string }[];
     bufferbloat?: { grade: string; idle_ms: number; down_ms: number; up_ms: number; when: string; tests: number };
   };
+  dns?: {
+    queries?: number;
+    blocked_pct?: number;
+    failed_pct?: number;
+    avg_ms?: number | null;
+    peak_ms?: number | null;
+    unreachable?: number;
+    upstream_failures?: number;
+    error_spikes?: number;
+    latency_spikes?: number;
+    events?: { when: string; title: string }[];
+  };
   ruled_out: string[];
   incidents: ReportIncident[];
   markdown: string;
@@ -965,6 +1030,12 @@ export const api = {
     const qs = q.toString();
     return request<NetworkMapResponse>(`/api/map${qs ? `?${qs}` : ''}`);
   },
+  adguard: () => request<AdGuardStatus>('/api/admin/adguard'),
+  saveAdGuard: (body: { host: string; port: number; https: boolean; username: string; enabled: boolean; password?: string; forget_password?: boolean }) =>
+    request<AdGuardStatus>('/api/admin/adguard', { method: 'PUT', body: JSON.stringify(body) }),
+  testAdGuard: (body: { host: string; port: number; https: boolean; username: string; password?: string }) =>
+    request<AdGuardTestResult>('/api/admin/adguard/test', post(body)),
+  adguardSummary: (hours = 24) => request<AdGuardSummary>(`/api/adguard?hours=${hours}`),
   hub: () => request<HubStatus>('/api/admin/hub'),
   assistant: () => request<AssistantStatus>('/api/admin/assistant'),
   saveAssistant: (body: { enabled: boolean; model: string; effort: string; api_key?: string; forget_key?: boolean }) =>

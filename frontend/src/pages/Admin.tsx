@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { EventRow } from '../components/EventRow';
-import { api, type AssistantStatus, type DecoStatus, type DecoTestResult, type HubStatus, type SettingField, type SettingsResponse } from '../lib/api';
+import { api, type AdGuardStatus, type AssistantStatus, type DecoStatus, type DecoTestResult, type HubStatus, type SettingField, type SettingsResponse } from '../lib/api';
 import { fmtAgo, fmtBytes, fmtDurationMs, fmtTime } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
 
@@ -380,6 +380,130 @@ function AssistantCard() {
   );
 }
 
+function AdGuardCard() {
+  const [st, setSt] = useState<AdGuardStatus | null>(null);
+  const [host, setHost] = useState('');
+  const [port, setPort] = useState('80');
+  const [https, setHttps] = useState(false);
+  const [username, setUsername] = useState('');
+  const [enabled, setEnabled] = useState(false);
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [test, setTest] = useState<string | null>(null);
+
+  const apply = (d: AdGuardStatus) => {
+    setSt(d);
+    setHost(d.host);
+    setPort(String(d.port || 80));
+    setHttps(d.https);
+    setUsername(d.username);
+    setEnabled(d.enabled);
+  };
+  useEffect(() => {
+    api.adguard().then(apply, (e) => setError(err(e)));
+  }, []);
+
+  async function run(fn: () => Promise<void>) {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setError(err(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const portNum = Number(port) || 80;
+  const save = (extra: { forget_password?: boolean } = {}) =>
+    run(async () => {
+      apply(await api.saveAdGuard({ host, port: portNum, https, username, enabled, password: password || undefined, ...extra }));
+      setPassword('');
+    });
+  // The saved password is only used when the address, port, protocol and username are the saved ones.
+  const sameTarget = !!st && host === st.host && portNum === st.port && https === st.https && username === st.username;
+  const testNow = () =>
+    run(async () => {
+      setTest(null);
+      const r = await api.testAdGuard({ host, port: portNum, https, username, password: password || undefined });
+      setTest(r.ok
+        ? `Connected: AdGuard Home ${r.version ?? ''}, protection ${r.protection ? 'on' : 'OFF'}` +
+          (r.queries_24h != null ? `, ${r.queries_24h.toLocaleString()} queries in its stats window` : '') +
+          (r.querylog ? '' : '. The query log is off, so latency and per-upstream numbers will be estimates.')
+        : `Test failed: ${r.error}`);
+    });
+
+  if (!st) return <Card title="AdGuard Home">{error ? <p className="text-sm text-rose-400">{error}</p> : null}</Card>;
+  const last = st.latest;
+  return (
+    <Card title="AdGuard Home">
+      <div className="space-y-3 text-sm">
+        <p className="text-xs text-slate-400">
+          Reads your AdGuard Home DNS server every minute: query volume, block rate, errors, response time and the health of
+          each upstream resolver. Problems become timeline events, and the diagnosis can then say when DNS is the cause.
+          Read-only: NetWatch only sends GET requests. AdGuard Home has no read-only accounts, so create a separate user for
+          NetWatch. The password is encrypted like the Hub's and is only ever sent to the address it was saved for.
+        </p>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-400">Address</span>
+            <input aria-label="AdGuard address" className={`${input} w-44`} value={host} placeholder="192.168.2.53" onChange={(e) => setHost(e.target.value)} />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-400">Port</span>
+            <input aria-label="AdGuard port" inputMode="numeric" className={`${input} w-20`} value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} />
+          </label>
+          <label className="flex items-center gap-2 pb-1">
+            <input type="checkbox" checked={https} onChange={(e) => setHttps(e.target.checked)} />
+            HTTPS
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-400">Username</span>
+            <input aria-label="AdGuard username" className={`${input} w-36`} value={username} autoComplete="off" onChange={(e) => setUsername(e.target.value)} />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-slate-400">Password {st.password_set && '(saved)'}</span>
+            <input aria-label="AdGuard password" type="password" className={`${input} w-48`} value={password}
+              autoComplete="new-password" placeholder={st.password_set ? '•••••••• (unchanged)' : 'not set'}
+              onChange={(e) => setPassword(e.target.value)} />
+          </label>
+          <label className="flex items-center gap-2 pb-1">
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            Poll every minute
+          </label>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button className={`${btn} bg-sky-600 text-white hover:bg-sky-500`} disabled={busy} onClick={() => void save()}>Save</button>
+          <button className={`${btn} text-slate-200 ring-1 ring-slate-700 hover:bg-slate-800`}
+            disabled={busy || !host || !username || (!password && !(st.password_set && sameTarget))} onClick={() => void testNow()}>
+            {busy ? 'Working…' : 'Test connection'}
+          </button>
+          {st.password_set && (
+            <button className={`${btn} text-rose-300 ring-1 ring-slate-700 hover:bg-slate-800`} disabled={busy}
+              onClick={() => window.confirm('Forget the stored AdGuard Home password?') && void save({ forget_password: true })}>
+              Forget password
+            </button>
+          )}
+        </div>
+        {st.password_set && !sameTarget && !password && (
+          <p className="text-xs text-amber-300">The address, port, protocol or username changed: enter the password to test or save.</p>
+        )}
+        {error && <p className="text-rose-400">{error}</p>}
+        {test && <p className={test.startsWith('Test failed') ? 'text-rose-300' : 'text-emerald-300'}>{test}</p>}
+        <p className="text-xs text-slate-400">
+          {last?.reachable
+            ? `Last read ${fmtAgo(st.last_ok_ms ?? 0, Date.now())}: protection ${last.protection ? 'on' : 'OFF'}, ${last.queries ?? 0} queries in the last minute` +
+              (last.avg_ms != null ? `, ${last.avg_ms} ms average` : '')
+            : 'Not read yet.'}
+          {st.error && <span className="text-rose-300"> Last poll failed: {st.error}</span>}
+          {st.paused && <span className="block text-amber-300">Polling stopped ({st.paused}). Fix the password and press Save.</span>}
+        </p>
+      </div>
+    </Card>
+  );
+}
+
 function HubCard() {
   const [st, setSt] = useState<HubStatus | null>(null);
   const [host, setHost] = useState('');
@@ -661,6 +785,7 @@ export function Admin() {
       {error && <p className="text-rose-400">{error}</p>}
       {settings && <SettingsCard data={settings} onSaved={setSettings} />}
       <HubCard />
+      <AdGuardCard />
       <DecoCard />
       <AssistantCard />
       <SessionsCard />

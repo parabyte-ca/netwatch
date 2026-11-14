@@ -9,6 +9,7 @@ import { Diagnostics } from './pages/Diagnostics';
 import { EventDetail } from './pages/EventDetail';
 import { Health } from './pages/Health';
 import { Exposure } from './pages/Exposure';
+import { Dns } from './pages/Dns';
 import { Overview } from './pages/Overview';
 import { Report } from './pages/Report';
 import { System } from './pages/System';
@@ -29,6 +30,7 @@ export function App() {
         <Route path="devices" element={<Devices />} />
         <Route path="devices/:id" element={<DeviceDetail />} />
         <Route path="exposure" element={<Exposure />} />
+        <Route path="dns" element={<Dns />} />
         <Route path="health-score" element={<Health />} />
         <Route path="timeline" element={<Timeline />} />
         <Route path="events/:id" element={<EventDetail />} />

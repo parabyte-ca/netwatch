@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
@@ -423,3 +424,26 @@ def test_report_has_a_dns_section(client):
     assert r["dns"]["unreachable"] == 0
     assert "AdGuard Home stayed reachable" in " ".join(r["ruled_out"])
     assert "## DNS (AdGuard Home)" in r["markdown"]
+
+
+def test_dns_page_summary(client):
+    st = client.app.state
+    fake = FakeAdGuard()
+    st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
+    st.adguard.save(HOST, PORT, False, USER, True, PASSWORD)
+    r = client.get("/api/adguard").json()
+    assert r["series"] == [] and r["queries"] == 0 and r["blocked_pct"] is None
+    assert "password" not in r
+    now = datetime.now(UTC)
+    for i in range(10):
+        fake.query(now - timedelta(seconds=30 - i), ms=10.0 + i, client="192.168.1.50",
+                   reason="FilteredBlackList" if i < 3 else "NotFilteredNotFound")  # fmt: skip
+    assert client.portal.call(st.adguard.poll)
+    r = client.get("/api/adguard?hours=6").json()
+    assert r["hours"] == 6 and len(r["series"]) == 1
+    assert r["queries"] == 10 and r["blocked_pct"] == 30.0 and r["failed_pct"] == 0.0
+    assert r["upstreams"] and r["upstreams"][0]["queries"] == 7
+    assert r["top_clients"][0]["client"] == "192.168.1.50"
+    assert r["top_clients"][0]["queries"] == 10
+    assert client.get("/api/adguard?hours=0").status_code == 422
+    assert PASSWORD not in json.dumps(r)

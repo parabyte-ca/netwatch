@@ -19,7 +19,8 @@ from datetime import UTC, datetime
 
 from sqlalchemy import Engine, delete, insert, select
 
-from ...db import adguard_stats, device_ips
+from ...db import adguard_stats, device_ips, devices
+from ..discovery.inventory import device_label
 from ..events import DNS, EventLog
 from ..secrets import SecretBox
 from ..storage import Store
@@ -581,3 +582,75 @@ class AdGuardService:
             "status": self.last,
             "latest": self.adguard_store.latest(),
         }
+
+    # ── DNS page ────────────────────────────────────────────────────────────
+
+    def summary(self, hours: int) -> dict:
+        """Series, block rate, per-upstream health and top clients for the DNS page."""
+        end = int(time.time() * 1000)
+        rows = self.adguard_store.history(end - hours * 3_600_000, end + 1)
+        series = [
+            {k: r[k] for k in ("ts_ms", "reachable", "queries", "blocked", "avg_ms", "p95_ms")}
+            for r in rows
+        ]
+        ok = [r for r in rows if r["reachable"]]
+        queries = sum(r["queries"] or 0 for r in ok)
+        blocked = sum(r["blocked"] or 0 for r in ok)
+        failed = sum((r["servfail"] or 0) + (r["errors"] or 0) for r in ok)
+        ups: dict[str, dict] = {}
+        for r in ok:
+            for name, u in (r["upstreams"] or {}).items():
+                blank = {"name": name, "queries": 0, "failed": 0, "_ms": 0.0, "_n": 0}
+                a = ups.setdefault(name, blank)
+                a["queries"] += int(u.get("n") or 0)
+                a["failed"] += int(u.get("fail") or 0)
+                if u.get("avg_ms") is not None:
+                    a["_ms"] += float(u["avg_ms"]) * int(u.get("n") or 0)
+                    a["_n"] += int(u.get("n") or 0)
+        upstreams = []
+        for a in ups.values():
+            ms, n = a.pop("_ms"), a.pop("_n")
+            a["avg_ms"] = round(ms / n, 1) if n else None
+            a["failed_pct"] = round(100 * a["failed"] / a["queries"], 1) if a["queries"] else 0.0
+            upstreams.append(a)
+        upstreams.sort(key=lambda a: -a["queries"])
+        counts: Counter[str] = Counter()
+        for r in ok:
+            for cid, n in (r["details"] or {}).get("top_clients") or []:
+                counts[str(cid)] += int(n)
+        top = counts.most_common(10)
+        labels = self._labels([c for c, _ in top])
+        clients = [
+            {"client": c, "queries": n, **labels.get(c, {"device_id": None, "label": None})}
+            for c, n in top
+        ]
+        return {
+            **self.status(),
+            "hours": hours,
+            "series": series,
+            "queries": queries,
+            "blocked_pct": round(100 * blocked / queries, 1) if queries else None,
+            "failed_pct": round(100 * failed / max(1, queries - blocked), 1) if queries else None,
+            "upstreams": upstreams,
+            "top_clients": clients,
+        }
+
+    def _labels(self, ips: list[str]) -> dict[str, dict]:
+        if not ips:
+            return {}
+        stmt = (
+            select(device_ips.c.ip, devices)
+            .join(devices, devices.c.id == device_ips.c.device_id)
+            .where(device_ips.c.ip.in_(ips))
+            .order_by(device_ips.c.last_seen_ms)
+        )
+        out: dict[str, dict] = {}
+        with self.store.engine.connect() as conn:
+            for r in conn.execute(stmt):
+                d = dict(r._mapping)
+                try:
+                    d["details"] = json.loads(d.get("details") or "{}")
+                except ValueError:
+                    d["details"] = {}
+                out[d["ip"]] = {"device_id": d["id"], "label": device_label(d)}
+        return out

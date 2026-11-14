@@ -12,6 +12,7 @@ const NAV = [
   { to: '/targets', label: 'Targets' },
   { to: '/devices', label: 'Devices' },
   { to: '/exposure', label: 'Exposure' },
+  { to: '/dns', label: 'DNS' },
   { to: '/timeline', label: 'Timeline' },
   { to: '/map', label: 'Map' },
   { to: '/diagnosis', label: 'Diagnosis' },
