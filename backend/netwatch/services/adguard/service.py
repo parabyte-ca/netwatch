@@ -7,11 +7,108 @@ upstream resolver is failing", "DNS errors spiked".
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
+import logging
+import statistics
+import time
+from collections import Counter, deque
+from collections.abc import Callable
+from datetime import UTC, datetime
 
 from sqlalchemy import Engine, delete, insert, select
 
-from ...db import adguard_stats
+from ...db import adguard_stats, device_ips
+from ..events import DNS, EventLog
+from ..secrets import SecretBox
+from ..storage import Store
+from .client import AdGuardClient, AdGuardError, AdGuardLoginError, parse_time
+
+log = logging.getLogger(__name__)
+
+CONFIG_KEY = "adguard_config"
+PASSWORD_KEY = "adguard_password"  # noqa: S105 - the kv key, not a password
+CURSOR_KEY = "adguard_cursor"
+CLIENTS_KEY = "adguard_clients"
+POLL_S = 60
+MAX_LOGIN_FAILURES = 3
+UNREACHABLE_AFTER = 3  # failed polls in a row before "unreachable" opens
+QUERYLOG_LIMIT = 2000  # entries read per poll at most
+CATCH_UP_MS = 10 * 60_000  # after a restart, read at most this far back
+UPSTREAM_FAIL_RATE, UPSTREAM_MIN_QUERIES, UPSTREAM_CLEAN_TO_CLOSE = 0.5, 10, 3
+ERROR_RATE, ERROR_MIN_QUERIES = 0.05, 20
+SPIKE_FLOOR_MS, SPIKE_FACTOR, SPIKE_MIN_HISTORY = 150.0, 3.0, 30
+SPIKE_COOLDOWN_MS = ERROR_COOLDOWN_MS = 30 * 60_000
+NEW_CLIENTS_PER_HOUR = 10
+MAX_KNOWN_CLIENTS = 2000
+OK_STATUS = frozenset({"NOERROR", "NXDOMAIN"})
+
+ClientFactory = Callable[[dict, str], AdGuardClient]
+
+
+def default_factory(cfg: dict, password: str) -> AdGuardClient:
+    return AdGuardClient(cfg["host"], cfg["port"], cfg["username"], password, https=cfg["https"])
+
+
+def interval_metrics(entries: list[dict]) -> dict:
+    """Counts, latency and per-upstream health from query-log entries."""
+    queries = len(entries)
+    blocked = servfail = errors = 0
+    times: list[float] = []
+    ups: dict[str, dict] = {}
+    clients: Counter[str] = Counter()
+    for e in entries:
+        status = str(e.get("status") or "").upper()
+        reason = str(e.get("reason") or "")
+        if e.get("client"):
+            clients[str(e["client"])[:64]] += 1
+        if reason.startswith("Filtered"):
+            blocked += 1
+            continue
+        failed = False
+        if status == "SERVFAIL":
+            servfail += 1
+            failed = True
+        elif status and status not in OK_STATUS:
+            errors += 1
+            failed = True
+        try:
+            ms = float(e.get("elapsedMs"))
+        except (TypeError, ValueError):
+            ms = None
+        if ms is not None and ms >= 0:
+            times.append(ms)
+        up = str(e.get("upstream") or "")[:120]
+        if up:
+            u = ups.setdefault(up, {"n": 0, "fail": 0, "_t": []})
+            u["n"] += 1
+            u["fail"] += failed
+            if ms is not None:
+                u["_t"].append(ms)
+    for u in ups.values():
+        t = u.pop("_t")
+        u["avg_ms"] = round(sum(t) / len(t), 1) if t else None
+    times.sort()
+    return {
+        "queries": queries,
+        "blocked": blocked,
+        "servfail": servfail,
+        "errors": errors,
+        "avg_ms": round(sum(times) / len(times), 1) if times else None,
+        "p95_ms": round(times[min(len(times) - 1, int(len(times) * 0.95))], 1) if times else None,
+        "upstreams": ups,
+        "top_clients": clients.most_common(5),
+    }
+
+
+def _pairs(items) -> dict:
+    """AdGuard's stats lists of one-entry dicts ([{"a": 1}, {"b": 2}]) as one dict."""
+    out: dict = {}
+    for it in items or []:
+        if isinstance(it, dict):
+            out.update(it)
+    return out
 
 
 def _row(r) -> dict:
@@ -55,3 +152,432 @@ class AdGuardStore:
             return conn.execute(
                 delete(adguard_stats).where(adguard_stats.c.ts_ms < cutoff_ms)
             ).rowcount
+
+
+class AdGuardService:
+    def __init__(
+        self,
+        store: Store,
+        events: EventLog,
+        adguard_store: AdGuardStore,
+        secrets: SecretBox,
+        *,
+        client_factory: ClientFactory | None = None,
+    ) -> None:
+        self.store = store
+        self.events = events
+        self.adguard_store = adguard_store
+        self.secrets = secrets
+        self.client_factory = client_factory or default_factory
+        self.last: dict | None = None  # latest status (version, protection, ...)
+        self.last_poll_ms: int | None = None
+        self.last_ok_ms: int | None = None
+        self.error: str | None = None
+        self.paused: str | None = None
+        self._failures = 0  # sign-in failures in a row
+        self._unreachable = 0  # failed polls in a row
+        self._client: AdGuardClient | None = None
+        self._client_key: tuple | None = None
+        self._task: asyncio.Task | None = None
+        self._kick: asyncio.Task | None = None
+        self._cursor: datetime | None = None
+        self._prev_stats: dict | None = None
+        self._open: dict[str, int] = {}  # open event ids: "unreachable", "protection", "up:<x>"
+        self._clean: dict[str, int] = {}  # clean intervals per failing upstream
+        self._last_error_ms = 0
+        self._last_spike_ms = 0
+        self._avg_history: deque[float] | None = None
+        self._new_client_times: deque[int] = deque()
+
+    # ── configuration ────────────────────────────────────────────────────────
+
+    def config(self) -> dict:
+        c = self.store.kv_get(CONFIG_KEY, {}) or {}
+        return {
+            "host": c.get("host", ""),
+            "port": int(c.get("port") or 80),
+            "https": bool(c.get("https", False)),
+            "username": c.get("username", ""),
+            "enabled": bool(c.get("enabled", False)),
+        }
+
+    def password(self) -> str | None:
+        token = self.store.kv_get(PASSWORD_KEY, None)
+        return self.secrets.decrypt(token) if token else None
+
+    @property
+    def configured(self) -> bool:
+        c = self.config()
+        return bool(c["host"] and c["username"]) and (
+            self.store.kv_get(PASSWORD_KEY, None) is not None
+        )
+
+    def save(
+        self,
+        host: str,
+        port: int,
+        https: bool,
+        username: str,
+        enabled: bool,
+        password: str | None,
+    ) -> None:
+        host, username = host.strip(), username.strip()
+        old = self.config()
+        if (host, port, https) != (old["host"], old["port"], old["https"]) and not password:
+            # The password only ever goes to the address it was saved for.
+            self.store.kv_set(PASSWORD_KEY, None)
+        self.store.kv_set(
+            CONFIG_KEY,
+            {"host": host, "port": port, "https": https, "username": username, "enabled": enabled},
+        )
+        if password:
+            self.store.kv_set(PASSWORD_KEY, self.secrets.encrypt(password))
+        self._failures = 0
+        self.paused = None
+        if not enabled:
+            self._close_all(int(time.time() * 1000))
+
+    def forget_password(self) -> None:
+        self.store.kv_set(PASSWORD_KEY, None)
+
+    # ── lifecycle ────────────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        self._task = asyncio.create_task(self._loop(), name="netwatch-adguard")
+
+    def kick(self) -> None:
+        if self.config()["enabled"] and self.configured and not self.paused:
+            self._kick = asyncio.create_task(self.poll(), name="netwatch-adguard-kick")
+
+    async def stop(self) -> None:
+        if self._task:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
+        await self._drop()
+
+    async def _drop(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+        self._client = None
+        self._client_key = None
+
+    async def _loop(self) -> None:
+        await asyncio.sleep(15)
+        while True:
+            try:
+                cfg = await asyncio.to_thread(self.config)
+                if (
+                    cfg["enabled"]
+                    and not self.paused
+                    and await asyncio.to_thread(lambda: self.configured)
+                ):
+                    await self.poll()
+            except Exception:
+                log.exception("AdGuard Home poll failed")
+            await asyncio.sleep(POLL_S)
+
+    async def _ensure_client(self) -> AdGuardClient | None:
+        cfg = await asyncio.to_thread(self.config)
+        pw = await asyncio.to_thread(self.password)
+        if not (cfg["host"] and cfg["username"] and pw):
+            return None
+        key = (cfg["host"], cfg["port"], cfg["https"], cfg["username"], pw)
+        if self._client_key != key:
+            await self._drop()
+            self._client = self.client_factory(cfg, pw)
+            self._client_key = key
+        return self._client
+
+    # ── polling ──────────────────────────────────────────────────────────────
+
+    async def poll(self, now_ms: int | None = None) -> bool:
+        now = now_ms or int(time.time() * 1000)
+        self.last_poll_ms = now
+        if await asyncio.to_thread(self.password) is None:
+            self.error = "the stored password cannot be decrypted; enter it again"
+            return False
+        client = await self._ensure_client()
+        if client is None:
+            self.error = "save the address, username and password first"
+            return False
+        try:
+            status = await client.status()
+            if await client.querylog_enabled():
+                since = await asyncio.to_thread(self._since, now)
+                entries, cut = await client.querylog(since, QUERYLOG_LIMIT)
+                stats = None
+            else:
+                entries, cut = [], False
+                stats = await client.stats()
+            known = await client.clients()
+        except AdGuardLoginError as exc:
+            self.error = str(exc)
+            self._failures += 1
+            if self._failures >= MAX_LOGIN_FAILURES:
+                self.paused = f"{self._failures} failed sign-ins"
+            await self._drop()
+            return False
+        except AdGuardError as exc:
+            self.error = str(exc)
+            log.warning("AdGuard Home poll failed", extra={"error": self.error})
+            await asyncio.to_thread(self._unreachable_poll, now)
+            return False
+        self._failures = 0
+        self.error = None
+        self.last_ok_ms = now
+        self.last = status
+        await asyncio.to_thread(self._apply, now, status, entries, cut, stats, known)
+        return True
+
+    def _since(self, now: int) -> datetime:
+        """Read the query log from the last entry seen; at most CATCH_UP_MS back."""
+        if self._cursor is None:
+            self._cursor = parse_time(self.store.kv_get(CURSOR_KEY, None))
+        if self._cursor is None:  # first poll ever: just the last interval
+            return datetime.fromtimestamp((now - POLL_S * 1000) / 1000, UTC)
+        return max(self._cursor, datetime.fromtimestamp((now - CATCH_UP_MS) / 1000, UTC))
+
+    def _unreachable_poll(self, now: int) -> None:
+        self._unreachable += 1
+        self.adguard_store.add({"ts_ms": now, "reachable": False, "source": "stats"})
+        if self._unreachable >= UNREACHABLE_AFTER and "unreachable" not in self._open:
+            self._open["unreachable"] = self.events.open(
+                DNS,
+                "critical",
+                now - (self._unreachable - 1) * POLL_S * 1000,
+                "AdGuard Home is unreachable: devices using it cannot resolve names",
+                details={"type": "adguard_unreachable", "error": self.error},
+            )
+
+    def _close(self, key: str, now: int, extra: dict | None = None) -> None:
+        eid = self._open.pop(key, None)
+        if eid is not None:
+            self.events.close(eid, now, extra)
+
+    def _close_all(self, now: int) -> None:
+        for key in list(self._open):
+            self._close(key, now, {"closed_because": "integration turned off"})
+        self._clean.clear()
+
+    def _apply(self, now, status, entries, cut, stats, known) -> None:
+        self._unreachable = 0
+        self._close("unreachable", now)
+        if entries:
+            self._cursor = max(e["_ts"] for e in entries)
+            self.store.kv_set(CURSOR_KEY, self._cursor.isoformat())
+        if stats is None:
+            m = interval_metrics(entries)
+            source = "querylog"
+        else:
+            m = self._from_stats(stats)
+            source = "stats"
+        row = {
+            "ts_ms": now,
+            "reachable": True,
+            "protection": status["protection"],
+            "queries": m["queries"],
+            "blocked": m["blocked"],
+            "servfail": m["servfail"],
+            "errors": m["errors"],
+            "avg_ms": m["avg_ms"],
+            "p95_ms": m["p95_ms"],
+            "source": source,
+            "upstreams": m["upstreams"],
+            "details": {
+                "version": status.get("version"),
+                "top_clients": m["top_clients"],
+                "sampled": cut,
+            },
+        }
+        self.adguard_store.add(row)
+        self._protection(now, status)
+        self._upstreams(now, m["upstreams"])
+        self._errors(now, m)
+        self._latency(now, m["avg_ms"])
+        self._clients(now, [c for c, _ in m["top_clients"]], entries, known)
+
+    def _from_stats(self, s: dict) -> dict:
+        """Fallback when the query log is off: deltas of AdGuard's rolling totals."""
+        prev, self._prev_stats = self._prev_stats, s
+
+        def delta(key: str) -> int | None:
+            if prev is None:
+                return None
+            d = int(s.get(key) or 0) - int(prev.get(key) or 0)
+            return d if d >= 0 else None  # the rolling window moved past old data
+
+        times = _pairs(s.get("top_upstreams_avg_time"))
+        counts = _pairs(s.get("top_upstreams_responses"))
+        ups = {
+            str(k)[:120]: {
+                "n": int(counts.get(k) or 0),
+                "fail": None,
+                "avg_ms": round(float(v) * 1000, 1),
+            }
+            for k, v in times.items()
+        }
+        avg = s.get("avg_processing_time")
+        clients = sorted(_pairs(s.get("top_clients")).items(), key=lambda kv: -int(kv[1]))
+        return {
+            "queries": delta("num_dns_queries"),
+            "blocked": delta("num_blocked_filtering"),
+            "servfail": None,
+            "errors": None,
+            "avg_ms": round(float(avg) * 1000, 1) if avg is not None else None,
+            "p95_ms": None,
+            "upstreams": ups,
+            "top_clients": [(str(c)[:64], int(n)) for c, n in clients[:5]],
+        }
+
+    # ── events ───────────────────────────────────────────────────────────────
+
+    def _protection(self, now: int, status: dict) -> None:
+        if not status["protection"] and "protection" not in self._open:
+            self._open["protection"] = self.events.open(
+                DNS,
+                "warning",
+                now,
+                "AdGuard Home protection is off: nothing is being blocked",
+                details={"type": "protection_disabled"},
+            )
+        elif status["protection"]:
+            self._close("protection", now)
+
+    def _upstreams(self, now: int, ups: dict) -> None:
+        for name, u in ups.items():
+            key = f"up:{name}"
+            fail, n = u.get("fail"), u.get("n") or 0
+            failing = (
+                fail is not None and n >= UPSTREAM_MIN_QUERIES and fail / n >= UPSTREAM_FAIL_RATE
+            )
+            if failing:
+                self._clean.pop(key, None)
+                if key not in self._open:
+                    self._open[key] = self.events.open(
+                        DNS,
+                        "warning",
+                        now,
+                        f"DNS upstream {name} is failing ({fail} of {n} queries)",
+                        details={"type": "upstream_failing", "upstream": name,
+                                 "fail": fail, "queries": n},
+                    )  # fmt: skip
+        for key in [k for k in self._open if k.startswith("up:")]:
+            u = ups.get(key[3:]) or {}
+            n, fail = u.get("n") or 0, u.get("fail") or 0
+            if n < UPSTREAM_MIN_QUERIES or fail / n < UPSTREAM_FAIL_RATE:
+                self._clean[key] = self._clean.get(key, 0) + 1
+                if self._clean[key] >= UPSTREAM_CLEAN_TO_CLOSE:
+                    self._clean.pop(key)
+                    self._close(key, now)
+
+    def _errors(self, now: int, m: dict) -> None:
+        q, bad = m["queries"] or 0, (m["servfail"] or 0) + (m["errors"] or 0)
+        answered = q - (m["blocked"] or 0)
+        if (
+            answered >= ERROR_MIN_QUERIES
+            and bad / answered >= ERROR_RATE
+            and now - self._last_error_ms > ERROR_COOLDOWN_MS
+        ):
+            self._last_error_ms = now
+            self.events.instant(
+                DNS,
+                "warning",
+                now,
+                f"DNS errors spiked: {bad} of {answered} queries failed "
+                f"({100 * bad / answered:.0f} %, {m['servfail'] or 0} SERVFAIL)",
+                details={"type": "dns_errors", "failed": bad, "queries": answered,
+                         "servfail": m["servfail"]},
+            )  # fmt: skip
+
+    def _latency(self, now: int, avg_ms: float | None) -> None:
+        if self._avg_history is None:
+            rows = self.adguard_store.history(now - 86_400_000, now, limit=1440)
+            self._avg_history = deque(
+                (r["avg_ms"] for r in rows if r["avg_ms"] is not None), maxlen=1440
+            )
+        if avg_ms is None:
+            return
+        hist = self._avg_history
+        if len(hist) >= SPIKE_MIN_HISTORY:
+            median = statistics.median(hist)
+            limit = max(SPIKE_FLOOR_MS, SPIKE_FACTOR * median)
+            if avg_ms > limit and now - self._last_spike_ms > SPIKE_COOLDOWN_MS:
+                self._last_spike_ms = now
+                self.events.instant(
+                    DNS,
+                    "warning",
+                    now,
+                    f"DNS latency spike: {avg_ms:.0f} ms on average (usually {median:.0f} ms)",
+                    details={"type": "latency_spike", "avg_ms": avg_ms,
+                             "median_ms": round(median, 1)},
+                )  # fmt: skip
+        hist.append(avg_ms)
+
+    def _known_ip(self, ip: str) -> bool:
+        with self.store.engine.connect() as conn:
+            return (
+                conn.execute(select(device_ips.c.ip).where(device_ips.c.ip == ip)).first()
+                is not None
+            )
+
+    def _clients(self, now: int, top: list[str], entries: list[dict], known: list[dict]) -> None:
+        seen = {str(e.get("client"))[:64] for e in entries if e.get("client")} | set(top)
+        names = {k["id"]: k["name"] for k in known}
+        seen |= set(names)
+        stored = self.store.kv_get(CLIENTS_KEY, None)
+        if stored is None:  # first poll: learn the current clients without alerting
+            self.store.kv_set(CLIENTS_KEY, sorted(seen)[:MAX_KNOWN_CLIENTS])
+            return
+        known_set = set(stored)
+        new = sorted(seen - known_set)
+        if not new:
+            return
+        while self._new_client_times and self._new_client_times[0] < now - 3600_000:
+            self._new_client_times.popleft()
+        for cid in new:
+            if self._known_ip(cid) or len(self._new_client_times) >= NEW_CLIENTS_PER_HOUR:
+                continue
+            self._new_client_times.append(now)
+            label = names.get(cid) or cid
+            self.events.instant(
+                DNS,
+                "info",
+                now,
+                f"New DNS client: {label}",
+                details={"type": "new_client", "client": cid, "name": names.get(cid)},
+            )
+        self.store.kv_set(CLIENTS_KEY, sorted(known_set | set(new))[-MAX_KNOWN_CLIENTS:])
+
+    # ── admin ────────────────────────────────────────────────────────────────
+
+    async def test(self, cfg: dict, password: str) -> dict:
+        client = self.client_factory(cfg, password)
+        try:
+            status = await client.status()
+            stats = await client.stats()
+            querylog = await client.querylog_enabled()
+        except AdGuardError as exc:
+            return {"ok": False, "error": str(exc)}
+        finally:
+            await client.aclose()
+        return {
+            "ok": True,
+            "version": status.get("version"),
+            "protection": status["protection"],
+            "queries_24h": stats.get("num_dns_queries"),
+            "querylog": querylog,
+        }
+
+    def status(self) -> dict:
+        return {
+            **self.config(),
+            "password_set": self.store.kv_get(PASSWORD_KEY, None) is not None,
+            "last_poll_ms": self.last_poll_ms,
+            "last_ok_ms": self.last_ok_ms,
+            "error": self.error,
+            "paused": self.paused,
+            "status": self.last,
+            "latest": self.adguard_store.latest(),
+        }

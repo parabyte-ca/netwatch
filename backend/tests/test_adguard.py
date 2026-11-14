@@ -55,10 +55,11 @@ class FakeAdGuard:
         ms=12.0,
         name="example.com",
     ) -> None:
-        self.entries.insert(0, {
+        self.entries.append({
             "time": iso(ts), "client": client, "upstream": upstream, "status": status,
             "reason": reason, "elapsedMs": str(ms), "question": {"name": name, "type": "A"},
         })  # fmt: skip
+        self.entries.sort(key=lambda e: parse_time(e["time"]), reverse=True)  # newest first
 
     def __call__(self, req: httpx.Request) -> httpx.Response:
         self.requests.append(req)
@@ -179,3 +180,183 @@ def test_store_roundtrip_and_purge(store):
     assert s.latest()["ts_ms"] == 2000
     assert s.purge(1500) == 1 and s.history(0, 10_000)[0]["ts_ms"] == 2000
     assert DNS == "dns" and DNS in KINDS
+
+
+# ── service ───────────────────────────────────────────────────────────────────
+
+T = datetime(2026, 11, 14, 12, 0, tzinfo=UTC)
+T_MS = int(T.timestamp() * 1000)
+
+
+def at(seconds: float) -> datetime:
+    return T + timedelta(seconds=seconds)
+
+
+def ms(seconds: float) -> int:
+    return T_MS + int(seconds * 1000)
+
+
+@pytest.fixture
+def svc(store, tmp_path):
+    from netwatch.services.adguard.service import AdGuardService
+    from netwatch.services.events import EventLog
+    from netwatch.services.secrets import SecretBox
+
+    fake = FakeAdGuard()
+    s = AdGuardService(
+        store,
+        EventLog(store.engine),
+        AdGuardStore(store.engine),
+        SecretBox(tmp_path / "data"),
+        client_factory=lambda cfg, pw: client_for(fake, pw),
+    )
+    s.save(HOST, PORT, False, USER, True, PASSWORD)
+    s.fake = fake
+    return s
+
+
+def dns_events(svc, typ=None):
+    evs = svc.events.list(0, 10**13, kinds=[DNS])
+    return [e for e in evs if typ is None or e["details"].get("type") == typ]
+
+
+async def test_interval_metrics_from_the_query_log(svc):
+    f = svc.fake
+    for i in range(6):
+        f.query(at(-40 + i), ms=10.0 + i)
+    f.query(at(-30), upstream="8.8.8.8:53", ms=40.0)
+    f.query(at(-29), upstream="8.8.8.8:53", status="SERVFAIL", ms=900.0)
+    f.query(at(-28), reason="FilteredBlackList", upstream="", ms=0.2, client="192.168.2.30")
+    f.query(at(-27), reason="FilteredBlackList", upstream="", ms=0.1, client="192.168.2.30")
+    f.query(at(-200))  # before the first interval: ignored
+    assert await svc.poll(T_MS)
+    row = svc.adguard_store.latest()
+    assert row["source"] == "querylog" and row["reachable"] and row["protection"]
+    assert (row["queries"], row["blocked"], row["servfail"], row["errors"]) == (10, 2, 1, 0)
+    assert row["upstreams"]["8.8.8.8:53"] == {"n": 2, "fail": 1, "avg_ms": 470.0}
+    assert row["upstreams"]["tls://1.1.1.1:853"]["n"] == 6
+    assert row["p95_ms"] == 900.0 and row["details"]["top_clients"][0] == ["192.168.2.20", 8]
+    # The next poll counts only what arrived since.
+    f.query(at(20))
+    f.query(at(25), status="REFUSED")
+    assert await svc.poll(ms(60))
+    row = svc.adguard_store.latest()
+    assert (row["queries"], row["errors"]) == (2, 1)
+
+
+async def test_stats_fallback_when_the_query_log_is_off(svc):
+    f = svc.fake
+    f.querylog_on = False
+    assert await svc.poll(T_MS)
+    assert svc.adguard_store.latest()["queries"] is None  # no baseline yet
+    f.stats = {**f.stats, "num_dns_queries": 1050, "num_blocked_filtering": 160}
+    assert await svc.poll(ms(60))
+    row = svc.adguard_store.latest()
+    assert row["source"] == "stats" and (row["queries"], row["blocked"]) == (50, 10)
+    assert row["avg_ms"] == 12.0 and row["upstreams"]["8.8.8.8:53"]["avg_ms"] == 20.0
+    f.stats = {**f.stats, "num_dns_queries": 900}  # the rolling window moved on
+    assert await svc.poll(ms(120))
+    assert svc.adguard_store.latest()["queries"] is None
+
+
+async def test_protection_and_upstream_events(svc):
+    f = svc.fake
+    await svc.poll(T_MS)
+    f.protection = False
+    await svc.poll(ms(60))
+    (prot,) = dns_events(svc, "protection_disabled")
+    assert prot["open"] and "protection is off" in prot["title"]
+    f.protection = True
+    for i in range(12):
+        f.query(at(70 + i), upstream="8.8.8.8:53", status="SERVFAIL" if i < 8 else "NOERROR")
+    await svc.poll(ms(120))
+    assert not dns_events(svc, "protection_disabled")[0]["open"]
+    (up,) = dns_events(svc, "upstream_failing")
+    assert up["open"] and up["details"]["upstream"] == "8.8.8.8:53"
+    assert "8 of 12" in up["title"]
+    for k in range(3):  # three clean intervals close it
+        assert dns_events(svc, "upstream_failing")[0]["open"]
+        await svc.poll(ms(180 + 60 * k))
+    assert not dns_events(svc, "upstream_failing")[0]["open"]
+
+
+async def test_error_spike_and_latency_spike_have_cooldowns(svc):
+    f = svc.fake
+    await svc.poll(T_MS)
+    for i in range(20):
+        f.query(at(10 + i * 0.5), status="SERVFAIL" if i < 3 else "NOERROR")
+    await svc.poll(ms(60))
+    (err,) = dns_events(svc, "dns_errors")
+    assert "3 of 20" in err["title"] and err["details"]["servfail"] == 3
+    for i in range(20):
+        f.query(at(70 + i * 0.5), status="SERVFAIL")
+    await svc.poll(ms(120))
+    assert len(dns_events(svc, "dns_errors")) == 1  # within the 30 min cooldown
+    # Latency: 30 normal intervals, then a slow one.
+    for k in range(30):
+        f.query(at(130 + 60 * k), ms=12.0)
+        await svc.poll(ms(180 + 60 * k))
+    f.query(at(1990), ms=600.0)
+    await svc.poll(ms(2000))
+    (spike,) = dns_events(svc, "latency_spike")
+    assert "600 ms" in spike["title"] and spike["details"]["median_ms"] == 12.0
+    f.query(at(2050), ms=700.0)
+    await svc.poll(ms(2060))
+    assert len(dns_events(svc, "latency_spike")) == 1
+
+
+async def test_new_clients_after_the_first_poll(svc, store):
+    from netwatch.services.discovery.inventory import DeviceStore
+
+    f = svc.fake
+    f.query(at(-10))
+    await svc.poll(T_MS)  # baseline: Office PC, tv.lan and the querying client
+    assert dns_events(svc, "new_client") == []
+    devs = DeviceStore(store.engine)
+    did = devs.insert({"mac": "aa:bb:cc:00:00:44", "first_seen_ms": 1, "last_seen_ms": 1})
+    devs.upsert_ip(did, "192.168.2.44", 1, "arp")
+    f.query(at(10), client="192.168.2.99")
+    f.query(at(11), client="192.168.2.44")  # a device NetWatch already knows
+    await svc.poll(ms(60))
+    (ev,) = dns_events(svc, "new_client")
+    assert ev["title"] == "New DNS client: 192.168.2.99" and ev["severity"] == "info"
+    f.query(at(70), client="192.168.2.99")
+    await svc.poll(ms(120))
+    assert len(dns_events(svc, "new_client")) == 1
+
+
+async def test_unreachable_opens_after_three_failures_and_closes(svc):
+    f = svc.fake
+    await svc.poll(T_MS)
+    f.fail = 502
+    for k in range(1, 3):
+        assert not await svc.poll(ms(60 * k))
+    assert dns_events(svc, "adguard_unreachable") == []
+    await svc.poll(ms(180))
+    (ev,) = dns_events(svc, "adguard_unreachable")
+    assert ev["open"] and ev["start_ms"] == ms(60) and ev["severity"] == "critical"
+    assert svc.adguard_store.latest()["reachable"] is False
+    f.fail = None
+    assert await svc.poll(ms(240))
+    assert dns_events(svc, "adguard_unreachable")[0]["end_ms"] == ms(240)
+
+
+async def test_sign_in_failures_pause_polling(svc):
+    svc.save(HOST, PORT, False, USER, True, "wrong-password")
+    for _ in range(3):
+        assert not await svc.poll()
+    assert svc.paused == "3 failed sign-ins" and "wrong username" in svc.error
+    svc.save(HOST, PORT, False, USER, True, PASSWORD)
+    assert svc.paused is None and await svc.poll()
+
+
+def test_password_only_goes_to_its_address_and_disabling_closes_events(svc):
+    assert svc.configured and svc.password() == PASSWORD
+    svc.save(HOST, 3000, False, USER, True, None)  # new port, no password given
+    assert svc.password() is None and not svc.configured
+    svc.save(HOST, PORT, False, USER, True, PASSWORD)
+    eid = svc.events.open(DNS, "warning", 1, "x", details={"type": "protection_disabled"})
+    svc._open["protection"] = eid
+    svc.save(HOST, PORT, False, USER, False, None)
+    assert svc.events.get(eid)["end_ms"] is not None
+    assert PASSWORD not in str(svc.store.kv_get("adguard_password"))
