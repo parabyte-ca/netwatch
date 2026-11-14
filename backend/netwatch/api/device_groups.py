@@ -97,6 +97,14 @@ async def delete_group(group_id: int, request: Request) -> dict:
     return {"ungrouped": n}
 
 
+@router.get("/device-groups/stats")
+async def group_stats(request: Request, hours: int = 24) -> list[dict]:
+    if hours not in (24, 168):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "hours must be 24 or 168")
+    end = int(time.time() * 1000)
+    return await asyncio.to_thread(request.app.state.group_stats, end - hours * 3_600_000, end)
+
+
 @router.get("/device-groups/suggestions")
 async def suggestions(request: Request) -> list[dict]:
     return await asyncio.to_thread(_groups(request).suggestions)

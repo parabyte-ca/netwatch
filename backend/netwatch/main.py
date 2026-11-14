@@ -53,6 +53,7 @@ from .services.discovery.inventory import DeviceStore
 from .services.discovery.service import DiscoveryService
 from .services.events import MONITOR, SECURITY, EventLog, IncidentRecorder, startup_events
 from .services.exposure import ExposureScanner, ExposureStore
+from .services.group_stats import group_stats
 from .services.health import HealthService
 from .services.hub.service import HubService, HubStore
 from .services.metrics import Metrics
@@ -304,6 +305,20 @@ def create_app(
         app.state.groups = GroupStore(engine)
         discovery.inventory.groups = app.state.groups
         events.quiet = app.state.groups.is_quiet_event
+
+        def stats_for(start_ms: int, end_ms: int) -> list[dict]:
+            return group_stats(
+                engine,
+                traffic=traffic_store,
+                clients=app.state.adguard_clients,
+                events=events,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                minute_floor_s=int(time.time()) - settings.traffic_retention_days * 86400,
+                dns=app.state.adguard.configured,
+            )
+
+        app.state.group_stats = stats_for
         app.state.discovery = discovery
         app.state.traffic = traffic_store
         bufferbloat_store = BufferbloatStore(engine)
@@ -356,7 +371,11 @@ def create_app(
             )
 
         app.state.health = HealthService(
-            engine, health_report, app.state.exposure.summary, tz=lambda: settings.tz
+            engine,
+            health_report,
+            app.state.exposure.summary,
+            tz=lambda: settings.tz,
+            groups=app.state.group_stats,
         )
         app.state.assistant = Assistant(
             store, SecretBox(settings.data_dir), app, tz=lambda: settings.tz

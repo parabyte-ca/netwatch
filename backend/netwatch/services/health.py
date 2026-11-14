@@ -181,8 +181,10 @@ class HealthService:
         exposure: Callable[[], dict | None] = lambda: None,
         *,
         tz: Callable[[], str] = lambda: "America/Toronto",
+        groups: Callable[[int, int], list[dict]] | None = None,
     ) -> None:
         self.engine = engine
+        self.groups = groups  # (start_ms, end_ms) -> per-group totals
         self.build = build  # (start_ms, end_ms) -> incident report
         self.exposure = exposure
         self.tz = tz
@@ -212,8 +214,15 @@ class HealthService:
         report = self.build(start, end)
         health = compute(report, self.exposure())
         prev = self.get((datetime.fromisoformat(week_start) - timedelta(days=7)).date().isoformat())
+        groups = []
+        if self.groups is not None:
+            try:
+                groups = self.groups(start, end)
+            except Exception:  # a report without the groups section beats no report
+                log.exception("weekly report: group totals failed")
         details = {
             **health,
+            "groups": groups,
             "period": report["period"],
             "summary": report["summary"],
             "speeds": report["speeds"],
@@ -225,7 +234,7 @@ class HealthService:
             ],
             "incident_count": len(report["incidents"]),
             "previous_score": prev["score"] if prev else None,
-            "markdown": render_week(week_start, health, report, prev),
+            "markdown": render_week(week_start, health, report, prev, groups),
         }
         now = now_ms or int(time.time() * 1000)
         with self.engine.begin() as conn:
@@ -318,7 +327,9 @@ class HealthService:
             self._task = None
 
 
-def render_week(week_start: str, health: dict, report: dict, prev: dict | None) -> str:
+def render_week(
+    week_start: str, health: dict, report: dict, prev: dict | None, groups: list[dict] | None = None
+) -> str:
     s = report["summary"]
     score = health["score"]
     trend = ""
@@ -361,4 +372,17 @@ def render_week(week_start: str, health: dict, report: dict, prev: dict | None) 
         lines += [
             f"- {i['start']}: {i['cause']} ({i['duration']})" for i in report["incidents"][:20]
         ]
+    if groups:
+        header = "| Group | Devices | Traffic | DNS queries | Blocked | Outages | Alerts | Quiet |"
+        lines += ["", "## Groups", "", header, "|---|---:|---:|---:|---:|---:|---:|---:|"]
+        for g in groups:
+            dns = g.get("dns") or {}
+            gb = (g["down_bytes"] + g["up_bytes"]) / 1e9
+            blocked = dns.get("blocked_pct")
+            name = g["name"] + (" (quiet)" if g.get("quiet") else "")
+            lines.append(
+                f"| {name} | {g['devices']} | {gb:.1f} GB | {dns.get('queries', 'n/a')} | "
+                f"{f'{blocked} %' if blocked is not None else 'n/a'} | "
+                f"{g['outages']} | {g['alerts']} | {g['quiet_events']} |"
+            )
     return "\n".join(lines) + "\n"
