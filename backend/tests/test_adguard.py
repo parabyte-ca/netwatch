@@ -360,3 +360,46 @@ def test_password_only_goes_to_its_address_and_disabling_closes_events(svc):
     svc.save(HOST, PORT, False, USER, False, None)
     assert svc.events.get(eid)["end_ms"] is not None
     assert PASSWORD not in str(svc.store.kv_get("adguard_password"))
+
+
+# ── admin API ─────────────────────────────────────────────────────────────────
+
+
+def body(**over) -> dict:
+    return {"host": HOST, "port": PORT, "https": False, "username": USER, "enabled": True,
+            "password": PASSWORD, **over}  # fmt: skip
+
+
+def test_admin_api(client):
+    from netwatch.services.events import SECURITY
+
+    st = client.app.state
+    fake = FakeAdGuard()
+    st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
+    assert client.get("/api/admin/adguard").json()["password_set"] is False
+    assert client.put("/api/admin/adguard", json=body(host="8.8.8.8")).status_code == 422
+    assert client.put("/api/admin/adguard", json=body(username="")).status_code == 422
+    assert client.put("/api/admin/adguard", json=body(port=0)).status_code == 422
+    r = client.post("/api/admin/adguard/test", json=body())
+    assert r.status_code == 422  # extra field "enabled" refused
+    test_body = {k: v for k, v in body().items() if k != "enabled"}
+    r = client.post("/api/admin/adguard/test", json=test_body).json()
+    assert r == {"ok": True, "version": "v0.107.55", "protection": True, "queries_24h": 1000,
+                 "querylog": True}  # fmt: skip
+    r = client.post("/api/admin/adguard/test", json={**test_body, "password": "nope"}).json()
+    assert r["ok"] is False and "wrong username" in r["error"]
+    r = client.put("/api/admin/adguard", json=body())
+    assert r.status_code == 200 and r.json()["password_set"] and PASSWORD not in r.text
+    assert PASSWORD not in client.get("/api/admin/adguard").text
+    log = st.events.list(0, 10**13, kinds=[SECURITY])
+    assert any("AdGuard Home integration changed" in e["title"] and "password saved" in e["title"]
+               for e in log)  # fmt: skip
+    assert all(PASSWORD not in str(e) for e in log)
+    # The saved password is used for the saved address only.
+    no_pw = {k: v for k, v in test_body.items() if k != "password"}
+    assert client.post("/api/admin/adguard/test", json=no_pw).json()["ok"]
+    for other in ({"host": "192.168.2.54"}, {"port": 3000}, {"https": True}, {"username": "x"}):
+        r = client.post("/api/admin/adguard/test", json={**no_pw, **other})
+        assert r.status_code == 422 and "password" in r.text
+    client.portal.call(st.adguard.poll)
+    assert client.get("/api/admin/adguard").json()["latest"]["reachable"] is True

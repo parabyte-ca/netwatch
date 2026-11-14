@@ -313,8 +313,8 @@ def _on_lan(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return any(ip in net for net in _LAN_NETS if net.version == ip.version)
 
 
-def _lan_host(host: str) -> str:
-    """A LAN address, or a name that only resolves to LAN addresses: the owner password must
+def _lan_host(host: str, what: str = "the Deco") -> str:
+    """A LAN address, or a name that only resolves to LAN addresses: a stored password must
     never leave the network. (Blocking: call from a thread.)"""
     h = host.strip().lower()
     try:
@@ -331,7 +331,7 @@ def _lan_host(host: str) -> str:
                 status.HTTP_422_UNPROCESSABLE_ENTITY, f"cannot resolve {h}"
             ) from None
     if not addrs or not all(_on_lan(a) for a in addrs):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "the Deco must be on your LAN")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{what} must be on your LAN")
     return h
 
 
@@ -434,7 +434,9 @@ class HubIn(BaseModel):
 @router.put("/hub")
 async def put_hub(body: HubIn, request: Request) -> dict:
     hub = request.app.state.hub
-    host = await asyncio.to_thread(_lan_host, body.host) if body.host.strip() else ""
+    host = (
+        await asyncio.to_thread(_lan_host, body.host, "the Home Hub") if body.host.strip() else ""
+    )
     if body.enabled and not host:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "enter the Hub's address")
     before = await asyncio.to_thread(hub.status)
@@ -463,7 +465,7 @@ class HubTestIn(BaseModel):
 @router.post("/hub/test")
 async def test_hub(body: HubTestIn, request: Request) -> dict:
     hub = request.app.state.hub
-    host = await asyncio.to_thread(_lan_host, body.host)
+    host = await asyncio.to_thread(_lan_host, body.host, "the Home Hub")
     if body.password:
         return await hub.test(host, body.password)
     if host != (await asyncio.to_thread(hub.config))["host"]:
@@ -491,6 +493,92 @@ async def explore_hub(body: HubExploreIn, request: Request) -> dict:
     except HubError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     return {"xpath": body.xpath, "value": value}
+
+
+# ── AdGuard Home ──────────────────────────────────────────────────────────────
+
+
+class AdGuardIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    host: str = Field(max_length=253)
+    port: int = Field(default=80, ge=1, le=65535)
+    https: bool = False
+    username: str = Field(default="", max_length=64, pattern=r"^[^\s:]*$")
+    enabled: bool
+    password: str | None = Field(default=None, max_length=128)
+    forget_password: bool = False
+
+
+@router.get("/adguard")
+async def get_adguard(request: Request) -> dict:
+    return await asyncio.to_thread(request.app.state.adguard.status)
+
+
+@router.put("/adguard")
+async def put_adguard(body: AdGuardIn, request: Request) -> dict:
+    ag = request.app.state.adguard
+    host = (
+        await asyncio.to_thread(_lan_host, body.host, "AdGuard Home") if body.host.strip() else ""
+    )
+    if body.enabled and not (host and body.username.strip()):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "enter AdGuard Home's address and username"
+        )
+    before = await asyncio.to_thread(ag.status)
+    await asyncio.to_thread(
+        ag.save, host, body.port, body.https, body.username, body.enabled, body.password or None
+    )
+    if body.forget_password:
+        await asyncio.to_thread(ag.forget_password)
+    what = []
+    old = (before["host"], before["port"], before["https"], before["username"], before["enabled"])
+    if old != (host, body.port, body.https, body.username.strip(), body.enabled):
+        scheme = "https" if body.https else "http"
+        what.append(
+            f"{'on' if body.enabled else 'off'}, {scheme}://{host or 'no address'}:{body.port} "
+            f"as {body.username.strip() or 'no user'}"
+        )
+    if body.password:
+        what.append("password saved")
+    if body.forget_password:
+        what.append("password forgotten")
+    if what:
+        await security_event(
+            request, "info", "AdGuard Home integration changed: " + "; ".join(what)
+        )
+    ag.kick()
+    return await asyncio.to_thread(ag.status)
+
+
+class AdGuardTestIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    host: str = Field(max_length=253)
+    port: int = Field(default=80, ge=1, le=65535)
+    https: bool = False
+    username: str = Field(max_length=64, pattern=r"^[^\s:]+$")
+    password: str | None = Field(default=None, max_length=128)
+
+
+@router.post("/adguard/test")
+async def test_adguard(body: AdGuardTestIn, request: Request) -> dict:
+    ag = request.app.state.adguard
+    host = await asyncio.to_thread(_lan_host, body.host, "AdGuard Home")
+    cfg = {"host": host, "port": body.port, "https": body.https, "username": body.username}
+    if body.password:
+        return await ag.test(cfg, body.password)
+    saved = await asyncio.to_thread(ag.config)
+    # The stored password only ever goes to the address (and user) it was saved for.
+    if (host, body.port, body.https, body.username) != (
+        saved["host"],
+        saved["port"],
+        saved["https"],
+        saved["username"],
+    ):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "enter the password")
+    password = await asyncio.to_thread(ag.password)
+    if not password:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "enter the password")
+    return await ag.test(cfg, password)
 
 
 # ── Ask NetWatch (Claude API) ─────────────────────────────────────────────────
