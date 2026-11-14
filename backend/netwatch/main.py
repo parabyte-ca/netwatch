@@ -21,6 +21,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from . import __version__
 from .api import (
+    adguard_actions,
     admin,
     ask,
     devices,
@@ -497,6 +498,7 @@ def create_app(
     app.include_router(devices.router)
     app.include_router(diagnosis.router)
     app.include_router(admin.router)
+    app.include_router(adguard_actions.router)
     app.include_router(netmap.router)
     app.include_router(traffic.router)
     app.include_router(score.router)

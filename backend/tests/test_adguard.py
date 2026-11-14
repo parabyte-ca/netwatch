@@ -916,3 +916,73 @@ async def test_upstream_switch_is_tested_and_can_be_undone(acts, svc):
     await acts.restore_upstreams()
     assert f.upstream_dns == ["tls://1.1.1.1", "tls://1.0.0.1"]
     assert len(acts.state()["presets"]) == 6
+
+
+def test_actions_api_off_by_default_then_audited(client):
+    from netwatch.services.events import SECURITY
+
+    st = client.app.state
+    fake = FakeAdGuard()
+    st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
+    st.adguard.save(HOST, PORT, False, USER, True, PASSWORD)
+    base = "/api/adguard/actions"
+    s = client.get(base).json()
+    assert s["enabled"] is False and s["upstreams"] is None and len(s["presets"]) == 6
+    calls = [
+        ("/pause", {"minutes": 30}),
+        ("/resume", None),
+        ("/rules", {"domain": "x.com", "kind": "block"}),
+        ("/upstreams", {"upstreams": ["9.9.9.9"]}),
+        ("/upstreams/test", {"upstreams": ["9.9.9.9"]}),
+    ]
+    for path, body in calls:
+        r = client.post(base + path, json=body)
+        assert r.status_code == 403 and "turned off" in r.json()["detail"]
+    assert fake.posts == []
+
+    assert (
+        client.put("/api/admin/settings", json={"changes": {"adguard_actions": True}}).status_code
+        == 200
+    )
+    s = client.get(base).json()
+    assert s["enabled"] and s["upstreams"] == ["tls://1.1.1.1", "tls://1.0.0.1"]
+    assert client.post(base + "/pause", json={"minutes": 0}).status_code == 422
+    assert client.post(base + "/pause", json={"minutes": 30, "x": 1}).status_code == 422
+    r = client.post(base + "/pause", json={"minutes": 30}).json()
+    assert r["pause"]["minutes"] == 30 and fake.protection is False
+    assert client.post(base + "/resume").status_code == 200 and fake.protection is True
+    r = client.post(base + "/rules", json={"domain": "ads.example.com", "kind": "allow"}).json()
+    assert r["rule"]["rule"] == "@@||ads.example.com^" and len(r["rules"]) == 1
+    r = client.post(base + "/rules", json={"domain": "doubleclick.net", "kind": "block"})
+    assert r.status_code == 422 and "your own rules" in r.json()["detail"]
+    r = client.request("DELETE", base + "/rules", json={"rule": "@@||ads.example.com^"})
+    assert r.status_code == 200 and r.json()["rules"] == []
+    fake.bad_upstreams = {"udp://10.9.9.9"}
+    t = client.post(base + "/upstreams/test", json={"upstreams": ["udp://10.9.9.9"]}).json()
+    assert t["ok"] is False
+    assert (
+        client.post(base + "/upstreams", json={"upstreams": ["udp://10.9.9.9"]}).status_code == 422
+    )
+    r = client.post(base + "/upstreams", json={"upstreams": ["tls://dns.quad9.net"]}).json()
+    assert r["previous"] == ["tls://1.1.1.1", "tls://1.0.0.1"]
+    assert client.post(base + "/upstreams/restore").json()["current"] == [
+        "tls://1.1.1.1",
+        "tls://1.0.0.1",
+    ]
+
+    titles = [e["title"] for e in st.events.list(0, 10**13, kinds=[SECURITY])]
+    joined = "\n".join(titles)
+    for want in ("protection paused for 30 min (until", "protection turned back on",
+                 "allowed ads.example.com", "removed rule @@||ads.example.com^",
+                 "could not block doubleclick.net", "could not switch the upstream DNS",
+                 "upstream DNS switched from tls://1.1.1.1, tls://1.0.0.1 to "
+                 "tls://dns.quad9.net"):  # fmt: skip
+        assert want in joined, want
+    assert PASSWORD not in joined and PASSWORD not in json.dumps(client.get(base).json())
+
+
+def test_actions_need_sign_in_and_the_csrf_header(anon_client, client):
+    assert anon_client.get("/api/adguard/actions").status_code == 401
+    assert anon_client.post("/api/adguard/actions/resume").status_code in (401, 403)
+    r = client.post("/api/adguard/actions/resume", headers={"X-Requested-With": ""})
+    assert r.status_code == 403
