@@ -34,6 +34,7 @@ class GroupIn(BaseModel):
     name: str = Field(min_length=1, max_length=40)
     colour: Colour
     icon: Icon
+    quiet: bool = False
 
 
 class GroupPatch(BaseModel):
@@ -42,6 +43,7 @@ class GroupPatch(BaseModel):
     colour: Colour | None = None
     icon: Icon | None = None
     sort: int | None = Field(default=None, ge=0, le=10_000)
+    quiet: bool | None = None
 
 
 class BulkIn(BaseModel):
@@ -70,7 +72,7 @@ async def list_groups(request: Request) -> dict:
 
 @router.post("/device-groups", status_code=status.HTTP_201_CREATED)
 async def create_group(body: GroupIn, request: Request) -> dict:
-    g = await _run(_groups(request).create, body.name, body.colour, body.icon)
+    g = await _run(_groups(request).create, body.name, body.colour, body.icon, body.quiet)
     await security_event(request, "info", f"Device group created: {g['name']}",
                          {"action": "group_created", "group_id": g["id"]})  # fmt: skip
     return g

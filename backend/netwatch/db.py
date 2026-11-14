@@ -22,6 +22,7 @@ from sqlalchemy import (
     create_engine,
     event,
 )
+from sqlalchemy import false as sa_false
 
 log = logging.getLogger(__name__)
 
@@ -213,6 +214,8 @@ device_groups = Table(
     Column("icon", String(16), nullable=False),  # icon key
     Column("sort", Integer, nullable=False, default=0),
     Column("created_ms", Integer, nullable=False),
+    # Quiet: device alerts for its members are stored as information and hidden by default.
+    Column("quiet", Boolean, nullable=False, default=False, server_default=sa_false()),
 )
 
 devices = Table(

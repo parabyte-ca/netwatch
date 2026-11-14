@@ -246,3 +246,41 @@ def test_map_shows_every_device_with_groups_and_saves_views(client):
     assert dup.status_code == 422
     bad = client.put("/api/map/views", json={"views": [{**view, "colour_by": "rainbow"}]})
     assert bad.status_code == 422
+
+
+def test_quiet_groups_turn_device_alerts_into_information(client):
+    from netwatch.services.events import ANOMALY, DEVICE, OUTAGE, SECURITY
+
+    st = client.app.state
+    plug = add(st.device_store, "aa:00:00:00:00:70", type="iot")
+    member = add(st.device_store, "da:00:00:00:00:71", merged_into=plug)
+    other = add(st.device_store, "aa:00:00:00:00:72", type="phone")
+    spec = {"name": "Smart home", "colour": "emerald", "icon": "plug", "quiet": True}
+    home = client.post("/api/device-groups", json=spec).json()
+    assert home["quiet"] is True
+    client.post("/api/devices/bulk", json={"ids": [plug], "group_id": home["id"]})
+    import time as _time
+
+    ev = st.events
+    now = int(_time.time() * 1000)
+    a = ev.instant(ANOMALY, "warning", now, "plug rejoined", details={"mac": "aa:00:00:00:00:70"})
+    b = ev.instant(ANOMALY, "warning", now, "member churn", details={"mac": "da:00:00:00:00:71"})
+    c = ev.instant(DEVICE, "info", now, "plug moved", details={"device_id": plug})
+    d = ev.instant(ANOMALY, "warning", now, "phone churn", details={"device_id": other})
+    e = ev.instant(OUTAGE, "critical", now, "plug down", details={"device_id": plug})
+    f = ev.instant(SECURITY, "warning", now, "x", details={"device_id": plug})
+    assert ev.get(a)["severity"] == "info" and ev.get(a)["details"]["quiet"] is True
+    assert ev.get(a)["details"]["severity_was"] == "warning"
+    assert ev.get(b)["details"]["quiet"] is True and member
+    assert "quiet" not in ev.get(c)["details"]  # already information
+    assert ev.get(d)["severity"] == "warning" and "quiet" not in ev.get(d)["details"]
+    assert ev.get(e)["severity"] == "critical" and ev.get(f)["severity"] == "warning"
+    # The timeline hides quiet events when asked to.
+    titles = {x["title"] for x in client.get("/api/events?include_quiet=false").json()}
+    assert "plug rejoined" not in titles and "phone churn" in titles
+    assert "plug rejoined" in {x["title"] for x in client.get("/api/events").json()}
+    # Turning quiet off (or moving the device out) applies at once (cache cleared).
+    client.patch(f"/api/device-groups/{home['id']}", json={"quiet": False})
+    g = ev.instant(ANOMALY, "warning", now + 1, "plug again", details={"device_id": plug})
+    assert ev.get(g)["severity"] == "warning"
+    assert client.get("/api/device-groups").json()["groups"][0]["quiet"] is False

@@ -303,6 +303,7 @@ def create_app(
         )
         app.state.groups = GroupStore(engine)
         discovery.inventory.groups = app.state.groups
+        events.quiet = app.state.groups.is_quiet_event
         app.state.discovery = discovery
         app.state.traffic = traffic_store
         bufferbloat_store = BufferbloatStore(engine)
