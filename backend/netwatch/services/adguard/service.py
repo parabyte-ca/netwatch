@@ -182,6 +182,7 @@ class AdGuardService:
         self.accumulator = ClientAccumulator(clients) if clients is not None else None
         self.inventory = inventory  # discovery Inventory; AdGuard clients and leases feed it
         self.dhcp: dict | None = None  # {available, enabled, leases} from the last read
+        self.actions = None  # AdGuardActions, set in main.py
         self._polls = 0
         self._recent: deque[tuple[int, dict[int, tuple[int, int]]]] = deque()  # per poll
         self._baseline: dict[int, tuple[float, float, int]] = {}  # median q, usual share, hours
@@ -297,6 +298,8 @@ class AdGuardService:
                     and await asyncio.to_thread(lambda: self.configured)
                 ):
                     await self.poll()
+                if self.actions is not None and await asyncio.to_thread(lambda: self.configured):
+                    await self.actions.tick()
             except Exception:
                 log.exception("AdGuard Home poll failed")
             await asyncio.sleep(POLL_S)
@@ -623,6 +626,17 @@ class AdGuardService:
 
     def _protection(self, now: int, status: dict) -> None:
         if not status["protection"] and "protection" not in self._open:
+            pause = self.actions.pause_state(now) if self.actions is not None else None
+            if pause:  # paused on purpose from NetWatch: information, not a warning
+                self._open["protection"] = self.events.open(
+                    DNS,
+                    "info",
+                    now,
+                    f"AdGuard Home protection paused from NetWatch for {pause['minutes']} min",
+                    details={"type": "protection_disabled", "by": pause.get("by"),
+                             "until_ms": pause["until_ms"]},
+                )  # fmt: skip
+                return
             self._open["protection"] = self.events.open(
                 DNS,
                 "warning",

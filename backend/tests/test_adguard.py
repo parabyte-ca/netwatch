@@ -802,3 +802,117 @@ def test_device_dns_endpoint_and_page_lists(client):
 def test_dns_endpoints_require_sign_in(anon_client):
     for path in ("/api/adguard", "/api/devices/1/dns", "/api/admin/adguard"):
         assert anon_client.get(path).status_code == 401
+
+
+# ── actions (Phase 3) ────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def acts(svc):
+    from types import SimpleNamespace
+
+    from netwatch.services.adguard.actions import AdGuardActions
+
+    settings = SimpleNamespace(adguard_actions=True)
+    a = AdGuardActions(svc, settings, gateway_ip=lambda: "192.168.2.1")
+    svc.actions = a
+    a.settings_ns = settings
+    return a
+
+
+async def test_actions_refuse_when_turned_off(acts):
+    from netwatch.services.adguard.actions import ActionsDisabled
+
+    acts.settings_ns.adguard_actions = False
+    calls = [
+        lambda: acts.pause(30, "admin"),
+        lambda: acts.resume("admin"),
+        lambda: acts.add_rule("x.com", "block", "a"),
+        lambda: acts.switch_upstreams(["tls://9.9.9.9"]),
+        lambda: acts.test_upstreams(["9.9.9.9"]),
+    ]
+    for call in calls:
+        with pytest.raises(ActionsDisabled):
+            await call()
+    assert acts.service.fake.posts == []
+
+
+async def test_pause_resumes_after_its_time_even_after_a_restart(acts, svc):
+    from netwatch.services.adguard.actions import AdGuardActions
+
+    f = svc.fake
+    f.honour_duration = False  # an older AdGuard Home that ignores the duration
+    p = await acts.pause(30, "admin")
+    assert f.posts[-1] == ("/control/protection", {"enabled": False, "duration": 1_800_000})
+    assert f.protection is False and acts.pause_state()["minutes"] == 30
+    # The poll sees protection off: an information event, not a warning.
+    assert await svc.poll()
+    [e] = dns_events(svc, "protection_disabled")
+    assert e["severity"] == "info" and e["details"]["by"] == "admin"
+    # A NetWatch restart: a new actions object reads the pause from the database.
+    again = AdGuardActions(svc, acts.settings_ns)
+    assert not await again.tick(p["until_ms"] - 1000)
+    acts.settings_ns.adguard_actions = False  # turning actions off never leaves it paused
+    assert await again.tick(p["until_ms"] + 1000)
+    assert f.protection is True and again.pause_state() is None
+    assert any(ev["title"].startswith("AdGuard Home protection turned back on")
+               for ev in svc.events.list(0, 10**13, kinds=["security"]))  # fmt: skip
+    assert not await again.tick(p["until_ms"] + 2000)  # nothing left to do
+
+
+async def test_pause_limits_and_resume(acts, svc):
+    from netwatch.services.adguard.actions import ActionError
+
+    for bad in (0, 1441):
+        with pytest.raises(ActionError):
+            await acts.pause(bad, "admin")
+    await acts.pause(5, "admin")
+    await acts.resume("admin")
+    assert svc.fake.protection is True and acts.pause_state() is None
+
+
+async def test_rules_touch_only_netwatch_lines(acts, svc):
+    from netwatch.services.adguard.actions import ActionError
+
+    f = svc.fake
+    entry = await acts.add_rule("Ads.Example.COM.", "allow", "admin")
+    assert entry["rule"] == "@@||ads.example.com^"
+    assert f.user_rules == ["||doubleclick.net^", "# my own rule", "@@||ads.example.com^"]
+    # Blocking what NetWatch allowed replaces NetWatch's own line.
+    await acts.add_rule("ads.example.com", "block", "admin")
+    assert f.user_rules == ["||doubleclick.net^", "# my own rule", "||ads.example.com^"]
+    assert [r["rule"] for r in acts.rules()] == ["||ads.example.com^"]
+    # Your own rules stay yours.
+    with pytest.raises(ActionError, match="your own rules"):
+        await acts.add_rule("doubleclick.net", "block", "admin")
+    with pytest.raises(ActionError, match="only removes rules it added"):
+        await acts.remove_rule("||doubleclick.net^")
+    for bad in ("*.example.com", "https://x.com/a", "192.168.2.53", "localhost", "a b.com", ""):
+        with pytest.raises(ActionError):
+            await acts.add_rule(bad, "block", "admin")
+    await acts.remove_rule("||ads.example.com^")
+    assert f.user_rules == ["||doubleclick.net^", "# my own rule"] and acts.rules() == []
+    assert await acts.add_rule("bücher.example", "block", "admin")
+    assert f.user_rules[-1] == "||xn--bcher-kva.example^"
+
+
+async def test_upstream_switch_is_tested_and_can_be_undone(acts, svc):
+    from netwatch.services.adguard.actions import ActionError
+
+    f = svc.fake
+    f.bad_upstreams = {"udp://10.9.9.9"}
+    t = await acts.test_upstreams(["tls://9.9.9.9", "udp://10.9.9.9"])
+    assert not t["ok"] and t["results"]["tls://9.9.9.9"] == "OK"
+    with pytest.raises(ActionError, match=r"could not use udp://10\.9\.9\.9"):
+        await acts.switch_upstreams(["udp://10.9.9.9"])
+    assert f.upstream_dns == ["tls://1.1.1.1", "tls://1.0.0.1"]  # unchanged
+    for bad in ([], ["ftp://x"], ["a b"], ["1.1.1.1:99999"], [f"9.9.9.{i}" for i in range(6)]):
+        with pytest.raises(ActionError):
+            await acts.test_upstreams(bad)
+    r = await acts.switch_upstreams(["tls://dns.quad9.net", "9.9.9.9:53", "[2620:fe::fe]:53"])
+    assert r["previous"] == ["tls://1.1.1.1", "tls://1.0.0.1"]
+    assert f.upstream_dns == ["tls://dns.quad9.net", "9.9.9.9:53", "[2620:fe::fe]:53"]
+    assert acts.state()["previous_upstreams"]["upstreams"] == ["tls://1.1.1.1", "tls://1.0.0.1"]
+    await acts.restore_upstreams()
+    assert f.upstream_dns == ["tls://1.1.1.1", "tls://1.0.0.1"]
+    assert len(acts.state()["presets"]) == 6

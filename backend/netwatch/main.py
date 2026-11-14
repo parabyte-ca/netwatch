@@ -39,6 +39,7 @@ from .auth import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, AuthStore, LoginThrottle
 from .config import Settings, get_settings
 from .db import make_engine, run_migrations
 from .probes import Prober
+from .services.adguard.actions import AdGuardActions
 from .services.adguard.clients import ClientStore as AdGuardClientStore
 from .services.adguard.service import AdGuardService, AdGuardStore
 from .services.assistant import Assistant
@@ -321,6 +322,10 @@ def create_app(
             clients=adguard_clients,
             inventory=discovery.inventory,
         )
+        app.state.adguard_actions = AdGuardActions(
+            app.state.adguard, settings, gateway_ip=lambda: discovery.gateway_ip()
+        )
+        app.state.adguard.actions = app.state.adguard_actions
         app.state.deco = DecoService(
             store,
             events,
