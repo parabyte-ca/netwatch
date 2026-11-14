@@ -116,8 +116,8 @@ class ClientStore:
             "unknown_clients": [{"client": c, "queries": n} for c, n in unknown.most_common(20)],
         }
 
-    def device_hours(self, start_ms: int) -> dict[int, list[tuple[int, int]]]:
-        """(queries, blocked) per device and finished hour since ``start_ms``, for baselines."""
+    def device_hours(self, start_ms: int, end_ms: int) -> dict[int, list[tuple[int, int]]]:
+        """(queries, blocked) per device and hour in [start, end), for baselines."""
         stmt = (
             select(
                 adguard_clients.c.device_id,
@@ -126,7 +126,7 @@ class ClientStore:
                 func.sum(adguard_clients.c.blocked),
             )
             .where(adguard_clients.c.device_id.is_not(None))
-            .where(adguard_clients.c.hour_ms >= start_ms)
+            .where(adguard_clients.c.hour_ms >= start_ms, adguard_clients.c.hour_ms < end_ms)
             .group_by(adguard_clients.c.device_id, adguard_clients.c.hour_ms)
         )
         out: dict[int, list[tuple[int, int]]] = {}

@@ -257,7 +257,7 @@ def test_client_store_hours_summary_purge_and_strip(store):
     n = cs.network(h0, h1 + HOUR_MS)
     assert n["unknown_clients"] == [{"client": "192.168.2.99", "queries": 7}]
     assert n["top_domains"][0]["domain"] == "b.com"
-    assert sorted(cs.device_hours(0)[d1]) == [(40, 0), (100, 10)]
+    assert sorted(cs.device_hours(0, h1 + HOUR_MS)[d1]) == [(40, 0), (100, 10)]
     # After 7 days the names go, the counts stay; after the rollup retention the rows go.
     assert cs.strip_domains(h1) == 2
     s = cs.summary([d1], h0, h1 + HOUR_MS)
@@ -629,3 +629,69 @@ async def test_without_dhcp_support_leases_are_skipped(isvc):
     assert await isvc.poll(T_MS)
     assert isvc.status()["dhcp"] == {"available": False, "enabled": False, "leases": 0}
     assert isvc.inventory.store.count() == 0
+
+
+def seed_history(isvc, dev, client, hours=29, q=100, b=5):
+    from netwatch.services.adguard.clients import HOUR_MS
+
+    isvc.client_store.put([
+        {"hour_ms": T_MS - (i + 2) * HOUR_MS, "client": client, "device_id": dev, "queries": q,
+         "blocked": b, "failed": 0, "domains": {}, "blocked_domains": {}}
+        for i in range(hours)
+    ])  # fmt: skip
+
+
+def anomalies(isvc, typ):
+    from netwatch.services.events import ANOMALY
+
+    evs = isvc.events.list(0, 10**13, kinds=[ANOMALY])
+    return [e for e in evs if e["details"].get("type") == typ]
+
+
+def burst(f, n, client, start=-50.0, blocked=0):
+    for i in range(n):
+        f.query(at(start + i * 0.01), client=client,
+                reason="FilteredBlackList" if i < blocked else "NotFilteredNotFound")  # fmt: skip
+
+
+async def test_query_rate_alert_needs_history_and_cools_down(isvc):
+    inv = isvc.inventory.store
+    dev = inv.insert({"mac": "aa:bb:cc:00:00:60", "first_seen_ms": 0, "last_seen_ms": 0,
+                      "name": "Garage camera", "last_ip": "192.168.2.60"})  # fmt: skip
+    inv.upsert_ip(dev, "192.168.2.60", T_MS - 60_000, "arp")
+    new = inv.insert({"mac": "aa:bb:cc:00:00:61", "first_seen_ms": 0, "last_seen_ms": 0,
+                      "last_ip": "192.168.2.61"})  # fmt: skip
+    inv.upsert_ip(new, "192.168.2.61", T_MS - 60_000, "arp")
+    seed_history(isvc, dev, "192.168.2.60")
+    seed_history(isvc, new, "192.168.2.61", hours=10)  # too little history to judge
+    burst(isvc.fake, 600, "192.168.2.60")
+    burst(isvc.fake, 600, "192.168.2.61", start=-45.0)
+    assert await isvc.poll(T_MS)
+    [e] = anomalies(isvc, "dns_query_rate")
+    assert e["title"] == "Garage camera made 600 DNS queries in the last hour (usually about 100)"
+    assert e["details"]["device_id"] == dev and e["details"]["usual_queries"] == 100
+    assert e["severity"] == "warning" and "top domains" in e["details"]["hint"]
+    # Still busy a minute later: no second alert inside the cooldown.
+    burst(isvc.fake, 100, "192.168.2.60", start=20.0)
+    assert await isvc.poll(ms(60))
+    assert len(anomalies(isvc, "dns_query_rate")) == 1
+
+
+async def test_blocked_rate_alert_only_when_unusual(isvc):
+    inv = isvc.inventory.store
+    dev = inv.insert({"mac": "aa:bb:cc:00:00:70", "first_seen_ms": 0, "last_seen_ms": 0,
+                      "name": "Smart plug", "last_ip": "192.168.2.70"})  # fmt: skip
+    inv.upsert_ip(dev, "192.168.2.70", T_MS - 60_000, "arp")
+    ads = inv.insert({"mac": "aa:bb:cc:00:00:71", "first_seen_ms": 0, "last_seen_ms": 0,
+                      "last_ip": "192.168.2.71"})  # fmt: skip
+    inv.upsert_ip(ads, "192.168.2.71", T_MS - 60_000, "arp")
+    seed_history(isvc, dev, "192.168.2.70", q=100, b=5)
+    seed_history(isvc, ads, "192.168.2.71", q=100, b=60)  # always mostly blocked: its normal
+    burst(isvc.fake, 120, "192.168.2.70", blocked=90)
+    burst(isvc.fake, 120, "192.168.2.71", start=-45.0, blocked=90)
+    assert await isvc.poll(T_MS)
+    [e] = anomalies(isvc, "dns_blocked_rate")
+    assert e["title"] == (
+        "75% of Smart plug's DNS queries were blocked in the last hour (usually 5%)"
+    )
+    assert anomalies(isvc, "dns_query_rate") == []

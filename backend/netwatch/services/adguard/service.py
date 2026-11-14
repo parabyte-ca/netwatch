@@ -20,13 +20,14 @@ from datetime import UTC, datetime
 from sqlalchemy import Engine, delete, insert, select
 
 from ...db import adguard_stats, device_ips, devices
+from ..discovery.anomalies import HINTS
 from ..discovery.inventory import device_label
 from ..discovery.packets import Observation
-from ..events import DNS, EventLog
+from ..events import ANOMALY, DNS, EventLog
 from ..secrets import SecretBox
 from ..storage import Store
 from .client import AdGuardClient, AdGuardError, AdGuardLoginError, parse_time
-from .clients import ClientAccumulator, ClientStore
+from .clients import HOUR_MS, ClientAccumulator, ClientStore, entry_outcome, hour_of
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +38,12 @@ CLIENTS_KEY = "adguard_clients"
 POLL_S = 60
 MAX_LOGIN_FAILURES = 3
 UNREACHABLE_AFTER = 3  # failed polls in a row before "unreachable" opens
+# Per-device rate alerts: the last 60 minutes against the device's hours over the last 7 days.
+RATE_HISTORY_HOURS = 24  # hours of history a device needs before it can be judged
+RATE_MIN_QUERIES, RATE_FACTOR = 500, 5
+BLOCKED_SHARE, BLOCKED_MIN_QUERIES, BLOCKED_USUAL_MAX = 0.5, 100, 0.15
+RATE_COOLDOWN_MS = 6 * 3_600_000
+RATE_MAX_PER_HOUR = 10  # per alert type, over all devices
 INVENTORY_EVERY = 5  # polls between reading AdGuard's clients and DHCP leases into the inventory
 QUERYLOG_LIMIT = 2000  # entries read per poll at most
 CATCH_UP_MS = 10 * 60_000  # after a restart, read at most this far back
@@ -176,6 +183,11 @@ class AdGuardService:
         self.inventory = inventory  # discovery Inventory; AdGuard clients and leases feed it
         self.dhcp: dict | None = None  # {available, enabled, leases} from the last read
         self._polls = 0
+        self._recent: deque[tuple[int, dict[int, tuple[int, int]]]] = deque()  # per poll
+        self._baseline: dict[int, tuple[float, float, int]] = {}  # median q, usual share, hours
+        self._baseline_hour = -1
+        self._rate_last: dict[str, int] = {}  # "type:device" → last alert
+        self._rate_times: dict[str, deque[int]] = {}
         self.events = events
         self.adguard_store = adguard_store
         self.secrets = secrets
@@ -422,10 +434,94 @@ class AdGuardService:
 
     def _record_clients(self, now: int, entries: list[dict], known: list[dict]) -> None:
         touched = self.accumulator.add(entries)
+        device_of: dict[str, int | None] = {}
         if touched:
             clients = {c for h in touched for c in self.accumulator.hours.get(h, {})}
-            self.client_store.put(self.accumulator.rows(touched, self._devices_for(clients, known)))
+            device_of = self._devices_for(clients, known)
+            self.client_store.put(self.accumulator.rows(touched, device_of))
         self.accumulator.prune(now)
+        per_device: dict[int, tuple[int, int]] = {}
+        for e in entries:
+            dev = device_of.get(str(e.get("client") or "")[:64])
+            if dev is not None:
+                q, b = per_device.get(dev, (0, 0))
+                per_device[dev] = (q + 1, b + (entry_outcome(e) == "blocked"))
+        self._check_rates(now, per_device)
+
+    # ── per-device rate alerts ───────────────────────────────────────────────
+
+    def _baselines(self, now: int) -> dict[int, tuple[float, float, int]]:
+        """Median hourly queries, usual blocked share and hours of history, per device."""
+        h = hour_of(now)
+        if h != self._baseline_hour:
+            hours = self.client_store.device_hours(h - 7 * 24 * HOUR_MS, h - HOUR_MS)
+            self._baseline = {
+                dev: (
+                    statistics.median(q for q, _ in rows),
+                    sum(b for _, b in rows) / max(1, sum(q for q, _ in rows)),
+                    len(rows),
+                )
+                for dev, rows in hours.items()
+            }
+            self._baseline_hour = h
+        return self._baseline
+
+    def _check_rates(self, now: int, per_device: dict[int, tuple[int, int]]) -> None:
+        self._recent.append((now, per_device))
+        while self._recent and self._recent[0][0] <= now - HOUR_MS:
+            self._recent.popleft()
+        totals: dict[int, list[int]] = {}
+        for _, counts in self._recent:
+            for dev, (q, b) in counts.items():
+                t = totals.setdefault(dev, [0, 0])
+                t[0] += q
+                t[1] += b
+        base = self._baselines(now)
+        for dev, (q, b) in totals.items():
+            median, usual, hours = base.get(dev, (0.0, 0.0, 0))
+            if hours < RATE_HISTORY_HOURS:
+                continue
+            if q > max(RATE_MIN_QUERIES, RATE_FACTOR * median):
+                self._rate_alert(now, "dns_query_rate", dev, q, b, median, usual,
+                                 "{label} made {q:,} DNS queries in the last hour "
+                                 "(usually about {usual_q:,})")  # fmt: skip
+            if q >= BLOCKED_MIN_QUERIES and b / q >= BLOCKED_SHARE and usual < BLOCKED_USUAL_MAX:
+                self._rate_alert(now, "dns_blocked_rate", dev, q, b, median, usual,
+                                 "{share}% of {label}'s DNS queries were blocked in the last hour "
+                                 "(usually {usual_share}%)")  # fmt: skip
+
+    def _rate_alert(self, now, typ, dev, q, b, median, usual, title) -> None:
+        key = f"{typ}:{dev}"
+        if now - self._rate_last.get(key, -(10**15)) < RATE_COOLDOWN_MS:
+            return
+        recent = self._rate_times.setdefault(typ, deque())
+        while recent and recent[0] <= now - HOUR_MS:
+            recent.popleft()
+        if len(recent) >= RATE_MAX_PER_HOUR:
+            return
+        row = self.inventory.store.get(dev) if self.inventory is not None else None
+        if row is None:
+            return
+        if row.get("merged_into"):
+            row = self.inventory.store.get(row["merged_into"]) or row
+        recent.append(now)
+        self._rate_last[key] = now
+        label = device_label(row)
+        text = title.format(
+            label=label, q=q, usual_q=round(median), share=round(100 * b / q),
+            usual_share=round(100 * usual))  # fmt: skip
+        self.events.instant(
+            ANOMALY,
+            "warning",
+            now,
+            text,
+            details={
+                "type": typ, "device_id": row["id"], "mac": row["mac"], "device": label,
+                "queries": q, "blocked": b, "usual_queries": round(median, 1),
+                "usual_blocked_pct": round(100 * usual, 1), "hint": HINTS.get(typ, ""),
+            },
+        )  # fmt: skip
+        log.warning("DNS rate anomaly", extra={"anomaly": typ, "device": label})
 
     def _devices_for(self, clients: set[str], known: list[dict]) -> dict[str, int | None]:
         """Device id per client: by MAC when AdGuard groups the id with one, else by IP."""
