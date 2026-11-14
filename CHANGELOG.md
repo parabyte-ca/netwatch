@@ -15,6 +15,13 @@ All notable changes to this project are documented here. The format follows
   domains and top blocked domains over 24 hours or 7 days.
 - DNS page: top domains, top blocked domains, unknown clients, and whether AdGuard Home is the
   DHCP server.
+- In-app update progress: the System page follows an update step by step from the update log
+  (requested, agent started, backup, download and verify, restart, health check, done), with a
+  timer, the time each step took, a bar that moves on the typical time of your recent updates but
+  never runs ahead of the real step, the latest log line, and a finish that shows how long the
+  update took or the step that failed and whether it rolled back. While an update runs, a thin
+  bar across the top of every page and the percentage in the browser tab show its progress, and
+  both keep going while NetWatch restarts.
 - Anomaly alerts when a device makes far more DNS queries than usual (over 500 in an hour and
   5 times its usual hour) or has most of its queries blocked (50% or more of at least 100, when
   it usually has under 15%). A device needs 24 hours of history first; each alert waits 6 hours

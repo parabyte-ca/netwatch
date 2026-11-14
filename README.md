@@ -353,8 +353,13 @@ machine. The container uses privileged raw sockets instead.
 
 ### From the web UI (recommended)
 Open **System**. NetWatch checks GitHub releases daily (or press **Check now**), shows the
-release notes, and installs with **Install vX.Y.Z**. Progress and the full update log stream
-into the page; NetWatch restarts and the page reloads itself on the new version.
+release notes, and installs with **Install vX.Y.Z**. The page then follows the update step by
+step (requested, agent started, backup, download and verify, restart, health check, done), taken
+from the update log as it happens, with a timer, how long each step took, an estimate based on
+your recent updates, the latest log line and the full log. A thin bar across the top of every
+page (and the percentage in the browser tab) shows progress while you look elsewhere. NetWatch
+restarts mid-way; the page keeps going and reconnects by itself, then shows "Updated to vX.Y.Z
+in m:ss" (or the step that failed and whether it rolled back) and reloads on the new version.
 
 How it works: the container never updates itself. It writes `upgrade/request.json`; the
 **upgrade agent** (`scripts/upgrade-agent.sh`, run every minute by a TrueNAS cron job as root)
