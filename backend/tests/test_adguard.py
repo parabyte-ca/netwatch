@@ -695,3 +695,36 @@ async def test_blocked_rate_alert_only_when_unusual(isvc):
         "75% of Smart plug's DNS queries were blocked in the last hour (usually 5%)"
     )
     assert anomalies(isvc, "dns_query_rate") == []
+
+
+def test_device_dns_endpoint_and_page_lists(client):
+    import time as _time
+
+    from netwatch.services.adguard.clients import hour_of
+
+    st = client.app.state
+    dev = st.device_store.insert({"mac": "aa:bb:cc:00:00:80", "first_seen_ms": 0,
+                                  "last_seen_ms": 0, "name": "Office PC"})  # fmt: skip
+    h = hour_of(int(_time.time() * 1000))
+    st.adguard_clients.put([
+        {"hour_ms": h, "client": "192.168.2.80", "device_id": dev, "queries": 50, "blocked": 10,
+         "failed": 1, "domains": {"github.com": 30}, "blocked_domains": {"ads.example": 10}},
+        {"hour_ms": h, "client": "192.168.2.81", "device_id": None, "queries": 9, "blocked": 0,
+         "failed": 0, "domains": {"github.com": 9}, "blocked_domains": {}},
+    ])  # fmt: skip
+    r = client.get(f"/api/devices/{dev}/dns").json()
+    assert r["configured"] is False and r["hours"] == 24
+    assert r["queries"] == 50 and r["blocked_pct"] == 20.0
+    assert r["top_domains"] == [{"domain": "github.com", "queries": 30}]
+    assert r["top_blocked"] == [{"domain": "ads.example", "queries": 10}]
+    assert client.get(f"/api/devices/{dev}/dns?hours=169").status_code == 422
+    assert client.get("/api/devices/99999/dns").status_code == 404
+    page = client.get("/api/adguard").json()
+    assert page["top_domains"][0] == {"domain": "github.com", "queries": 39}
+    assert page["unknown_clients"] == [{"client": "192.168.2.81", "queries": 9}]
+    assert page["dhcp"] is None
+
+
+def test_dns_endpoints_require_sign_in(anon_client):
+    for path in ("/api/adguard", "/api/devices/1/dns", "/api/admin/adguard"):
+        assert anon_client.get(path).status_code == 401

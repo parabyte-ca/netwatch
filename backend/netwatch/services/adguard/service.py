@@ -826,6 +826,11 @@ class AdGuardService:
             "failed_pct": round(100 * failed / max(1, queries - blocked), 1) if queries else None,
             "upstreams": upstreams,
             "top_clients": clients,
+            **(
+                self.client_store.network(end - hours * 3_600_000, end + 1)
+                if self.client_store is not None
+                else {"top_domains": [], "top_blocked": [], "unknown_clients": []}
+            ),
         }
 
     def _labels(self, ips: list[str]) -> dict[str, dict]:
