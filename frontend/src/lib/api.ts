@@ -140,6 +140,27 @@ export interface UpgradeRecord {
   error?: string;
 }
 
+export interface UpdateStage {
+  key: string;
+  label: string;
+  at: number | null;
+  reached: boolean;
+}
+
+export interface UpdateProgressInfo {
+  state: 'idle' | 'requested' | 'running' | 'succeeded' | 'failed';
+  reason?: string;
+  request?: { id: string; action: string; version: string | null; requested_at: string };
+  status?: UpgradeRecord;
+  action?: 'update' | 'rollback';
+  stages?: UpdateStage[];
+  stage?: string;
+  failed_at?: string | null;
+  rolled_back?: boolean;
+  last_line?: string | null;
+  estimate_s?: number | null;
+}
+
 export interface UpdateSummary {
   current: string;
   latest: string | null;
@@ -154,12 +175,7 @@ export interface UpdateSummary {
   timezone: string;
   in_app_updates: boolean;
   helper: { connected: boolean; last_seen: string | null; agent_version?: string | null };
-  progress: {
-    state: 'idle' | 'requested' | 'running' | 'succeeded' | 'failed';
-    reason?: string;
-    request?: { id: string; action: string; version: string | null; requested_at: string };
-    status?: UpgradeRecord;
-  };
+  progress: UpdateProgressInfo;
   history: UpgradeRecord[];
   rollback_available: boolean;
 }

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { useAuth } from '../components/AuthGate';
 import { api, type BumpKind, type Release, type UpdateMode, type UpdateSummary } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
+import { UpdateProgress } from '../components/UpdateProgress';
+import { RECENT_MS, parseTs, writePending } from '../lib/updateProgress';
 
 const MODE_LABEL: Record<UpdateMode, string> = {
   off: 'Off (never check)',
@@ -126,12 +128,21 @@ export function System() {
     }
   }
 
+  // Running, or finished in the last few minutes: the full progress view; older results: one line.
+  const finished = parseTs(data?.progress.status?.finished_at);
+  const showProgress = active || state === 'requested' || state === 'running'
+    || ((state === 'succeeded' || state === 'failed') && finished !== null && Date.now() - finished < RECENT_MS);
+  useEffect(() => {
+    if (state === 'failed' || (state === 'succeeded' && !active)) writePending(null);
+  }, [state, active]);
+
   if (!data) {
     return error ? <p className="text-rose-400">{error}</p> : <p className="text-slate-500">Loading…</p>;
   }
 
   const install = (r: Release) => {
     if (window.confirm(`Install NetWatch v${r.version}? The database is backed up first, and the update rolls back automatically if the new version is unhealthy.`)) {
+      writePending({ to: r.version, from: data.current, action: 'update', at: Date.now() });
       void act(() => api.applyUpdate(r.version), `Update to v${r.version} requested. The upgrade agent picks it up within a minute.`);
     }
   };
@@ -195,7 +206,7 @@ export function System() {
 
       {(state !== 'idle' || log) && (
         <Card title="Update progress">
-          <ProgressLine summary={data} />
+          {showProgress ? <UpdateProgress progress={data.progress} current={data.current} offline={!!error} /> : <ProgressLine summary={data} />}
           {log && (
             <pre className="mt-3 max-h-80 overflow-auto rounded-md bg-slate-950 p-3 text-[11px] leading-relaxed text-slate-300" aria-label="Update log">
               {log}
@@ -249,6 +260,7 @@ export function System() {
               disabled={busy || active || !data.helper.connected || !data.rollback_available}
               onClick={() => {
                 if (window.confirm('Roll back to the version before the last update? This also restores the database backup taken before it, so data recorded since then is lost.')) {
+                  writePending({ to: null, from: data.current, action: 'rollback', at: Date.now() });
                   void act(api.rollback, 'Rollback requested.');
                 }
               }}
