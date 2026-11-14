@@ -314,6 +314,22 @@ adguard_stats = Table(
     sqlite_with_rowid=False,
 )
 
+# AdGuard Home queries per client and hour. Domain lists are cleared after the raw retention
+# (they are a browsing history); the counts are kept as long as the rollups.
+adguard_clients = Table(
+    "adguard_clients",
+    metadata,
+    Column("hour_ms", Integer, primary_key=True),
+    Column("client", String(64), primary_key=True),  # IP or ClientID as AdGuard reports it
+    Column("device_id", Integer, ForeignKey("devices.id", ondelete="SET NULL")),
+    Column("queries", Integer, nullable=False),
+    Column("blocked", Integer, nullable=False),
+    Column("failed", Integer, nullable=False),
+    Column("domains", Text),  # {"example.com": n}, top answered names
+    Column("blocked_domains", Text),  # {"ads.example": n}, top blocked names
+    sqlite_with_rowid=False,
+)
+
 # Open TCP services found on LAN devices by the exposure scan (one row per device and port).
 device_services = Table(
     "device_services",
@@ -363,6 +379,7 @@ Index("ix_devices_last_seen", devices.c.last_seen_ms)
 Index("ix_devices_target", devices.c.target_id)
 Index("ix_devices_merged", devices.c.merged_into)
 Index("ix_bufferbloat_ts", bufferbloat_tests.c.ts_ms)
+Index("ix_adguard_clients_device", adguard_clients.c.device_id, adguard_clients.c.hour_ms)
 Index("ix_exposure_scans_ts", exposure_scans.c.ts_ms)
 Index("ix_events_open", events.c.start_ms, sqlite_where=events.c.end_ms.is_(None))
 

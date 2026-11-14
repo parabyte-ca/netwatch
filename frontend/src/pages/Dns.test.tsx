@@ -24,6 +24,10 @@ const base: AdGuardSummary = {
     { client: '192.168.2.20', queries: 700, device_id: 4, label: 'Laptop' },
     { client: '192.168.2.99', queries: 50, device_id: null, label: null },
   ],
+  dhcp: { available: true, enabled: true, leases: 14 },
+  top_domains: [{ domain: 'github.com', queries: 320 }],
+  top_blocked: [{ domain: 'ads.example', queries: 90 }],
+  unknown_clients: [{ client: '192.168.2.199', queries: 12 }],
 };
 
 function mock(summary: AdGuardSummary) {
@@ -48,6 +52,10 @@ describe('Dns', () => {
     const clients = screen.getByRole('region', { name: 'Busiest clients' });
     expect(within(clients).getByRole('link', { name: 'Laptop' })).toHaveAttribute('href', '/devices/4');
     expect(within(clients).getByText('Unknown device')).toBeInTheDocument();
+    expect(screen.getByText(/AdGuard Home is the DHCP server \(14 leases\)/)).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Top domains' })).getByText('github.com')).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Top blocked domains' })).getByText('ads.example')).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Unknown clients' })).getByText('192.168.2.199')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '7 days' }));
     await waitFor(() => expect(urls).toContain('/api/adguard?hours=168'));
   });

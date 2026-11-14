@@ -3,6 +3,8 @@ import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { AskPanel } from './AskPanel';
+import { UpdateBar } from './UpdateBar';
+import { isActive, readPending } from '../lib/updateProgress';
 import { ErrorBoundary } from './ErrorBoundary';
 import { useAuth } from './AuthGate';
 
@@ -30,8 +32,11 @@ const mobileLink = ({ isActive }: { isActive: boolean }) =>
 export function Layout() {
   const { username, logout } = useAuth();
   const { data: sys, error } = usePolling(api.system, 60_000);
-  const { data: upd } = usePolling(api.updates, 300_000);
-  const busy = upd && (upd.progress.state === 'requested' || upd.progress.state === 'running');
+  const [fast, setFast] = useState(false);
+  const { data: upd, error: updError } = usePolling(api.updates, fast ? 5_000 : 300_000);
+  const busy = !!upd && isActive(upd.progress.state);
+  // Poll quickly only while an update runs (or one started here is restarting NetWatch).
+  useEffect(() => setFast(busy || (!!updError && !!readPending())), [busy, updError]);
   const [open, setOpen] = useState(false);
   const location = useLocation();
   useEffect(() => setOpen(false), [location.pathname]);
@@ -54,6 +59,7 @@ export function Layout() {
 
   return (
     <div className="min-h-screen">
+      <UpdateBar summary={upd} offline={!!updError} />
       <header className="border-b border-slate-800 bg-slate-900/60 print:hidden">
         <div className="mx-auto flex max-w-7xl items-center gap-x-6 px-4 py-3">
           <Link to="/" className="flex shrink-0 items-center gap-2">

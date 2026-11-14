@@ -42,6 +42,7 @@ class FakeAdGuard:
             "top_upstreams_responses": [{"tls://1.1.1.1:853": 700}, {"8.8.8.8:53": 150}],
             "top_upstreams_avg_time": [{"tls://1.1.1.1:853": 0.015}, {"8.8.8.8:53": 0.020}],
         }  # fmt: skip
+        self.dhcp: dict | None = None  # None: no DHCP support (404)
         self.fail: int | None = None  # HTTP status to answer with
         self.requests: list[httpx.Request] = []
 
@@ -91,6 +92,8 @@ class FakeAdGuard:
             )
         if path == "/control/clients":
             return httpx.Response(200, json={**self.clients, "supported_tags": []})
+        if path == "/control/dhcp/status" and self.dhcp is not None:
+            return httpx.Response(200, json=self.dhcp)
         return httpx.Response(404)
 
 
@@ -110,6 +113,48 @@ async def test_status_stats_and_clients():
     ids = {x["id"]: x["name"] for x in await c.clients()}
     assert ids == {"192.168.2.20": "Office PC", "192.168.2.30": "tv.lan"}
     assert all(r.method == "GET" for r in fake.requests)
+    await c.aclose()
+
+
+async def test_clients_are_grouped_and_ids_classified():
+    fake = FakeAdGuard()
+    fake.clients = {
+        "clients": [{"name": "Laptop", "ids": ["AA-BB-CC-DD-EE-01", "192.168.2.40"]},
+                    {"name": "Kids", "ids": ["192.168.2.0/28", "kid-tablet"]}],
+        "auto_clients": [{"ip": "192.168.2.30", "name": ""}, {"ip": "fe80::1"}],
+    }  # fmt: skip
+    c = client_for(fake)
+    got = await c.clients()
+    assert got[0] == {"id": "aa:bb:cc:dd:ee:01", "kind": "mac", "name": "Laptop", "group": 0}
+    assert got[1] == {"id": "192.168.2.40", "kind": "ip", "name": "Laptop", "group": 0}
+    assert [g["kind"] for g in got[2:4]] == ["other", "other"]
+    assert got[4] == {"id": "192.168.2.30", "kind": "ip", "name": None, "group": None}
+    assert got[5]["kind"] == "other"
+    await c.aclose()
+
+
+async def test_dhcp_status_leases_or_not_available():
+    fake = FakeAdGuard()
+    c = client_for(fake)
+    assert await c.dhcp_status() == {"available": False, "enabled": False, "leases": []}
+    fake.dhcp = {
+        "enabled": True, "interface_name": "eth0",
+        "leases": [{"mac": "AA:BB:CC:DD:EE:02", "ip": "192.168.2.101", "hostname": "pixel-9",
+                    "expires": "2026-11-15T12:00:00Z"},
+                   {"mac": "not-a-mac", "ip": "192.168.2.102", "hostname": "x"}],
+        "static_leases": [{"mac": "aa-bb-cc-dd-ee-03", "ip": "192.168.2.15", "hostname": ""}],
+    }  # fmt: skip
+    d = await c.dhcp_status()
+    assert d["available"] and d["enabled"]
+    assert d["leases"] == [
+        {"mac": "aa:bb:cc:dd:ee:02", "ip": "192.168.2.101", "hostname": "pixel-9", "static": False},
+        {"mac": "aa:bb:cc:dd:ee:03", "ip": "192.168.2.15", "hostname": None, "static": True},
+    ]
+    fake.dhcp["enabled"] = False
+    assert (await c.dhcp_status())["enabled"] is False
+    fake.fail = 401
+    with pytest.raises(AdGuardLoginError):
+        await c.dhcp_status()
     await c.aclose()
 
 
@@ -183,6 +228,47 @@ def test_store_roundtrip_and_purge(store):
     assert DNS == "dns" and DNS in KINDS
 
 
+def test_client_store_hours_summary_purge_and_strip(store):
+    from netwatch.services.adguard.clients import HOUR_MS, ClientStore, hour_of
+    from netwatch.services.discovery.inventory import DeviceStore
+
+    devs = DeviceStore(store.engine)
+    d1 = devs.insert({"mac": "aa:bb:cc:00:00:01", "first_seen_ms": 0, "last_seen_ms": 0})
+    cs = ClientStore(store.engine)
+    h0, h1 = 10 * HOUR_MS, 11 * HOUR_MS
+    assert hour_of(h1 + 1234) == h1
+    cs.put([
+        {"hour_ms": h0, "client": "192.168.2.20", "device_id": d1, "queries": 100, "blocked": 10,
+         "failed": 2, "domains": {"a.com": 50, "b.com": 20}, "blocked_domains": {"ads.x": 10}},
+        {"hour_ms": h0, "client": "192.168.2.99", "device_id": None, "queries": 7, "blocked": 0,
+         "failed": 0, "domains": {"a.com": 7}, "blocked_domains": {}},
+    ])  # fmt: skip
+    # The current hour is rewritten every poll.
+    row = {"hour_ms": h1, "client": "192.168.2.20", "device_id": d1, "queries": 5, "blocked": 0,
+           "failed": 0, "domains": {"b.com": 5}, "blocked_domains": {}}  # fmt: skip
+    cs.put([row])
+    cs.put([{**row, "queries": 40, "domains": {"b.com": 40}}])
+    assert cs.hour(h1)[0]["queries"] == 40 and cs.hour(h1)[0]["domains"] == {"b.com": 40}
+    s = cs.summary([d1], h0, h1 + HOUR_MS)
+    assert s["queries"] == 140 and s["blocked_pct"] == round(1000 / 140, 1)
+    assert [h["queries"] for h in s["hourly"]] == [100, 40]
+    assert s["top_domains"][0] == {"domain": "b.com", "queries": 60}
+    assert s["top_blocked"] == [{"domain": "ads.x", "queries": 10}]
+    n = cs.network(h0, h1 + HOUR_MS)
+    assert n["unknown_clients"] == [{"client": "192.168.2.99", "queries": 7}]
+    assert n["top_domains"][0]["domain"] == "b.com"
+    assert sorted(cs.device_hours(0, h1 + HOUR_MS)[d1]) == [(40, 0), (100, 10)]
+    # After 7 days the names go, the counts stay; after the rollup retention the rows go.
+    assert cs.strip_domains(h1) == 2
+    s = cs.summary([d1], h0, h1 + HOUR_MS)
+    assert s["queries"] == 140 and s["top_domains"] == [{"domain": "b.com", "queries": 40}]
+    assert cs.strip_domains(h1) == 0
+    assert cs.purge(h1) == 2 and cs.summary([d1], 0, h1 + HOUR_MS)["queries"] == 40
+    # Deleting the device keeps its history as an unknown client.
+    devs.delete(d1)
+    assert cs.hour(h1)[0]["device_id"] is None
+
+
 # ── service ───────────────────────────────────────────────────────────────────
 
 T = datetime(2026, 11, 14, 12, 0, tzinfo=UTC)
@@ -214,6 +300,34 @@ def svc(store, tmp_path):
     s.save(HOST, PORT, False, USER, True, PASSWORD)
     s.fake = fake
     return s
+
+
+@pytest.fixture
+def isvc(store, tmp_path):
+    """The service with the per-client store and a device inventory (Phase 2)."""
+    from netwatch.services.adguard.clients import ClientStore
+    from netwatch.services.adguard.service import AdGuardService
+    from netwatch.services.discovery.inventory import DeviceStore, Inventory
+    from netwatch.services.events import EventLog
+    from netwatch.services.secrets import SecretBox
+
+    fake = FakeAdGuard()
+
+    def make():
+        s = AdGuardService(
+            store,
+            EventLog(store.engine),
+            AdGuardStore(store.engine),
+            SecretBox(tmp_path / "data"),
+            client_factory=lambda cfg, pw: client_for(fake, pw),
+            clients=ClientStore(store.engine),
+            inventory=Inventory(DeviceStore(store.engine)),
+        )
+        s.save(HOST, PORT, False, USER, True, PASSWORD)
+        s.fake, s.make = fake, make
+        return s
+
+    return make()
 
 
 def dns_events(svc, typ=None):
@@ -447,3 +561,173 @@ def test_dns_page_summary(client):
     assert r["top_clients"][0]["queries"] == 10
     assert client.get("/api/adguard?hours=0").status_code == 422
     assert PASSWORD not in json.dumps(r)
+
+
+async def test_queries_per_client_and_hour_survive_a_restart(isvc):
+    f = isvc.fake
+    dev = isvc.inventory.store.insert({"mac": "aa:bb:cc:00:00:20", "first_seen_ms": 0,
+                                       "last_seen_ms": 0, "last_ip": "192.168.2.20"})  # fmt: skip
+    isvc.inventory.store.upsert_ip(dev, "192.168.2.20", T_MS - 60_000, "arp")
+    for i in range(5):
+        f.query(at(-40 + i), name="Example.COM.")
+    f.query(at(-30), name="ads.tracker.net", reason="FilteredBlackList", upstream="")
+    f.query(at(-29), name="broken.example", status="SERVFAIL")
+    f.query(at(-28), client="192.168.2.99", name="example.com")
+    assert await isvc.poll(T_MS)
+    prev = T_MS - 3_600_000  # T is on the hour, so these entries belong to the hour before
+    rows = {r["client"]: r for r in isvc.client_store.hour(prev)}
+    r = rows["192.168.2.20"]
+    assert (r["device_id"], r["queries"], r["blocked"], r["failed"]) == (dev, 7, 1, 1)
+    assert r["domains"] == {"example.com": 5, "broken.example": 1}
+    assert r["blocked_domains"] == {"ads.tracker.net": 1}
+    assert rows["192.168.2.99"]["device_id"] is None
+    # A restart carries on counting the same hour instead of starting from zero.
+    again = isvc.make()
+    f.query(at(-10), name="example.com")  # late entry for the previous hour
+    f.query(at(30), name="example.com")
+    assert await again.poll(ms(60))
+    r = {r["client"]: r for r in again.client_store.hour(prev)}["192.168.2.20"]
+    assert r["queries"] == 8 and r["domains"]["example.com"] == 6
+    assert again.client_store.hour(T_MS)[0]["queries"] == 1
+    s = again.client_store.summary([dev], T_MS - 3_600_000, T_MS + 3_600_000)
+    assert s["queries"] == 9 and s["top_blocked"][0]["domain"] == "ads.tracker.net"
+
+
+async def test_clients_and_leases_feed_the_inventory(isvc):
+    f = isvc.fake
+    inv = isvc.inventory
+    tv = inv.store.insert({"mac": "aa:bb:cc:00:00:30", "first_seen_ms": 0, "last_seen_ms": 0,
+                           "last_ip": "192.168.2.30"})  # fmt: skip
+    f.clients = {
+        "clients": [{"name": "Alan's MacBook Air", "ids": ["AA:BB:CC:00:00:40", "192.168.2.40"]},
+                    {"name": "Living room TV", "ids": ["192.168.2.30"]},
+                    {"name": "Nobody here", "ids": ["192.168.2.77"]}],
+        "auto_clients": [{"ip": "192.168.2.88", "name": "printer.lan"}],
+    }  # fmt: skip
+    f.dhcp = {"enabled": True, "leases": [
+        {"mac": "aa:bb:cc:00:00:40", "ip": "192.168.2.41", "hostname": "MacBook-Air"},
+        {"mac": "aa:bb:cc:00:00:50", "ip": "192.168.2.50", "hostname": "pixel-9"}],
+        "static_leases": []}  # fmt: skip
+    isvc.fake.query(at(-20), client="192.168.2.50")
+    assert await isvc.poll(T_MS)
+    mac = inv.store.get_by_mac("aa:bb:cc:00:00:40")
+    assert mac["details"]["adguard_name"] == "Alan's MacBook Air" and mac["type"] == "laptop"
+    assert mac["last_ip"] == "192.168.2.41" and mac["hostname"] == "MacBook-Air"
+    phone = inv.store.get_by_mac("aa:bb:cc:00:00:50")
+    assert phone["hostname"] == "pixel-9" and phone["details"]["adguard_lease"]
+    # An IP-only client names the device known at that address, and invents nothing.
+    assert inv.store.get(tv)["details"]["adguard_name"] == "Living room TV"
+    assert inv.store.with_ip("192.168.2.77") == [] and inv.store.with_ip("192.168.2.88") == []
+    assert isvc.status()["dhcp"] == {"available": True, "enabled": True, "leases": 2}
+    # Queries from a lease's address count for the device the lease just created.
+    assert isvc.client_store.network(0, 10**13)["unknown_clients"] == []
+    assert inv.store.count() == 3
+    # Read again only every INVENTORY_EVERY polls; no DHCP support means no leases.
+    reqs = len([r for r in f.requests if r.url.path == "/control/dhcp/status"])
+    assert await isvc.poll(ms(60))
+    assert len([r for r in f.requests if r.url.path == "/control/dhcp/status"]) == reqs
+
+
+async def test_without_dhcp_support_leases_are_skipped(isvc):
+    assert await isvc.poll(T_MS)
+    assert isvc.status()["dhcp"] == {"available": False, "enabled": False, "leases": 0}
+    assert isvc.inventory.store.count() == 0
+
+
+def seed_history(isvc, dev, client, hours=29, q=100, b=5):
+    from netwatch.services.adguard.clients import HOUR_MS
+
+    isvc.client_store.put([
+        {"hour_ms": T_MS - (i + 2) * HOUR_MS, "client": client, "device_id": dev, "queries": q,
+         "blocked": b, "failed": 0, "domains": {}, "blocked_domains": {}}
+        for i in range(hours)
+    ])  # fmt: skip
+
+
+def anomalies(isvc, typ):
+    from netwatch.services.events import ANOMALY
+
+    evs = isvc.events.list(0, 10**13, kinds=[ANOMALY])
+    return [e for e in evs if e["details"].get("type") == typ]
+
+
+def burst(f, n, client, start=-50.0, blocked=0):
+    for i in range(n):
+        f.query(at(start + i * 0.01), client=client,
+                reason="FilteredBlackList" if i < blocked else "NotFilteredNotFound")  # fmt: skip
+
+
+async def test_query_rate_alert_needs_history_and_cools_down(isvc):
+    inv = isvc.inventory.store
+    dev = inv.insert({"mac": "aa:bb:cc:00:00:60", "first_seen_ms": 0, "last_seen_ms": 0,
+                      "name": "Garage camera", "last_ip": "192.168.2.60"})  # fmt: skip
+    inv.upsert_ip(dev, "192.168.2.60", T_MS - 60_000, "arp")
+    new = inv.insert({"mac": "aa:bb:cc:00:00:61", "first_seen_ms": 0, "last_seen_ms": 0,
+                      "last_ip": "192.168.2.61"})  # fmt: skip
+    inv.upsert_ip(new, "192.168.2.61", T_MS - 60_000, "arp")
+    seed_history(isvc, dev, "192.168.2.60")
+    seed_history(isvc, new, "192.168.2.61", hours=10)  # too little history to judge
+    burst(isvc.fake, 600, "192.168.2.60")
+    burst(isvc.fake, 600, "192.168.2.61", start=-45.0)
+    assert await isvc.poll(T_MS)
+    [e] = anomalies(isvc, "dns_query_rate")
+    assert e["title"] == "Garage camera made 600 DNS queries in the last hour (usually about 100)"
+    assert e["details"]["device_id"] == dev and e["details"]["usual_queries"] == 100
+    assert e["severity"] == "warning" and "top domains" in e["details"]["hint"]
+    # Still busy a minute later: no second alert inside the cooldown.
+    burst(isvc.fake, 100, "192.168.2.60", start=20.0)
+    assert await isvc.poll(ms(60))
+    assert len(anomalies(isvc, "dns_query_rate")) == 1
+
+
+async def test_blocked_rate_alert_only_when_unusual(isvc):
+    inv = isvc.inventory.store
+    dev = inv.insert({"mac": "aa:bb:cc:00:00:70", "first_seen_ms": 0, "last_seen_ms": 0,
+                      "name": "Smart plug", "last_ip": "192.168.2.70"})  # fmt: skip
+    inv.upsert_ip(dev, "192.168.2.70", T_MS - 60_000, "arp")
+    ads = inv.insert({"mac": "aa:bb:cc:00:00:71", "first_seen_ms": 0, "last_seen_ms": 0,
+                      "last_ip": "192.168.2.71"})  # fmt: skip
+    inv.upsert_ip(ads, "192.168.2.71", T_MS - 60_000, "arp")
+    seed_history(isvc, dev, "192.168.2.70", q=100, b=5)
+    seed_history(isvc, ads, "192.168.2.71", q=100, b=60)  # always mostly blocked: its normal
+    burst(isvc.fake, 120, "192.168.2.70", blocked=90)
+    burst(isvc.fake, 120, "192.168.2.71", start=-45.0, blocked=90)
+    assert await isvc.poll(T_MS)
+    [e] = anomalies(isvc, "dns_blocked_rate")
+    assert e["title"] == (
+        "75% of Smart plug's DNS queries were blocked in the last hour (usually 5%)"
+    )
+    assert anomalies(isvc, "dns_query_rate") == []
+
+
+def test_device_dns_endpoint_and_page_lists(client):
+    import time as _time
+
+    from netwatch.services.adguard.clients import hour_of
+
+    st = client.app.state
+    dev = st.device_store.insert({"mac": "aa:bb:cc:00:00:80", "first_seen_ms": 0,
+                                  "last_seen_ms": 0, "name": "Office PC"})  # fmt: skip
+    h = hour_of(int(_time.time() * 1000))
+    st.adguard_clients.put([
+        {"hour_ms": h, "client": "192.168.2.80", "device_id": dev, "queries": 50, "blocked": 10,
+         "failed": 1, "domains": {"github.com": 30}, "blocked_domains": {"ads.example": 10}},
+        {"hour_ms": h, "client": "192.168.2.81", "device_id": None, "queries": 9, "blocked": 0,
+         "failed": 0, "domains": {"github.com": 9}, "blocked_domains": {}},
+    ])  # fmt: skip
+    r = client.get(f"/api/devices/{dev}/dns").json()
+    assert r["configured"] is False and r["hours"] == 24
+    assert r["queries"] == 50 and r["blocked_pct"] == 20.0
+    assert r["top_domains"] == [{"domain": "github.com", "queries": 30}]
+    assert r["top_blocked"] == [{"domain": "ads.example", "queries": 10}]
+    assert client.get(f"/api/devices/{dev}/dns?hours=169").status_code == 422
+    assert client.get("/api/devices/99999/dns").status_code == 404
+    page = client.get("/api/adguard").json()
+    assert page["top_domains"][0] == {"domain": "github.com", "queries": 39}
+    assert page["unknown_clients"] == [{"client": "192.168.2.81", "queries": 9}]
+    assert page["dhcp"] is None
+
+
+def test_dns_endpoints_require_sign_in(anon_client):
+    for path in ("/api/adguard", "/api/devices/1/dns", "/api/admin/adguard"):
+        assert anon_client.get(path).status_code == 401

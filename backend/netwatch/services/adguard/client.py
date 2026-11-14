@@ -7,6 +7,7 @@ password or the Authorization header).
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from datetime import datetime
 from typing import Any
@@ -15,6 +16,8 @@ import httpx
 
 SECRET_KEY = re.compile(r"pass|secret|token|credential|key", re.I)
 MAX_PAGE = 500  # entries per query-log request (AdGuard caps it too)
+MAC_RE = re.compile(r"^([0-9a-f]{2})[:-]?([0-9a-f]{2})[:-]?([0-9a-f]{2})[:-]?"
+                    r"([0-9a-f]{2})[:-]?([0-9a-f]{2})[:-]?([0-9a-f]{2})$", re.I)  # fmt: skip
 
 
 class AdGuardError(Exception):
@@ -37,6 +40,26 @@ def redact(value: Any) -> Any:
     if isinstance(value, list):
         return [redact(v) for v in value]
     return value
+
+
+def norm_mac(raw: Any) -> str | None:
+    """``AA-BB-CC-DD-EE-FF`` and friends as ``aa:bb:cc:dd:ee:ff``; None if it isn't a MAC."""
+    m = MAC_RE.match(str(raw or "").strip())
+    return ":".join(m.groups()).lower() if m else None
+
+
+def id_kind(raw: str) -> str:
+    """What a client id is: "mac", "ip" (IPv4 address) or "other" (CIDR, IPv6, ClientID)."""
+    if norm_mac(raw):
+        return "mac"
+    try:
+        return "ip" if isinstance(ipaddress.ip_address(raw), ipaddress.IPv4Address) else "other"
+    except ValueError:
+        return "other"
+
+
+def _name(raw: Any) -> str | None:
+    return str(raw or "").strip()[:63] or None
 
 
 def parse_time(raw: Any) -> datetime | None:
@@ -148,17 +171,46 @@ class AdGuardClient:
         return out, True
 
     async def clients(self) -> list[dict]:
-        """Known clients: configured ones (by their ids) and auto-detected ones (by IP)."""
+        """Known clients, one entry per id.
+
+        Persistent clients (set up in AdGuard, possibly with several ids such as a MAC and an IP)
+        share a ``group`` number; auto-detected ones (by IP only) have ``group`` None.
+        """
         c = await self._get("/control/clients")
         if not isinstance(c, dict):
             return []
         out = []
-        for cl in c.get("clients") or []:
+        for g, cl in enumerate(c.get("clients") or []):
             for cid in cl.get("ids") or []:
-                out.append({"id": str(cid)[:64], "name": str(cl.get("name") or "")[:63] or None})
+                cid = str(cid).strip()[:64]
+                kind = id_kind(cid)
+                out.append({"id": norm_mac(cid) if kind == "mac" else cid, "kind": kind,
+                            "name": _name(cl.get("name")), "group": g})  # fmt: skip
         for cl in c.get("auto_clients") or []:
-            if cl.get("ip"):
-                out.append(
-                    {"id": str(cl["ip"])[:64], "name": str(cl.get("name") or "")[:63] or None}
-                )
+            ip = str(cl.get("ip") or "").strip()[:64]
+            if ip:
+                out.append({"id": ip, "kind": id_kind(ip), "name": _name(cl.get("name")),
+                            "group": None})  # fmt: skip
         return out
+
+    async def dhcp_status(self) -> dict:
+        """Whether AdGuard Home is the DHCP server, and its leases (dynamic and static)."""
+        try:
+            d = await self._get("/control/dhcp/status")
+        except AdGuardLoginError:
+            raise
+        except AdGuardError:
+            # Builds without DHCP support (and some installs) answer 404/501 here.
+            return {"available": False, "enabled": False, "leases": []}
+        if not isinstance(d, dict):
+            return {"available": False, "enabled": False, "leases": []}
+        leases = []
+        for static, items in ((False, d.get("leases")), (True, d.get("static_leases"))):
+            for item in items or []:
+                mac = norm_mac(item.get("mac"))
+                ip = str(item.get("ip") or "").strip()
+                if not mac or id_kind(ip) != "ip":
+                    continue
+                leases.append({"mac": mac, "ip": ip, "hostname": _name(item.get("hostname")),
+                               "static": static})  # fmt: skip
+        return {"available": True, "enabled": bool(d.get("enabled")), "leases": leases}

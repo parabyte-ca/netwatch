@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { DeviceDns } from '../components/DeviceDns';
 import { DeviceTraffic } from '../components/DeviceTraffic';
 import { EventRow } from '../components/EventRow';
 import { api, type DeviceType } from '../lib/api';
@@ -158,6 +159,8 @@ export function DeviceDetail() {
       <Section title="Bandwidth">
         <DeviceTraffic id={d.id} />
       </Section>
+
+      <DeviceDns id={d.id} />
 
       {!!data.services?.length && (
         <Section title="Open services">

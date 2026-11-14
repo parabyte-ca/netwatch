@@ -496,6 +496,7 @@ function AdGuardCard() {
             ? `Last read ${fmtAgo(st.last_ok_ms ?? 0, Date.now())}: protection ${last.protection ? 'on' : 'OFF'}, ${last.queries ?? 0} queries in the last minute` +
               (last.avg_ms != null ? `, ${last.avg_ms} ms average` : '')
             : 'Not read yet.'}
+          {st.dhcp?.enabled && ` AdGuard Home is the DHCP server: ${st.dhcp.leases} leases feed the device list.`}
           {st.error && <span className="text-rose-300"> Last poll failed: {st.error}</span>}
           {st.paused && <span className="block text-amber-300">Polling stopped ({st.paused}). Fix the password and press Save.</span>}
         </p>

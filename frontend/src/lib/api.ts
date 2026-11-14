@@ -140,6 +140,27 @@ export interface UpgradeRecord {
   error?: string;
 }
 
+export interface UpdateStage {
+  key: string;
+  label: string;
+  at: number | null;
+  reached: boolean;
+}
+
+export interface UpdateProgressInfo {
+  state: 'idle' | 'requested' | 'running' | 'succeeded' | 'failed';
+  reason?: string;
+  request?: { id: string; action: string; version: string | null; requested_at: string };
+  status?: UpgradeRecord;
+  action?: 'update' | 'rollback';
+  stages?: UpdateStage[];
+  stage?: string;
+  failed_at?: string | null;
+  rolled_back?: boolean;
+  last_line?: string | null;
+  estimate_s?: number | null;
+}
+
 export interface UpdateSummary {
   current: string;
   latest: string | null;
@@ -154,12 +175,7 @@ export interface UpdateSummary {
   timezone: string;
   in_app_updates: boolean;
   helper: { connected: boolean; last_seen: string | null; agent_version?: string | null };
-  progress: {
-    state: 'idle' | 'requested' | 'running' | 'succeeded' | 'failed';
-    reason?: string;
-    request?: { id: string; action: string; version: string | null; requested_at: string };
-    status?: UpgradeRecord;
-  };
+  progress: UpdateProgressInfo;
   history: UpgradeRecord[];
   rollback_available: boolean;
 }
@@ -640,6 +656,7 @@ export interface AdGuardStatus {
   paused: string | null;
   status: { version: string | null; protection: boolean } | null;
   latest: (AdGuardRow & { protection: boolean | null; source: string; details: { version?: string | null } }) | null;
+  dhcp: { available: boolean; enabled: boolean; leases: number } | null;
 }
 
 export interface AdGuardTestResult {
@@ -659,6 +676,22 @@ export interface AdGuardUpstream {
   avg_ms: number | null;
 }
 
+export interface DomainCount {
+  domain: string;
+  queries: number;
+}
+
+export interface DeviceDns {
+  configured: boolean;
+  hours: number;
+  queries: number;
+  blocked_pct: number | null;
+  failed_pct: number | null;
+  hourly: { hour_ms: number; queries: number; blocked: number }[];
+  top_domains: DomainCount[];
+  top_blocked: DomainCount[];
+}
+
 export interface AdGuardSummary extends AdGuardStatus {
   hours: number;
   series: AdGuardRow[];
@@ -667,6 +700,9 @@ export interface AdGuardSummary extends AdGuardStatus {
   failed_pct: number | null;
   upstreams: AdGuardUpstream[];
   top_clients: { client: string; queries: number; device_id: number | null; label: string | null }[];
+  top_domains: DomainCount[];
+  top_blocked: DomainCount[];
+  unknown_clients: { client: string; queries: number }[];
 }
 
 export interface HubSnapshot {
@@ -1060,6 +1096,7 @@ export const api = {
   runExposure: () => request<{ started: boolean }>('/api/exposure/scan', post()),
   trafficLive: () => request<TrafficLive>('/api/traffic/live'),
   trafficTop: (hours: number) => request<TrafficTop>(`/api/traffic/top?hours=${hours}`),
+  deviceDns: (id: number, hours: number) => request<DeviceDns>(`/api/devices/${id}/dns?hours=${hours}`),
   deviceTraffic: (id: number, hours: number) => request<DeviceTraffic>(`/api/devices/${id}/traffic?hours=${hours}`),
   mapLayout: () => request<{ positions: MapPositions }>('/api/map/layout'),
   saveMapLayout: (positions: MapPositions) =>

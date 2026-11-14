@@ -39,6 +39,7 @@ from .auth import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, AuthStore, LoginThrottle
 from .config import Settings, get_settings
 from .db import make_engine, run_migrations
 from .probes import Prober
+from .services.adguard.clients import ClientStore as AdGuardClientStore
 from .services.adguard.service import AdGuardService, AdGuardStore
 from .services.assistant import Assistant
 from .services.bufferbloat import BufferbloatStore, BufferbloatTester
@@ -242,6 +243,12 @@ def create_app(
                 "adguard_stats": adguard_store.purge(
                     now_ms - settings.rollup_retention_days * day_ms
                 ),
+                "adguard_clients": adguard_clients.purge(
+                    now_ms - settings.rollup_retention_days * day_ms
+                ),
+                "adguard_domains": adguard_clients.strip_domains(
+                    now_ms - settings.raw_retention_days * day_ms
+                ),
                 "bufferbloat_tests": bufferbloat_store.purge(
                     now_ms - settings.throughput_retention_days * day_ms
                 ),
@@ -304,8 +311,15 @@ def create_app(
         app.state.hub = HubService(store, events, hub_store, SecretBox(settings.data_dir))
         adguard_store = AdGuardStore(engine)
         app.state.adguard_store = adguard_store
+        adguard_clients = AdGuardClientStore(engine)
+        app.state.adguard_clients = adguard_clients
         app.state.adguard = AdGuardService(
-            store, events, adguard_store, SecretBox(settings.data_dir)
+            store,
+            events,
+            adguard_store,
+            SecretBox(settings.data_dir),
+            clients=adguard_clients,
+            inventory=discovery.inventory,
         )
         app.state.deco = DecoService(
             store,

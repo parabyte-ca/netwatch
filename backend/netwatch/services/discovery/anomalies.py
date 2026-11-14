@@ -38,8 +38,16 @@ HINTS = {
     "the culprit by unplugging or disconnecting devices until it stops.",
     "duplicate_ip": "Two devices answer for the same address. Usually a static IP inside the "
     "DHCP range, or a device that kept an old lease. Traffic to that address flips between them.",
-    "dhcp_server": "More than one DHCP server is handing out addresses. With Decos in AP mode "
-    "only the Home Hub should answer; a Deco that fell back to router mode is the usual cause.",
+    "dhcp_server": "More than one DHCP server is handing out addresses. Only one should answer: "
+    "the Home Hub, or AdGuard Home if you moved DHCP to it (then turn the Hub's DHCP off; this "
+    "alert stops 24 hours after the Hub's last answer). A Deco that fell back to router mode is "
+    "the other usual cause.",
+    "dns_query_rate": "This device suddenly looks up far more names than usual. Common causes: "
+    "an app or game update, a backup or sync catching up, a misbehaving smart device retrying "
+    "in a loop, or malware. Check what changed on the device; its top domains are on its page.",
+    "dns_blocked_rate": "Most of this device's DNS lookups are being blocked, which is unusual "
+    "for it. Often an app full of ads or trackers, a smart device phoning home, or adware. Its "
+    "top blocked domains are on its page; if something broke, allow the domain in AdGuard.",
     "arp_storm": "An unusually high ARP rate. Common causes: a switching loop (cable plugged in "
     "twice, or a mesh node wired and wireless at once), or a misbehaving device.",
     "gateway_mac": "The gateway's hardware address changed. Expected after replacing the Home "
