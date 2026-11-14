@@ -314,9 +314,27 @@ export interface GroupRef {
 }
 
 export interface DeviceGroup extends GroupRef {
+  quiet: boolean;
   sort: number;
   created_ms: number;
   devices: number;
+}
+
+export interface GroupStats {
+  id: number;
+  name: string;
+  colour: string;
+  icon: string;
+  quiet: boolean;
+  devices: number;
+  online: number;
+  down_bytes: number;
+  up_bytes: number;
+  top_talker: string | null;
+  outages: number;
+  alerts: number;
+  quiet_events: number;
+  dns: { queries: number; blocked_pct: number | null; failed_pct: number | null } | null;
 }
 
 export interface GroupSuggestion {
@@ -462,6 +480,7 @@ export interface WeeklyReport extends Omit<HealthScore, 'start_ms' | 'end_ms' | 
   incidents: { id: number; start: string; duration: string; cause: string; severity: string; start_ms: number }[];
   incident_count: number;
   markdown: string;
+  groups?: GroupStats[];
 }
 
 export interface AssistantStatus {
@@ -1084,8 +1103,9 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ mode, window }),
     }),
-  events: (params: { start?: number; end?: number; kind?: EventKind[]; target_id?: number; limit?: number; group_id?: number; tag?: string } = {}) => {
+  events: (params: { start?: number; end?: number; kind?: EventKind[]; target_id?: number; limit?: number; group_id?: number; tag?: string; include_quiet?: boolean } = {}) => {
     const q = new URLSearchParams();
+    if (params.include_quiet === false) q.set('include_quiet', 'false');
     if (params.group_id !== undefined) q.set('group_id', String(params.group_id));
     if (params.tag) q.set('tag', params.tag);
     if (params.start) q.set('start', String(params.start));
@@ -1109,8 +1129,9 @@ export const api = {
   runIperf: (id: number) => request<ThroughputTest[]>(`/api/iperf/servers/${id}/run`, post()),
   iperfTests: () => request<ThroughputTest[]>('/api/iperf/tests'),
   deviceGroups: () => request<{ groups: DeviceGroup[]; colours: string[]; icons: string[] }>('/api/device-groups'),
-  createGroup: (body: { name: string; colour: string; icon: string }) => request<DeviceGroup>('/api/device-groups', post(body)),
-  editGroup: (id: number, body: Partial<{ name: string; colour: string; icon: string; sort: number }>) =>
+  groupStats: (hours: 24 | 168 = 24) => request<GroupStats[]>(`/api/device-groups/stats?hours=${hours}`),
+  createGroup: (body: { name: string; colour: string; icon: string; quiet?: boolean }) => request<DeviceGroup>('/api/device-groups', post(body)),
+  editGroup: (id: number, body: Partial<{ name: string; colour: string; icon: string; sort: number; quiet: boolean }>) =>
     request<DeviceGroup>(`/api/device-groups/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteGroup: (id: number) => request<{ ungrouped: number }>(`/api/device-groups/${id}`, { method: 'DELETE' }),
   groupSuggestions: () => request<GroupSuggestion[]>('/api/device-groups/suggestions'),

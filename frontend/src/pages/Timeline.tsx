@@ -21,15 +21,16 @@ export function Timeline() {
   const [kinds, setKinds] = useState<EventKind[]>(KINDS.filter((k) => k !== 'monitor' && k !== 'security'));
   const [group, setGroup] = useState('');
   const [tag, setTag] = useState('');
+  const [showQuiet, setShowQuiet] = useState(false);
   const groupsQ = usePolling(api.deviceGroups, 120_000);
   const tagsQ = usePolling(api.deviceTags, 120_000);
   const { data, error } = usePolling(
     () => api.events({
       start: Math.floor(Date.now() / 1000) - span.s, kind: kinds, limit: 1000,
-      group_id: group ? Number(group) : undefined, tag: tag || undefined,
+      group_id: group ? Number(group) : undefined, tag: tag || undefined, include_quiet: showQuiet,
     }),
     15_000,
-    [span.key, kinds.join(','), group, tag],
+    [span.key, kinds.join(','), group, tag, showQuiet],
   );
 
   const groups = new Map<string, TimelineEvent[]>();
@@ -60,6 +61,12 @@ export function Timeline() {
           </label>
         ))}
       </div>
+      {(groupsQ.data?.groups ?? []).some((g) => g.quiet) && (
+        <label className="inline-flex items-center gap-1.5 text-xs text-slate-300">
+          <input type="checkbox" checked={showQuiet} onChange={(e) => setShowQuiet(e.target.checked)} />
+          Show quiet events (alerts for devices in quiet groups)
+        </label>
+      )}
       {((groupsQ.data?.groups.length ?? 0) > 0 || (tagsQ.data?.length ?? 0) > 0) && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
           <span>Only events about</span>

@@ -27,8 +27,20 @@ function Picker({ colour, icon, onColour, onIcon }: { colour: string; icon: stri
   );
 }
 
+const QUIET_HELP = "Its devices' alerts (address changes, rejoining, unusual DNS) are recorded as information and hidden from the timeline. Outages still alert.";
+
+function QuietBox({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="flex items-start gap-2 text-xs text-slate-300">
+      <input type="checkbox" className="mt-0.5" checked={value} onChange={(e) => onChange(e.target.checked)} aria-label="Quiet" />
+      <span><span className="font-medium text-slate-200">Quiet</span>: {QUIET_HELP}</span>
+    </label>
+  );
+}
+
 function Row({ g, onChanged, ask }: { g: DeviceGroup; onChanged: () => Promise<void>; ask: (c: Confirm) => void }) {
   const [edit, setEdit] = useState(false);
+  const [quiet, setQuiet] = useState(g.quiet);
   const [name, setName] = useState(g.name);
   const [colour, setColour] = useState(g.colour);
   const [icon, setIcon] = useState(g.icon);
@@ -37,7 +49,7 @@ function Row({ g, onChanged, ask }: { g: DeviceGroup; onChanged: () => Promise<v
   const save = async () => {
     setErr(null);
     try {
-      await api.editGroup(g.id, { name, colour, icon });
+      await api.editGroup(g.id, { name, colour, icon, quiet });
       setEdit(false);
       await onChanged();
     } catch (e) {
@@ -49,7 +61,10 @@ function Row({ g, onChanged, ask }: { g: DeviceGroup; onChanged: () => Promise<v
       {!edit ? (
         <div className="flex items-center gap-2">
           <span className={`flex h-6 w-6 items-center justify-center rounded ${c.chip} ring-1`}><GroupIcon icon={g.icon} /></span>
-          <span className="flex-1 text-sm text-slate-100">{g.name}</span>
+          <span className="flex-1 text-sm text-slate-100">
+            {g.name}
+            {g.quiet && <span className="ml-2 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400" title={QUIET_HELP}>quiet</span>}
+          </span>
           <span className="text-xs text-slate-500">{g.devices} device{g.devices === 1 ? '' : 's'}</span>
           <button className="text-xs text-sky-400 hover:underline" onClick={() => setEdit(true)}>Edit</button>
           <button className="text-xs text-rose-300 hover:underline" onClick={() => ask({
@@ -67,6 +82,7 @@ function Row({ g, onChanged, ask }: { g: DeviceGroup; onChanged: () => Promise<v
         <div className="space-y-2 rounded-md bg-slate-950 p-2 ring-1 ring-slate-800">
           <input aria-label="Group name" className={`${input} w-full`} maxLength={40} value={name} onChange={(e) => setName(e.target.value)} />
           <Picker colour={colour} icon={icon} onColour={setColour} onIcon={setIcon} />
+          <QuietBox value={quiet} onChange={setQuiet} />
           {err && <p className="text-xs text-rose-300">{err}</p>}
           <div className="flex gap-2">
             <button className={`${btn} bg-sky-600 text-white hover:bg-sky-500`} disabled={!name.trim()} onClick={() => void save()}>Save</button>
@@ -83,6 +99,7 @@ export function GroupManager({ groups, onChanged, onClose }: { groups: DeviceGro
   const [name, setName] = useState('');
   const [colour, setColour] = useState('sky');
   const [icon, setIcon] = useState('star');
+  const [quiet, setQuiet] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [ask, setAsk] = useState<Confirm | null>(null);
@@ -90,8 +107,9 @@ export function GroupManager({ groups, onChanged, onClose }: { groups: DeviceGro
   const create = async () => {
     setErr(null);
     try {
-      await api.createGroup({ name: name.trim(), colour, icon });
+      await api.createGroup({ name: name.trim(), colour, icon, quiet });
       setName('');
+      setQuiet(false);
       await onChanged();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -125,6 +143,7 @@ export function GroupManager({ groups, onChanged, onClose }: { groups: DeviceGro
           <input aria-label="New group name" placeholder="e.g. Kids, Smart home, Sam's devices" className={`${input} w-full`} maxLength={40}
             value={name} onChange={(e) => setName(e.target.value)} />
           <Picker colour={colour} icon={icon} onColour={setColour} onIcon={setIcon} />
+          <QuietBox value={quiet} onChange={setQuiet} />
           <button className={`${btn} bg-sky-600 text-white hover:bg-sky-500`} disabled={!name.trim()} onClick={() => void create()}>Create group</button>
         </div>
         {err && <p className="text-sm text-rose-300" role="alert">{err}</p>}

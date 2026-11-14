@@ -15,7 +15,10 @@ export function EventRow({ ev, compact = false }: { ev: TimelineEvent; compact?:
           {EVENT_LABEL[ev.kind] ?? ev.kind}
           <span className="normal-case sm:hidden"> · {clock(ev.start_ms)}</span>
         </span>
-        <span className="block text-sm text-slate-200 sm:min-w-0 sm:flex-1 sm:truncate">{ev.title}</span>
+        <span className={`block text-sm sm:min-w-0 sm:flex-1 sm:truncate ${ev.details?.quiet ? 'text-slate-500' : 'text-slate-200'}`}>
+          {ev.title}
+          {ev.details?.quiet === true && <span className="ml-2 rounded bg-slate-800 px-1.5 text-[10px] text-slate-400">quiet</span>}
+        </span>
         {!compact && <span className="hidden shrink-0 text-xs text-slate-500 sm:inline">{fmtTime(ev.start_ms)}</span>}
       </span>
       <span className={`shrink-0 text-right text-xs sm:w-28 ${ev.open ? 'text-rose-300' : 'text-slate-400'}`}>

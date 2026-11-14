@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { scoreColour, ScoreRing } from '../components/ScoreRing';
+import { colourOf } from '../lib/groups';
 import { api, type HealthScore, type WeeklyReport } from '../lib/api';
-import { fmtTime } from '../lib/format';
+import { fmtTime, fmtBytes } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
 
 const btn = 'rounded-md px-3 py-1.5 text-sm font-medium disabled:opacity-50';
@@ -56,6 +57,32 @@ function ReportView({ r }: { r: WeeklyReport }) {
       <div className="text-sm text-slate-300">
         Internet: {r.summary.isp_availability_pct} % available · {r.summary.incidents} incident{r.summary.incidents === 1 ? '' : 's'} ({r.summary.isp_incidents} on the Bell network) · longest {r.summary.longest}
       </div>
+      {r.groups && r.groups.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm" aria-label="Groups this week">
+            <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
+              <tr><th className="py-1 pr-3">Group</th><th className="pr-3 text-right">Devices</th><th className="pr-3 text-right">Traffic</th>
+                <th className="pr-3 text-right">DNS</th><th className="pr-3 text-right">Outages</th><th className="pr-3 text-right">Alerts</th><th className="text-right">Quiet</th></tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800">
+              {r.groups.map((g) => (
+                <tr key={g.id}>
+                  <td className="py-1 pr-3 text-slate-200">
+                    <span className="mr-1.5 inline-block h-2 w-2 rounded-full" style={{ background: colourOf(g.colour).hex }} />
+                    {g.name}{g.quiet && <span className="text-xs text-slate-500"> (quiet)</span>}
+                  </td>
+                  <td className="pr-3 text-right tabular-nums">{g.devices}</td>
+                  <td className="pr-3 text-right tabular-nums">{fmtBytes(g.down_bytes + g.up_bytes)}</td>
+                  <td className="pr-3 text-right tabular-nums">{g.dns ? `${g.dns.queries.toLocaleString()}${g.dns.blocked_pct != null ? ` · ${g.dns.blocked_pct}% blocked` : ''}` : 'n/a'}</td>
+                  <td className={`pr-3 text-right tabular-nums ${g.outages ? 'text-rose-300' : ''}`}>{g.outages}</td>
+                  <td className={`pr-3 text-right tabular-nums ${g.alerts ? 'text-amber-300' : ''}`}>{g.alerts}</td>
+                  <td className="text-right tabular-nums text-slate-500">{g.quiet_events}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       {r.incidents.length > 0 && (
         <ul className="divide-y divide-slate-800 text-sm">
           {r.incidents.map((i) => (
