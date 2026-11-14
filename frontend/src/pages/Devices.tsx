@@ -1,6 +1,8 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { api, type DeviceRow, type DiscoveryStatus } from '../lib/api';
+import { Link, useSearchParams } from 'react-router-dom';
+import { GroupManager } from '../components/GroupManager';
+import { api, type DeviceGroup, type DeviceRow, type DiscoveryStatus, type GroupSuggestion } from '../lib/api';
+import { GroupBadge, GroupIcon, TagChip, colourOf } from '../lib/groups';
 import { DEVICE_TYPE_LABEL, fmtAgo, fmtTime } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
 
@@ -149,6 +151,88 @@ function SortHeader({ k, label, sort, onSort, className = '', align = 'left' }: 
   );
 }
 
+/** "12 devices look like Smart home": review the list, untick, accept. Nothing is assigned until then. */
+function Suggestions({ items, onDone }: { items: GroupSuggestion[]; onDone: () => Promise<void> }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const [off, setOff] = useState<Set<number>>(new Set());
+  const [err, setErr] = useState<string | null>(null);
+  const s = items.find((x) => x.name === open);
+  const accept = async (x: GroupSuggestion) => {
+    setErr(null);
+    try {
+      await api.acceptSuggestion(x.name, x.devices.filter((d) => !off.has(d.id)).map((d) => d.id));
+      setOpen(null);
+      setOff(new Set());
+      await onDone();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+  return (
+    <section className="space-y-2 rounded-lg bg-sky-950/30 p-3 ring-1 ring-sky-900" aria-label="Group suggestions">
+      <div className="flex flex-wrap items-center gap-2 text-sm text-sky-100">
+        <span>Suggested groups:</span>
+        {items.map((x) => (
+          <button key={x.name} onClick={() => { setOpen(open === x.name ? null : x.name); setOff(new Set()); }}
+            className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs ring-1 ${colourOf(x.colour).chip}`}>
+            <GroupIcon icon={x.icon} className="h-3 w-3" /> {x.devices.length} look like {x.name}
+          </button>
+        ))}
+      </div>
+      {s && (
+        <div className="space-y-2 rounded-md bg-slate-900 p-3 ring-1 ring-slate-800">
+          <p className="text-xs text-slate-400">Untick any device that does not belong in {s.name}{s.group_id ? '' : ' (the group is created when you accept)'}.</p>
+          <ul className="grid gap-1 sm:grid-cols-2">
+            {s.devices.map((d) => (
+              <li key={d.id}>
+                <label className="flex items-center gap-2 text-sm text-slate-200">
+                  <input type="checkbox" checked={!off.has(d.id)}
+                    onChange={() => setOff((cur) => { const n = new Set(cur); if (n.has(d.id)) n.delete(d.id); else n.add(d.id); return n; })} />
+                  {d.label} <span className="text-xs text-slate-500">{DEVICE_TYPE_LABEL[d.type] ?? d.type}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+          <button className={`${btn} bg-sky-600 text-white hover:bg-sky-500`} disabled={s.devices.every((d) => off.has(d.id))} onClick={() => void accept(s)}>
+            Add {s.devices.filter((d) => !off.has(d.id)).length} to {s.name}
+          </button>
+          {err && <p className="text-xs text-rose-300">{err}</p>}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** Bulk actions for the ticked devices: set group, add or remove a tag. */
+function BulkBar({ ids, groups, onDone, onClear }: { ids: number[]; groups: DeviceGroup[]; onDone: () => Promise<void>; onClear: () => void }) {
+  const [tag, setTag] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const run = async (body: { group_id?: number; add_tags?: string[]; remove_tags?: string[] }) => {
+    setErr(null);
+    try {
+      await api.bulkDevices({ ids, ...body });
+      await onDone();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+  return (
+    <div className="sticky top-2 z-10 flex flex-wrap items-center gap-2 rounded-lg bg-slate-800 p-2 text-sm shadow-lg ring-1 ring-slate-700" role="toolbar" aria-label="Bulk actions">
+      <span className="px-1 text-slate-200">{ids.length} selected</span>
+      <select aria-label="Set group" className={input} value="" onChange={(e) => e.target.value && void run({ group_id: Number(e.target.value) })}>
+        <option value="">Set group…</option>
+        {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+        <option value="0">No group</option>
+      </select>
+      <input aria-label="Tag" placeholder="tag" className={`${input} w-28`} value={tag} onChange={(e) => setTag(e.target.value)} />
+      <button className={`${btn} bg-slate-700 text-slate-100 hover:bg-slate-600`} disabled={!tag.trim()} onClick={() => void run({ add_tags: [tag.trim()] })}>Add tag</button>
+      <button className={`${btn} bg-slate-700 text-slate-100 hover:bg-slate-600`} disabled={!tag.trim()} onClick={() => void run({ remove_tags: [tag.trim()] })}>Remove tag</button>
+      <button className="ml-auto px-2 text-xs text-slate-400 hover:text-white" onClick={onClear}>Clear selection</button>
+      {err && <p className="w-full text-xs text-rose-300">{err}</p>}
+    </div>
+  );
+}
+
 function names(d: DeviceRow) {
   const extra = [d.hostname, d.mdns_name, d.model].filter((n) => n && n !== d.label);
   return extra.length ? extra.join(' · ') : null;
@@ -158,6 +242,19 @@ export function Devices() {
   const [q, setQ] = useState('');
   const [onlineOnly, setOnlineOnly] = useState(false);
   const [type, setType] = useState('');
+  const [params, setParams] = useSearchParams();
+  const groupFilter = params.get('group') ?? '';
+  const tagFilter = params.get('tag') ?? '';
+  const setFilter = (key: 'group' | 'tag', value: string) => {
+    const next = new URLSearchParams(params);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setParams(next, { replace: true });
+  };
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [managing, setManaging] = useState(false);
+  const groupsQ = usePolling(api.deviceGroups, 60_000);
+  const suggestQ = usePolling(api.groupSuggestions, 120_000);
   const [sort, setSort] = useState<Sort | null>(loadSort);
   const onSort = (key: SortKey) => {
     // First click: A→Z (or most recent first for "last seen"); second click reverses.
@@ -171,9 +268,16 @@ export function Devices() {
     }
   };
   const status = usePolling(api.discovery, 15_000);
-  const { data, error } = usePolling(() => api.devices(q.trim() || undefined), 15_000, [q]);
+  const { data, error, refresh } = usePolling(() => api.devices(q.trim() || undefined), 15_000, [q]);
+  const groups = groupsQ.data?.groups ?? [];
+  const tags = [...new Set((data?.devices ?? []).flatMap((d) => d.tags ?? []))].sort();
+  const reloadAll = async () => {
+    await Promise.all([refresh(), groupsQ.refresh(), suggestQ.refresh()]);
+  };
 
-  const filtered = (data?.devices ?? []).filter((d) => (!onlineOnly || d.online) && (!type || d.type === type));
+  const filtered = (data?.devices ?? []).filter((d) => (!onlineOnly || d.online) && (!type || d.type === type)
+    && (!groupFilter || (groupFilter === '0' ? !d.group : String(d.group?.id) === groupFilter))
+    && (!tagFilter || (d.tags ?? []).includes(tagFilter)));
   const rows = sort
     ? [...filtered].sort((a, b) => (sort.dir === 'asc' ? 1 : -1) * compare(a, b, sort.key) || collator.compare(a.label, b.label))
     : filtered;
@@ -191,6 +295,7 @@ export function Devices() {
         )}
       </div>
       {status.data && <DiscoveryPanel status={status.data} refresh={status.refresh} />}
+      {suggestQ.data && suggestQ.data.length > 0 && <Suggestions items={suggestQ.data} onDone={reloadAll} />}
       {status.error && <p className="text-rose-400">{status.error}</p>}
 
       <div className="flex flex-wrap items-center gap-3">
@@ -200,18 +305,39 @@ export function Devices() {
           <option value="">All types</option>
           {types.map((t) => <option key={t} value={t}>{DEVICE_TYPE_LABEL[t] ?? t}</option>)}
         </select>
+        <select aria-label="Group" className={input} value={groupFilter} onChange={(e) => setFilter('group', e.target.value)}>
+          <option value="">All groups</option>
+          {groups.map((g) => <option key={g.id} value={String(g.id)}>{g.name} ({g.devices})</option>)}
+          <option value="0">No group</option>
+        </select>
+        {tags.length > 0 && (
+          <select aria-label="Tag filter" className={input} value={tagFilter} onChange={(e) => setFilter('tag', e.target.value)}>
+            <option value="">All tags</option>
+            {tags.map((t) => <option key={t} value={t}>#{t}</option>)}
+          </select>
+        )}
         <label className="inline-flex items-center gap-1.5 text-sm text-slate-300">
           <input type="checkbox" checked={onlineOnly} onChange={(e) => setOnlineOnly(e.target.checked)} />
           Online only
         </label>
+        <button className={`${btn} ml-auto bg-slate-800 text-slate-200 hover:bg-slate-700`} onClick={() => setManaging(true)}>Groups…</button>
       </div>
+      {selected.size > 0 && (
+        <BulkBar ids={[...selected]} groups={groups} onDone={reloadAll} onClear={() => setSelected(new Set())} />
+      )}
+      {managing && <GroupManager groups={groups} onChanged={reloadAll} onClose={() => setManaging(false)} />}
       {error && <p className="text-rose-400">{error}</p>}
 
       <div className="overflow-x-auto rounded-lg ring-1 ring-slate-800">
         <table className="w-full text-sm">
           <thead className="bg-slate-900 text-left text-xs uppercase tracking-wide text-slate-500">
             <tr>
+              <th className="w-8 px-3 py-2">
+                <input type="checkbox" aria-label="Select all shown" checked={rows.length > 0 && rows.every((d) => selected.has(d.id))}
+                  onChange={(e) => setSelected(e.target.checked ? new Set(rows.map((d) => d.id)) : new Set())} />
+              </th>
               <SortHeader k="device" label="Device" sort={sort} onSort={onSort} />
+              <th className="hidden px-3 py-2 lg:table-cell">Group and tags</th>
               <SortHeader k="type" label="Type" sort={sort} onSort={onSort} className="hidden sm:table-cell" />
               <SortHeader k="ip" label="IP" sort={sort} onSort={onSort} />
               <SortHeader k="mac" label="MAC / vendor" sort={sort} onSort={onSort} className="hidden md:table-cell" />
@@ -220,7 +346,11 @@ export function Devices() {
           </thead>
           <tbody className="divide-y divide-slate-800">
             {rows.map((d) => (
-              <tr key={d.id} className="hover:bg-slate-900/60">
+              <tr key={d.id} className={`hover:bg-slate-900/60 ${selected.has(d.id) ? 'bg-slate-900' : ''}`}>
+                <td className="w-8 px-3 py-2 align-top">
+                  <input type="checkbox" aria-label={`Select ${d.label}`} checked={selected.has(d.id)}
+                    onChange={() => setSelected((cur) => { const n = new Set(cur); if (n.has(d.id)) n.delete(d.id); else n.add(d.id); return n; })} />
+                </td>
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-2">
                     <span className={`h-2 w-2 shrink-0 rounded-full ${d.online ? 'bg-emerald-400' : 'bg-slate-600'}`}
@@ -232,6 +362,18 @@ export function Devices() {
                   <div className="ml-4 text-xs text-slate-500 sm:hidden">
                     {DEVICE_TYPE_LABEL[d.type] ?? d.type}
                     {d.vendor ? ` · ${d.vendor}` : ''}
+                  </div>
+                  {(d.group || d.tags?.length > 0) && (
+                    <div className="ml-4 mt-1 flex flex-wrap gap-1 lg:hidden">
+                      {d.group && <GroupBadge group={d.group} />}
+                      {d.tags?.map((t) => <TagChip key={t} tag={t} />)}
+                    </div>
+                  )}
+                </td>
+                <td className="hidden px-3 py-2 lg:table-cell">
+                  <div className="flex flex-wrap gap-1">
+                    {d.group && <GroupBadge group={d.group} />}
+                    {d.tags?.map((t) => <TagChip key={t} tag={t} />)}
                   </div>
                 </td>
                 <td className="hidden px-3 py-2 text-slate-300 sm:table-cell" title={d.type_override ? 'set by you' : d.type_reason ?? undefined}>

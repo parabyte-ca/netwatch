@@ -13,7 +13,7 @@ function device(id: number, over: Partial<DeviceRow>): DeviceRow {
     id, mac: `3c:84:6a:00:00:0${id}`, vendor: 'TP-Link', randomised: false, name: null, hostname: null,
     mdns_name: null, model: null, type: 'unknown', type_auto: 'unknown', type_reason: null, type_override: null,
     merged_into: null, target_id: null, first_seen_ms: now - 86_400_000, last_seen_ms: now, last_ip: `192.168.2.${id}`,
-    notes: null, details: {}, label: `Device ${id}`, online: true, macs: [`3c:84:6a:00:00:0${id}`], ...over,
+    notes: null, details: {}, label: `Device ${id}`, online: true, macs: [`3c:84:6a:00:00:0${id}`], group: null, group_id: null, tags: [], ...over,
   };
 }
 
