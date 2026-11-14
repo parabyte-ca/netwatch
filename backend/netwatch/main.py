@@ -288,6 +288,7 @@ def create_app(
             raw_retention_days=settings.raw_retention_days,
             tz=settings.tz,
             devices=device_store,
+            local_dns=lambda: {app.state.adguard.config()["host"]} - {""},
         )
         app.state.discovery = discovery
         app.state.traffic = traffic_store
@@ -326,6 +327,7 @@ def create_app(
                 end_ms,
                 hub_store=hub_store,
                 bufferbloat_store=bufferbloat_store,
+                adguard_store=app.state.adguard_store,
             )
 
         app.state.health = HealthService(

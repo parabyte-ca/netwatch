@@ -403,3 +403,23 @@ def test_admin_api(client):
         assert r.status_code == 422 and "password" in r.text
     client.portal.call(st.adguard.poll)
     assert client.get("/api/admin/adguard").json()["latest"]["reachable"] is True
+
+
+def test_report_has_a_dns_section(client):
+    import time as _time
+
+    st = client.app.state
+    fake = FakeAdGuard()
+    st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
+    st.adguard.save(HOST, PORT, False, USER, True, PASSWORD)
+    now = datetime.now(UTC)
+    for i in range(10):
+        fake.query(now - timedelta(seconds=30 - i), ms=20.0,
+                   reason="FilteredBlackList" if i < 2 else "NotFilteredNotFound")  # fmt: skip
+    assert client.portal.call(st.adguard.poll)
+    start = int(_time.time()) - 3600
+    r = client.get(f"/api/report?start={start}").json()
+    assert r["dns"]["queries"] == 10 and r["dns"]["blocked_pct"] == 20.0
+    assert r["dns"]["unreachable"] == 0
+    assert "AdGuard Home stayed reachable" in " ".join(r["ruled_out"])
+    assert "## DNS (AdGuard Home)" in r["markdown"]
