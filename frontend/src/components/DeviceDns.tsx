@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { api, type DomainCount } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
+import { useRuleAction } from './AdGuardControls';
 
 const SPANS = [
   { label: '24 h', hours: 24 },
   { label: '7 days', hours: 168 },
 ];
 
-function Domains({ title, items, tone }: { title: string; items: DomainCount[]; tone: string }) {
+function Domains({ title, items, tone, action }: { title: string; items: DomainCount[]; tone: string; action?: { label: string; run: (d: string) => void } }) {
   return (
     <div className="min-w-0">
       <h3 className="mb-1 text-xs font-medium text-slate-400">{title}</h3>
@@ -16,7 +17,14 @@ function Domains({ title, items, tone }: { title: string; items: DomainCount[]; 
           {items.map((d) => (
             <li key={d.domain} className="flex items-baseline justify-between gap-2">
               <span className={`min-w-0 truncate font-mono text-xs ${tone}`} title={d.domain}>{d.domain}</span>
-              <span className="shrink-0 tabular-nums text-slate-400">{d.queries.toLocaleString()}</span>
+              <span className="flex shrink-0 items-baseline gap-2">
+                <span className="tabular-nums text-slate-400">{d.queries.toLocaleString()}</span>
+                {action && (
+                  <button className="text-xs text-sky-400 hover:underline" onClick={() => action.run(d.domain)} aria-label={`${action.label} ${d.domain}`}>
+                    {action.label}
+                  </button>
+                )}
+              </span>
             </li>
           ))}
         </ul>
@@ -31,6 +39,7 @@ function Domains({ title, items, tone }: { title: string; items: DomainCount[]; 
 export function DeviceDns({ id }: { id: number }) {
   const [hours, setHours] = useState(24);
   const { data, error } = usePolling(() => api.deviceDns(id, hours), 60_000, [id, hours]);
+  const rules = useRuleAction();
   if (!data && !error) return null;
   if (data && !data.configured && data.queries === 0) return null;
   const max = Math.max(1, ...(data?.hourly ?? []).map((h) => h.queries));
@@ -67,9 +76,12 @@ export function DeviceDns({ id }: { id: number }) {
             </div>
           )}
           <div className="grid gap-4 sm:grid-cols-2">
-            <Domains title="Top domains" items={data.top_domains} tone="text-slate-200" />
-            <Domains title="Top blocked domains" items={data.top_blocked} tone="text-violet-300" />
+            <Domains title="Top domains" items={data.top_domains} tone="text-slate-200"
+              action={rules.enabled ? { label: 'Block', run: (d) => rules.request(d, 'block') } : undefined} />
+            <Domains title="Top blocked domains" items={data.top_blocked} tone="text-violet-300"
+              action={rules.enabled ? { label: 'Allow', run: (d) => rules.request(d, 'allow') } : undefined} />
           </div>
+          {rules.dialog}
           <p className="text-xs text-slate-500">From AdGuard Home. Domain names are kept as long as raw samples (7 days by default).</p>
         </div>
       )}

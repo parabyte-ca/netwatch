@@ -5,6 +5,7 @@ import 'uplot/dist/uPlot.min.css';
 import { api, type AdGuardSummary, type DomainCount } from '../lib/api';
 import { fmtAgo } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
+import { AdGuardControls, useRuleAction } from '../components/AdGuardControls';
 
 const SPANS = [
   { label: '6 h', hours: 6 },
@@ -30,14 +31,21 @@ function Stat({ label, value, tone = 'text-slate-100' }: { label: string; value:
   );
 }
 
-function DomainList({ items, tone }: { items: DomainCount[]; tone: string }) {
+function DomainList({ items, tone, action }: { items: DomainCount[]; tone: string; action?: { label: string; run: (domain: string) => void } }) {
   if (!items.length) return <p className="text-sm text-slate-400">None in this period (needs the query log; names are kept for 7 days).</p>;
   return (
     <ul className="divide-y divide-slate-800">
       {items.map((d) => (
         <li key={d.domain} className="flex items-baseline justify-between gap-2 py-1 text-sm">
           <span className={`min-w-0 truncate font-mono text-xs ${tone}`} title={d.domain}>{d.domain}</span>
-          <span className="shrink-0 tabular-nums text-slate-400">{d.queries.toLocaleString()}</span>
+          <span className="flex shrink-0 items-baseline gap-3">
+            <span className="tabular-nums text-slate-400">{d.queries.toLocaleString()}</span>
+            {action && (
+              <button className="text-xs text-sky-400 hover:underline" onClick={() => action.run(d.domain)} aria-label={`${action.label} ${d.domain}`}>
+                {action.label}
+              </button>
+            )}
+          </span>
         </li>
       ))}
     </ul>
@@ -115,7 +123,8 @@ function Charts({ data }: { data: AdGuardSummary }) {
 /** The LAN's DNS server (AdGuard Home): response time, block rate, upstream health and busiest clients. */
 export function Dns() {
   const [hours, setHours] = useState(24);
-  const { data, error } = usePolling(() => api.adguardSummary(hours), 60_000, [hours]);
+  const { data, error, refresh } = usePolling(() => api.adguardSummary(hours), 60_000, [hours]);
+  const rules = useRuleAction(() => void refresh());
   const configured = !!data && !!data.host && data.password_set;
   const down = data?.latest && !data.latest.reachable;
   // The last minute with answers (an idle minute has no response time).
@@ -180,6 +189,10 @@ export function Dns() {
             {data.series.length ? <Charts data={data} /> : <p className="text-sm text-slate-400">No readings in this period yet.</p>}
           </Section>
 
+          <Section title="Controls">
+            <AdGuardControls protection={data.latest?.reachable ? data.latest.protection : null} onChanged={() => void refresh()} />
+          </Section>
+
           <Section title="Upstream resolvers">
             {data.upstreams.length ? (
               <div className="overflow-x-auto">
@@ -206,10 +219,12 @@ export function Dns() {
 
           <div className="grid gap-4 lg:grid-cols-2">
             <Section title="Top domains">
-              <DomainList items={data.top_domains} tone="text-slate-200" />
+              <DomainList items={data.top_domains} tone="text-slate-200"
+                action={rules.enabled ? { label: 'Block', run: (d) => rules.request(d, 'block') } : undefined} />
             </Section>
             <Section title="Top blocked domains">
-              <DomainList items={data.top_blocked} tone="text-violet-300" />
+              <DomainList items={data.top_blocked} tone="text-violet-300"
+                action={rules.enabled ? { label: 'Allow', run: (d) => rules.request(d, 'allow') } : undefined} />
             </Section>
           </div>
 
@@ -247,6 +262,7 @@ export function Dns() {
               </ul>
             </Section>
           )}
+          {rules.dialog}
         </>
       )}
     </div>

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AdGuardSummary } from '../lib/api';
+import type { AdGuardActionsState, AdGuardSummary } from '../lib/api';
 import { Dns } from './Dns';
 
 // uPlot needs a real browser (matchMedia, canvas); the chart itself is not under test here.
@@ -30,13 +30,28 @@ const base: AdGuardSummary = {
   unknown_clients: [{ client: '192.168.2.199', queries: 12 }],
 };
 
-function mock(summary: AdGuardSummary) {
+const actionsOff: AdGuardActionsState = { enabled: false, pause: null, rules: [], previous_upstreams: null, presets: [], upstreams: null };
+const actionsOn: AdGuardActionsState = {
+  enabled: true, pause: null, rules: [], previous_upstreams: { upstreams: ['tls://1.1.1.1'], saved_ms: 1 },
+  presets: [{ name: 'Quad9 (encrypted, DNS-over-TLS)', upstreams: ['tls://dns.quad9.net'] }], upstreams: ['tls://1.1.1.1', 'tls://1.0.0.1'],
+};
+
+function mock(summary: AdGuardSummary, actions: AdGuardActionsState = actionsOff) {
   const urls: string[] = [];
-  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-    urls.push(String(input));
+  const calls: { url: string; method: string; body?: unknown }[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const url = String(input);
+    urls.push(url);
+    const method = init?.method ?? 'GET';
+    if (method !== 'GET') calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    if (url === '/api/adguard/actions') return new Response(JSON.stringify(actions), { status: 200 });
+    if (url === '/api/adguard/actions/upstreams/test') {
+      return new Response(JSON.stringify({ upstreams: ['tls://dns.quad9.net'], results: { 'tls://dns.quad9.net': 'OK' }, ok: true }), { status: 200 });
+    }
+    if (url.startsWith('/api/adguard/actions')) return new Response('{}', { status: 200 });
     return new Response(JSON.stringify(summary), { status: 200 });
   });
-  return urls;
+  return Object.assign(urls, { calls });
 }
 
 describe('Dns', () => {
@@ -71,5 +86,47 @@ describe('Dns', () => {
     render(<MemoryRouter><Dns /></MemoryRouter>);
     expect(await screen.findByRole('link', { name: 'Admin → AdGuard Home' })).toHaveAttribute('href', '/admin');
     expect(screen.queryByRole('region', { name: 'Upstream resolvers' })).not.toBeInTheDocument();
+  });
+
+  it('only offers controls when actions are turned on, and always asks first', async () => {
+    mock(base);
+    const { unmount } = render(<MemoryRouter><Dns /></MemoryRouter>);
+    expect(await screen.findByText(/turn on/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Pause 30 min/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Allow ads.example' })).not.toBeInTheDocument();
+    unmount();
+
+    const m = mock(base, actionsOn);
+    render(<MemoryRouter><Dns /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Pause 30 min' }));
+    const dialog = screen.getByRole('dialog', { name: /Pause AdGuard Home protection for 30 min/ });
+    // Cancel (or Esc) sends nothing.
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(m.calls).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Pause 30 min' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Pause for 30 min' }));
+    await waitFor(() => expect(m.calls).toContainEqual({ url: '/api/adguard/actions/pause', method: 'POST', body: { minutes: 30 } }));
+    expect(dialog).not.toBeInTheDocument();
+    // Allow straight from the top blocked domains.
+    fireEvent.click(await screen.findByRole('button', { name: 'Allow ads.example' }));
+    expect(screen.getByRole('dialog', { name: 'Allow ads.example?' })).toHaveTextContent('@@||ads.example^');
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Allow' }));
+    await waitFor(() => expect(m.calls).toContainEqual({ url: '/api/adguard/actions/rules', method: 'POST', body: { domain: 'ads.example', kind: 'allow' } }));
+  });
+
+  it('switches upstream DNS only after a passing test and a confirmation', async () => {
+    const m = mock(base, actionsOn);
+    render(<MemoryRouter><Dns /></MemoryRouter>);
+    const sw = await screen.findByRole('button', { name: 'Switch' });
+    expect(sw).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Upstream preset'), { target: { value: 'Quad9 (encrypted, DNS-over-TLS)' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Test' }));
+    expect(await screen.findByLabelText('Upstream test')).toHaveTextContent('tls://dns.quad9.net');
+    fireEvent.click(screen.getByRole('button', { name: 'Switch' }));
+    const d = screen.getByRole('dialog', { name: 'Switch the upstream DNS?' });
+    expect(d).toHaveTextContent('Instead of: tls://1.1.1.1, tls://1.0.0.1');
+    fireEvent.click(within(d).getByRole('button', { name: 'Switch' }));
+    await waitFor(() => expect(m.calls).toContainEqual({ url: '/api/adguard/actions/upstreams', method: 'POST', body: { upstreams: ['tls://dns.quad9.net'] } }));
   });
 });
