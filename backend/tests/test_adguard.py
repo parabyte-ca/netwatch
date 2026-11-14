@@ -608,6 +608,7 @@ async def test_clients_and_leases_feed_the_inventory(isvc):
         {"mac": "aa:bb:cc:00:00:40", "ip": "192.168.2.41", "hostname": "MacBook-Air"},
         {"mac": "aa:bb:cc:00:00:50", "ip": "192.168.2.50", "hostname": "pixel-9"}],
         "static_leases": []}  # fmt: skip
+    isvc.fake.query(at(-20), client="192.168.2.50")
     assert await isvc.poll(T_MS)
     mac = inv.store.get_by_mac("aa:bb:cc:00:00:40")
     assert mac["details"]["adguard_name"] == "Alan's MacBook Air" and mac["type"] == "laptop"
@@ -618,6 +619,8 @@ async def test_clients_and_leases_feed_the_inventory(isvc):
     assert inv.store.get(tv)["details"]["adguard_name"] == "Living room TV"
     assert inv.store.with_ip("192.168.2.77") == [] and inv.store.with_ip("192.168.2.88") == []
     assert isvc.status()["dhcp"] == {"available": True, "enabled": True, "leases": 2}
+    # Queries from a lease's address count for the device the lease just created.
+    assert isvc.client_store.network(0, 10**13)["unknown_clients"] == []
     assert inv.store.count() == 3
     # Read again only every INVENTORY_EVERY polls; no DHCP support means no leases.
     reqs = len([r for r in f.requests if r.url.path == "/control/dhcp/status"])

@@ -356,11 +356,12 @@ class AdGuardService:
         self.last = status
         self._polls += 1
         await asyncio.to_thread(self._apply, now, status, entries, cut, stats, known)
-        if self.accumulator is not None:
-            await asyncio.to_thread(self._record_clients, now, entries, known)
         if dhcp is not None:
+            # Before recording per-client counts, so a device a lease just added is matched.
             self.dhcp = dhcp
             await asyncio.to_thread(self._feed_inventory, now, known, dhcp)
+        if self.accumulator is not None:
+            await asyncio.to_thread(self._record_clients, now, entries, known)
         return True
 
     def _since(self, now: int) -> datetime:

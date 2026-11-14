@@ -106,9 +106,10 @@ class ClientStore:
     def network(self, start_ms: int, end_ms: int) -> dict:
         """Top domains over every client, and clients that match no device."""
         rows = self._rows(adguard_clients.c.hour_ms >= 0, start_ms, end_ms)
+        known = {r["client"] for r in rows if r["device_id"] is not None}
         unknown: Counter[str] = Counter()
         for r in rows:
-            if r["device_id"] is None:
+            if r["client"] not in known:  # matched to a device later in the period: not unknown
                 unknown[r["client"]] += r["queries"]
         return {
             "top_domains": _merge(rows, "domains", 15),
