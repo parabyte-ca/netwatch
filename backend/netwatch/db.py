@@ -295,6 +295,25 @@ hub_stats = Table(
     sqlite_with_rowid=False,
 )
 
+# AdGuard Home readings, one row per poll. Counts cover the interval since the previous poll.
+adguard_stats = Table(
+    "adguard_stats",
+    metadata,
+    Column("ts_ms", Integer, primary_key=True),
+    Column("reachable", Boolean, nullable=False),
+    Column("protection", Boolean),
+    Column("queries", Integer),
+    Column("blocked", Integer),
+    Column("servfail", Integer),
+    Column("errors", Integer),
+    Column("avg_ms", Float),
+    Column("p95_ms", Float),
+    Column("source", String(8), nullable=False),  # querylog | stats
+    Column("upstreams", Text, nullable=False, default="{}"),
+    Column("details", Text, nullable=False, default="{}"),
+    sqlite_with_rowid=False,
+)
+
 # Open TCP services found on LAN devices by the exposure scan (one row per device and port).
 device_services = Table(
     "device_services",

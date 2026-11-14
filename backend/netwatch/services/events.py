@@ -31,9 +31,10 @@ OUTAGE, LOSS, NIC_LINK, NIC_SPEED, NIC_ERRORS, MONITOR, ANOMALY, DEVICE, SECURIT
 )
 HUB = "hub"  # the Home Hub's own reports (restarts, fibre link, internet session)
 EXPOSURE = "exposure"  # new open services and port forwards found by the exposure scan
+DNS = "dns"  # AdGuard Home: unreachable, protection off, upstreams failing, errors, new clients
 KINDS = (
     OUTAGE, LOSS, NIC_LINK, NIC_SPEED, NIC_ERRORS, MONITOR, ANOMALY, DEVICE, SECURITY, WIFI, HUB,
-    EXPOSURE,
+    EXPOSURE, DNS,
 )  # fmt: skip
 
 
