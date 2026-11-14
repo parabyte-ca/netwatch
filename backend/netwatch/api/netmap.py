@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 import time
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,6 +15,8 @@ from ..services.diagnosis import MERGE_GAP_MS
 router = APIRouter(prefix="/api/map")
 
 LAYOUT_KEY = "map_layout"
+VIEWS_KEY = "map_views"
+MAX_VIEWS = 20
 MAX_NODES = 1000
 MAX_COORD = 100_000
 
@@ -48,6 +51,7 @@ async def get_map(
     at: int | None = Query(default=None, description="epoch ms; omit for live"),
     incident: str | None = Query(default=None, description="incident id (i<start_ms>)"),
     event: int | None = Query(default=None, description="an event of the incident"),
+    show_offline: bool = False,
 ) -> dict:
     st = request.app.state
     now = int(time.time() * 1000)
@@ -62,7 +66,9 @@ async def get_map(
             # Replay a moment inside the incident, where the failure is visible.
             end = inc.end_ms or now
             at = min(inc.start_ms + 30_000, (inc.start_ms + end) // 2) if inc.end_ms else None
-    graph = await asyncio.to_thread(st.netmap.build, at_ms=at, now_ms=now)
+    graph = await asyncio.to_thread(
+        lambda: st.netmap.build(at_ms=at, now_ms=now, show_offline=show_offline)
+    )
     if inc is not None:
         graph["highlight"] = st.netmap.highlight(inc.as_dict(now), graph)
     return graph
@@ -77,12 +83,47 @@ class Position(BaseModel):
 class LayoutIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     positions: dict[str, Position] = Field(max_length=MAX_NODES)
+    # Groups shown as one node per parent (keys "<group id>@<parent node id>" or "<group id>").
+    collapsed: list[str] | None = Field(default=None, max_length=MAX_NODES)
+
+
+class MapView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=40)
+    colour_by: Literal["group", "status", "bandwidth"] = "group"
+    groups: list[int] = Field(default=[], max_length=50)
+    tags: list[str] = Field(default=[], max_length=20)
+    collapsed: list[str] = Field(default=[], max_length=200)
+    show_offline: bool = False
+
+
+class ViewsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    views: list[MapView] = Field(max_length=MAX_VIEWS)
 
 
 @router.get("/layout")
 async def get_layout(request: Request) -> dict:
     saved = await asyncio.to_thread(request.app.state.store.kv_get, LAYOUT_KEY, None)
-    return {"positions": (saved or {}).get("positions", {})}
+    return {
+        "positions": (saved or {}).get("positions", {}),
+        "collapsed": (saved or {}).get("collapsed", []),
+    }
+
+
+@router.get("/views")
+async def get_views(request: Request) -> dict:
+    return {"views": await asyncio.to_thread(request.app.state.store.kv_get, VIEWS_KEY, []) or []}
+
+
+@router.put("/views")
+async def put_views(body: ViewsIn, request: Request) -> dict:
+    names = [v.name.strip().lower() for v in body.views]
+    if len(set(names)) != len(names):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "view names must be unique")
+    views = [v.model_dump() for v in body.views]
+    await asyncio.to_thread(request.app.state.store.kv_set, VIEWS_KEY, views)
+    return {"views": views}
 
 
 @router.put("/layout")
@@ -94,8 +135,17 @@ async def put_layout(body: LayoutIn, request: Request) -> dict:
         if not all(math.isfinite(v) and abs(v) <= MAX_COORD for v in (p.x, p.y)):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "position out of range")
         positions[nid] = {"x": round(p.x, 1), "y": round(p.y, 1)}
-    await asyncio.to_thread(request.app.state.store.kv_set, LAYOUT_KEY, {"positions": positions})
-    return {"positions": positions}
+    store = request.app.state.store
+    saved = await asyncio.to_thread(store.kv_get, LAYOUT_KEY, None) or {}
+    collapsed = (
+        saved.get("collapsed", [])
+        if body.collapsed is None
+        else [c[:200] for c in body.collapsed if c]
+    )
+    await asyncio.to_thread(
+        store.kv_set, LAYOUT_KEY, {"positions": positions, "collapsed": collapsed}
+    )
+    return {"positions": positions, "collapsed": collapsed}
 
 
 @router.delete("/layout", status_code=status.HTTP_204_NO_CONTENT)

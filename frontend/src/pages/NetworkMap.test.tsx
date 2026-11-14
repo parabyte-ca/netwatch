@@ -60,6 +60,7 @@ function mockApi(calls: { url: string; method: string; body?: unknown }[], g = g
     const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status });
     if (url === '/api/map/layout' && method === 'DELETE') return new Response(null, { status: 204 });
     if (url === '/api/map/layout') return json({ positions });
+    if (url === '/api/map/views') return json({ views: [] });
     if (url.startsWith('/api/map')) return json(g);
     if (url.startsWith('/api/diagnosis')) return json({ now_ms: Date.now(), topology: [], patterns: [], incidents: [] });
     return json({});

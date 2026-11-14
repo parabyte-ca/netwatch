@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import Engine, and_, delete, func, insert, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from ...db import device_ips, devices
+from ...db import device_ips, device_tags, devices
 from .classify import classify, is_randomised, mergeable_name, vendor_for
 from .packets import Observation, usable_ip
 
@@ -141,11 +141,13 @@ class DeviceStore:
             return conn.execute(select(func.count()).select_from(devices)).scalar_one()
 
     def purge(self, cutoff_ms: int) -> int:
-        """Forget devices unseen since cutoff, unless named or monitored."""
+        """Forget devices unseen since cutoff, unless named, monitored, grouped or tagged."""
         cond = and_(
             devices.c.last_seen_ms < cutoff_ms,
             devices.c.name.is_(None),
             devices.c.target_id.is_(None),
+            devices.c.group_id.is_(None),
+            ~devices.c.id.in_(select(device_tags.c.device_id)),
         )
         with self.engine.begin() as conn:
             ids = [r[0] for r in conn.execute(select(devices.c.id).where(cond))]
@@ -404,7 +406,14 @@ class Inventory:
 
     # ── read model for the API ────────────────────────────────────────────────
 
-    def listing(self, now_ms: int, *, q: str | None = None) -> list[dict]:
+    def listing(
+        self,
+        now_ms: int,
+        *,
+        q: str | None = None,
+        group_id: int | None = None,
+        tag: str | None = None,
+    ) -> list[dict]:
         rows = self.store.all()
         by_id = {r["id"]: r for r in rows}
         groups: dict[int, list[dict]] = {}
@@ -412,11 +421,17 @@ class Inventory:
             primary = r["merged_into"] if r["merged_into"] in by_id else r["id"]
             groups.setdefault(primary, []).append(r)
         wanted = self.store.search_ids(q) if q else None
+        gstore = getattr(self, "groups", None)  # GroupStore, set in main.py
+        if gstore is not None and (group_id is not None or tag):
+            only = gstore.members_of(group_id, tag)["primaries"]
+            wanted = only if wanted is None else wanted & only
         out = []
         for pid, members in groups.items():
             if wanted is not None and pid not in wanted:
                 continue
             out.append(summarise_group(by_id[pid], members, now_ms))
+        if gstore is not None:
+            gstore.decorate(out)
         out.sort(key=lambda d: (not d["online"], d["label"].lower()))
         return out
 

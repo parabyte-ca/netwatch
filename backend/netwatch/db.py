@@ -203,6 +203,18 @@ throughput_tests = Table(
 
 # Discovered devices, one row per MAC. Randomised (private) MACs of one phone are linked to a
 # primary row through merged_into. target_id is set while the device is being monitored.
+# Groups and tags you give devices (v0.14): kept on the primary row of merged devices.
+device_groups = Table(
+    "device_groups",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("name", String(40), nullable=False, unique=True),
+    Column("colour", String(16), nullable=False),  # palette key
+    Column("icon", String(16), nullable=False),  # icon key
+    Column("sort", Integer, nullable=False, default=0),
+    Column("created_ms", Integer, nullable=False),
+)
+
 devices = Table(
     "devices",
     metadata,
@@ -224,6 +236,9 @@ devices = Table(
     Column("last_ip", String(15)),
     Column("notes", String(500)),
     Column("details", Text, nullable=False, default="{}"),
+    # A device_groups id; no foreign key (SQLite cannot add one without rebuilding this table,
+    # which other tables cascade from). GroupStore.delete clears it.
+    Column("group_id", Integer),
 )
 
 device_ips = Table(
@@ -314,6 +329,15 @@ adguard_stats = Table(
     sqlite_with_rowid=False,
 )
 
+device_tags = Table(
+    "device_tags",
+    metadata,
+    Column("device_id", Integer, ForeignKey("devices.id", ondelete="CASCADE"), primary_key=True),
+    Column("tag", String(24), primary_key=True),
+    sqlite_with_rowid=False,
+)
+Index("ix_device_tags_tag", device_tags.c.tag)
+
 # AdGuard Home queries per client and hour. Domain lists are cleared after the raw retention
 # (they are a browsing history); the counts are kept as long as the rollups.
 adguard_clients = Table(
@@ -379,6 +403,7 @@ Index("ix_devices_last_seen", devices.c.last_seen_ms)
 Index("ix_devices_target", devices.c.target_id)
 Index("ix_devices_merged", devices.c.merged_into)
 Index("ix_bufferbloat_ts", bufferbloat_tests.c.ts_ms)
+Index("ix_devices_group", devices.c.group_id)
 Index("ix_adguard_clients_device", adguard_clients.c.device_id, adguard_clients.c.hour_ms)
 Index("ix_exposure_scans_ts", exposure_scans.c.ts_ms)
 Index("ix_events_open", events.c.start_ms, sqlite_where=events.c.end_ms.is_(None))

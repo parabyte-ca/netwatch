@@ -5,6 +5,7 @@ import { DeviceTraffic } from '../components/DeviceTraffic';
 import { EventRow } from '../components/EventRow';
 import { api, type DeviceType } from '../lib/api';
 import { DEVICE_TYPE_LABEL, fmtAgo, fmtTime } from '../lib/format';
+import { GroupBadge, TagChip } from '../lib/groups';
 import { usePolling } from '../lib/usePolling';
 
 const input = 'rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-100 focus:border-sky-500 focus:outline-none';
@@ -38,6 +39,9 @@ export function DeviceDetail() {
   const [type, setType] = useState('');
   const [notes, setNotes] = useState('');
   const [mergeInto, setMergeInto] = useState('');
+  const [newTag, setNewTag] = useState('');
+  const groupsQ = usePolling(api.deviceGroups, 60_000);
+  const tagsQ = usePolling(api.deviceTags, 60_000);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -128,6 +132,37 @@ export function DeviceDetail() {
               maxLength={500} value={notes} onChange={(e) => setNotes(e.target.value)} />
             <button type="submit" disabled={busy} className={`${btn} bg-sky-600 text-white hover:bg-sky-500`}>Save</button>
           </form>
+          <div className="mt-4 space-y-2 border-t border-slate-800 pt-3 text-sm" aria-label="Group and tags">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-slate-400">Group</span>
+              <select aria-label="Group" className={input} value={d.group?.id ?? ''} disabled={busy}
+                onChange={(e) => void act(() => api.editDevice(d.id, { group_id: e.target.value ? Number(e.target.value) : null }))}>
+                <option value="">No group</option>
+                {(groupsQ.data?.groups ?? []).map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </select>
+              {d.group && <GroupBadge group={d.group} />}
+              <Link to="/devices" className="text-xs text-sky-400 hover:underline">Manage groups</Link>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 text-slate-400">Tags</span>
+              {d.tags.map((t) => (
+                <TagChip key={t} tag={t} onRemove={() => void act(() => api.editDevice(d.id, { tags: d.tags.filter((x) => x !== t) }))} />
+              ))}
+              <form className="inline-flex" onSubmit={(e) => {
+                e.preventDefault();
+                const t = newTag.trim().toLowerCase().replace(/\s+/g, '-');
+                if (!t || d.tags.includes(t)) return;
+                void act(async () => {
+                  await api.editDevice(d.id, { tags: [...d.tags, t] });
+                  setNewTag('');
+                });
+              }}>
+                <input aria-label="Add tag" list="known-tags" placeholder="add tag" className={`${input} w-28 py-0.5 text-xs`} maxLength={24}
+                  value={newTag} onChange={(e) => setNewTag(e.target.value)} />
+                <datalist id="known-tags">{(tagsQ.data ?? []).map((t) => <option key={t.tag} value={t.tag} />)}</datalist>
+              </form>
+            </div>
+          </div>
           <div className="mt-4 border-t border-slate-800 pt-3 text-sm">
             {data.target ? (
               <div className="flex flex-wrap items-center gap-3">

@@ -16,7 +16,10 @@ describe('Timeline', () => {
     const day = new Date('2026-10-17T15:00:00').getTime();
     const urls: string[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      urls.push(String(input));
+      const url = String(input);
+      if (url === '/api/device-groups') return new Response(JSON.stringify({ groups: [], colours: [], icons: [] }), { status: 200 });
+      if (url === '/api/device-tags') return new Response('[]', { status: 200 });
+      urls.push(url);
       return new Response(JSON.stringify([
         ev(1, 'outage', 'Gateway unreachable', day, day + 125_000),
         ev(2, 'nic_speed', 'enp3s0 renegotiated 2500 → 1000 Mb/s', day - 86_400_000, day - 86_400_000),
@@ -31,5 +34,21 @@ describe('Timeline', () => {
     expect(urls[0]).not.toContain('kind=monitor');
     fireEvent.click(screen.getByLabelText('NetWatch'));
     await waitFor(() => expect(urls.at(-1)).toContain('kind=monitor'));
+  });
+
+  it('filters by group when groups exist', async () => {
+    const urls: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === '/api/device-groups') {
+        return new Response(JSON.stringify({ groups: [{ id: 3, name: 'Kids', colour: 'rose', icon: 'child', sort: 1, created_ms: 1, devices: 2 }], colours: [], icons: [] }), { status: 200 });
+      }
+      if (url === '/api/device-tags') return new Response('[]', { status: 200 });
+      urls.push(url);
+      return new Response('[]', { status: 200 });
+    });
+    render(<MemoryRouter><Timeline /></MemoryRouter>);
+    fireEvent.change(await screen.findByLabelText('Group filter'), { target: { value: '3' } });
+    await waitFor(() => expect(urls.at(-1)).toContain('group_id=3'));
   });
 });

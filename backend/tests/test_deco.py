@@ -471,7 +471,9 @@ def test_map_api_and_layout(client, fake):
     assert edges[("hub", main)]["medium"] == "wired"
     assert edges[(main, sat)]["medium"] == "wireless"
     assert edges[(sat, f"dev:{tv['id']}")]["medium"] == "wired"
-    assert nodes[f"group:{main}"]["info"]["count"] == 1  # the phone, unnamed
+    # The unnamed phone is its own node too (no more "N more devices" bucket).
+    phone = next(n for n in g["nodes"] if n["kind"] == "device" and n["id"] != f"dev:{tv['id']}")
+    assert (main, phone["id"]) in edges and phone["info"]["group"] is None
 
     # replay a past moment and an unknown incident
     assert client.get(f"/api/map?at={int(time.time() * 1000) - 60_000}").status_code == 200
@@ -479,14 +481,14 @@ def test_map_api_and_layout(client, fake):
     assert client.get("/api/map?at=99999999999999").status_code == 422
 
     # layout
-    assert client.get("/api/map/layout").json() == {"positions": {}}
+    assert client.get("/api/map/layout").json() == {"positions": {}, "collapsed": []}
     r = client.put("/api/map/layout", json={"positions": {"hub": {"x": 10.04, "y": -5}}})
-    assert r.json() == {"positions": {"hub": {"x": 10.0, "y": -5.0}}}
+    assert r.json() == {"positions": {"hub": {"x": 10.0, "y": -5.0}}, "collapsed": []}
     assert client.get("/api/map/layout").json()["positions"]["hub"]["x"] == 10.0
     bad = client.put("/api/map/layout", json={"positions": {"hub": {"x": 1e9, "y": 0}}})
     assert bad.status_code == 422
     assert client.delete("/api/map/layout").status_code == 204
-    assert client.get("/api/map/layout").json() == {"positions": {}}
+    assert client.get("/api/map/layout").json() == {"positions": {}, "collapsed": []}
 
 
 def test_map_highlights_an_incident(client):

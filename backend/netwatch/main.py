@@ -24,6 +24,7 @@ from .api import (
     adguard_actions,
     admin,
     ask,
+    device_groups,
     devices,
     diagnosis,
     health,
@@ -46,6 +47,7 @@ from .services.adguard.service import AdGuardService, AdGuardStore
 from .services.assistant import Assistant
 from .services.bufferbloat import BufferbloatStore, BufferbloatTester
 from .services.deco.service import DecoService
+from .services.device_groups import GroupStore
 from .services.diagnosis import Diagnoser
 from .services.discovery.inventory import DeviceStore
 from .services.discovery.service import DiscoveryService
@@ -299,6 +301,8 @@ def create_app(
             devices=device_store,
             local_dns=lambda: {app.state.adguard.config()["host"]} - {""},
         )
+        app.state.groups = GroupStore(engine)
+        discovery.inventory.groups = app.state.groups
         app.state.discovery = discovery
         app.state.traffic = traffic_store
         bufferbloat_store = BufferbloatStore(engine)
@@ -499,6 +503,7 @@ def create_app(
     app.include_router(diagnosis.router)
     app.include_router(admin.router)
     app.include_router(adguard_actions.router)
+    app.include_router(device_groups.router)
     app.include_router(netmap.router)
     app.include_router(traffic.router)
     app.include_router(score.router)

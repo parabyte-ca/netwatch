@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from typing import Literal
 
@@ -33,21 +34,44 @@ async def list_events(
     target_id: int | None = None,
     open_only: bool = False,
     limit: int = Query(default=200, ge=1, le=2000),
+    group_id: int | None = Query(default=None, ge=0),
+    tag: str | None = Query(default=None, max_length=24),
 ) -> list[dict]:
     end_ms = (end or int(time.time()) + 1) * 1000
     start_ms = (start or int(time.time()) - 7 * 86400) * 1000
     bad = [k for k in kind if k not in KINDS]
     if bad:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"unknown kind: {', '.join(bad)}")
-    return await asyncio.to_thread(
+    if group_id is None and not tag:
+        return await asyncio.to_thread(
+            request.app.state.events.list,
+            start_ms,
+            end_ms,
+            kinds=kind,
+            target_id=target_id,
+            open_only=open_only,
+            limit=limit,
+        )
+    # Events about the group's devices: by target, device id or MAC in the details.
+    who = await asyncio.to_thread(request.app.state.groups.members_of, group_id, tag)
+    rows = await asyncio.to_thread(
         request.app.state.events.list,
         start_ms,
         end_ms,
         kinds=kind,
         target_id=target_id,
         open_only=open_only,
-        limit=limit,
+        limit=min(limit * 5, 5000),
     )
+
+    def about(e: dict) -> bool:
+        det = e.get("details") or {}
+        if e.get("target_id") in who["targets"] or det.get("device_id") in who["ids"]:
+            return True
+        text = json.dumps(det)
+        return any(m in text for m in who["macs"])
+
+    return [e for e in rows if about(e)][:limit]
 
 
 @router.get("/events/active")

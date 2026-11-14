@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.14.0] - 2026-11-14
+### Added
+- Device groups and tags. Groups have a name, a colour and an icon (for example Smart home,
+  Family, Kids, or one child's devices); tags are free labels, several per device. Manage groups
+  from Devices → Groups…, accept suggested groups based on the device type, assign one device on
+  its page or many at once with the new selection bar, and filter the Devices page and the
+  timeline by group or tag. Export and import the set-up as a file (devices matched by MAC).
+- Every device on the map: each device is its own node under its Deco (or the Home Hub),
+  coloured by group, status or live bandwidth, with its tags as badges. Many devices under one
+  Deco are laid out in a grid with groups together. Group chips highlight a group or fold it into
+  one node; recently offline devices can be shown; the current colouring, filters and folded
+  groups can be saved as named views. Folded groups and dragged positions are saved in NetWatch.
+
+### Changed
+- The map no longer collects unnamed devices into an "N more devices" node.
+- Devices in a group or with tags are never forgotten as stale, like named or monitored ones.
+
+### Database
+- Migration 0010 adds `device_groups`, `device_tags` and a `group_id` column on `devices`.
+
 ## [0.13.0] - 2026-11-14
 ### Added
 - AdGuard Home actions, off by default (Admin → settings → Integrations). When turned on, the

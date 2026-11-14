@@ -306,7 +306,31 @@ export type DeviceType =
   | 'iot'
   | 'unknown';
 
+export interface GroupRef {
+  id: number;
+  name: string;
+  colour: string;
+  icon: string;
+}
+
+export interface DeviceGroup extends GroupRef {
+  sort: number;
+  created_ms: number;
+  devices: number;
+}
+
+export interface GroupSuggestion {
+  name: string;
+  group_id: number | null;
+  colour: string;
+  icon: string;
+  devices: { id: number; label: string; type: string }[];
+}
+
 export interface DeviceRow {
+  group: GroupRef | null;
+  group_id: number | null;
+  tags: string[];
   id: number;
   mac: string;
   vendor: string | null;
@@ -516,7 +540,7 @@ export interface DiscoveryStatus {
   devices: { total: number; online: number };
 }
 
-export type DeviceEdit = Partial<Pick<DeviceRow, 'name' | 'type_override' | 'notes'>>;
+export type DeviceEdit = Partial<Pick<DeviceRow, 'name' | 'type_override' | 'notes' | 'group_id' | 'tags'>>;
 
 export interface TopologyNode {
   layer: string;
@@ -750,7 +774,7 @@ export interface HubStatus {
   suggestion?: string | null;
 }
 
-export type MapNodeKind = 'internet' | 'isp' | 'hub' | 'switch' | 'host' | 'deco' | 'device' | 'group';
+export type MapNodeKind = 'internet' | 'isp' | 'hub' | 'switch' | 'host' | 'deco' | 'device' | 'group' | 'devgroup';
 
 export interface MapMember {
   target_id: number;
@@ -797,7 +821,25 @@ export interface MapNode {
     tx_dbm?: number | null;
     wan_up?: boolean | null;
     wan_ip?: string | null;
+    last_seen_ms?: number;
+    group?: GroupRef | null;
+    tags?: string[];
+    parent?: string;
+    collapsed?: string[];
   };
+}
+
+export interface MapGroup extends GroupRef {
+  nodes: string[];
+}
+
+export interface MapView {
+  name: string;
+  colour_by: 'group' | 'status' | 'bandwidth';
+  groups: number[];
+  tags: string[];
+  collapsed: string[];
+  show_offline: boolean;
 }
 
 export interface MapEdge {
@@ -823,6 +865,8 @@ export interface NetworkMapResponse {
   generated_ms: number;
   at_ms: number | null;
   deco_api: boolean;
+  show_offline?: boolean;
+  groups?: MapGroup[];
   nodes: MapNode[];
   edges: MapEdge[];
   highlight?: MapHighlight;
@@ -1040,8 +1084,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ mode, window }),
     }),
-  events: (params: { start?: number; end?: number; kind?: EventKind[]; target_id?: number; limit?: number } = {}) => {
+  events: (params: { start?: number; end?: number; kind?: EventKind[]; target_id?: number; limit?: number; group_id?: number; tag?: string } = {}) => {
     const q = new URLSearchParams();
+    if (params.group_id !== undefined) q.set('group_id', String(params.group_id));
+    if (params.tag) q.set('tag', params.tag);
     if (params.start) q.set('start', String(params.start));
     if (params.end) q.set('end', String(params.end));
     if (params.target_id) q.set('target_id', String(params.target_id));
@@ -1062,6 +1108,20 @@ export const api = {
   deleteIperfServer: (id: number) => request<void>(`/api/iperf/servers/${id}`, { method: 'DELETE' }),
   runIperf: (id: number) => request<ThroughputTest[]>(`/api/iperf/servers/${id}/run`, post()),
   iperfTests: () => request<ThroughputTest[]>('/api/iperf/tests'),
+  deviceGroups: () => request<{ groups: DeviceGroup[]; colours: string[]; icons: string[] }>('/api/device-groups'),
+  createGroup: (body: { name: string; colour: string; icon: string }) => request<DeviceGroup>('/api/device-groups', post(body)),
+  editGroup: (id: number, body: Partial<{ name: string; colour: string; icon: string; sort: number }>) =>
+    request<DeviceGroup>(`/api/device-groups/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteGroup: (id: number) => request<{ ungrouped: number }>(`/api/device-groups/${id}`, { method: 'DELETE' }),
+  groupSuggestions: () => request<GroupSuggestion[]>('/api/device-groups/suggestions'),
+  acceptSuggestion: (group_name: string, device_ids: number[]) =>
+    request<DeviceGroup>('/api/device-groups/suggestions/accept', post({ group_name, device_ids })),
+  deviceTags: () => request<{ tag: string; devices: number }[]>('/api/device-tags'),
+  bulkDevices: (body: { ids: number[]; group_id?: number; add_tags?: string[]; remove_tags?: string[] }) =>
+    request<{ updated: number }>('/api/devices/bulk', post(body)),
+  groupsExportUrl: '/api/device-groups/export',
+  importGroups: (data: unknown) =>
+    request<{ groups_created: number; devices: number; unknown_macs: string[] }>('/api/device-groups/import', post(data)),
   devices: (q?: string) =>
     request<{ now_ms: number; devices: DeviceRow[] }>(`/api/devices${q ? `?q=${encodeURIComponent(q)}` : ''}`),
   device: (id: number) => request<DeviceDetail>(`/api/devices/${id}`),
@@ -1081,8 +1141,9 @@ export const api = {
   diagnosisForEvent: (eventId: number) => request<Incident>(`/api/diagnosis/event/${eventId}`),
   report: (start: number, scope: 'all' | 'isp') => request<Report>(`/api/report?start=${start}&scope=${scope}`),
   reportMarkdownUrl: (start: number, scope: 'all' | 'isp') => `/api/report?start=${start}&scope=${scope}&format=md`,
-  map: (params: { at?: number; incident?: string; event?: number } = {}) => {
+  map: (params: { at?: number; incident?: string; event?: number; show_offline?: boolean } = {}) => {
     const q = new URLSearchParams();
+    if (params.show_offline) q.set('show_offline', 'true');
     if (params.at) q.set('at', String(params.at));
     if (params.incident) q.set('incident', params.incident);
     if (params.event) q.set('event', String(params.event));
@@ -1132,9 +1193,13 @@ export const api = {
   trafficTop: (hours: number) => request<TrafficTop>(`/api/traffic/top?hours=${hours}`),
   deviceDns: (id: number, hours: number) => request<DeviceDns>(`/api/devices/${id}/dns?hours=${hours}`),
   deviceTraffic: (id: number, hours: number) => request<DeviceTraffic>(`/api/devices/${id}/traffic?hours=${hours}`),
-  mapLayout: () => request<{ positions: MapPositions }>('/api/map/layout'),
-  saveMapLayout: (positions: MapPositions) =>
-    request<{ positions: MapPositions }>('/api/map/layout', { method: 'PUT', body: JSON.stringify({ positions }) }),
+  mapLayout: () => request<{ positions: MapPositions; collapsed?: string[] }>('/api/map/layout'),
+  saveMapLayout: (positions: MapPositions, collapsed?: string[]) =>
+    request<{ positions: MapPositions; collapsed: string[] }>('/api/map/layout', {
+      method: 'PUT', body: JSON.stringify(collapsed === undefined ? { positions } : { positions, collapsed }),
+    }),
+  mapViews: () => request<{ views: MapView[] }>('/api/map/views'),
+  saveMapViews: (views: MapView[]) => request<{ views: MapView[] }>('/api/map/views', { method: 'PUT', body: JSON.stringify({ views }) }),
   resetMapLayout: () => request<void>('/api/map/layout', { method: 'DELETE' }),
   deco: () => request<DecoStatus>('/api/admin/deco'),
   saveDeco: (body: { host: string; enabled: boolean; password?: string; forget_password?: boolean }) =>

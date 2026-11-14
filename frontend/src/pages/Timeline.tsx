@@ -19,10 +19,17 @@ function dayKey(ms: number) {
 export function Timeline() {
   const [span, setSpan] = useState(SPANS[1]!);
   const [kinds, setKinds] = useState<EventKind[]>(KINDS.filter((k) => k !== 'monitor' && k !== 'security'));
+  const [group, setGroup] = useState('');
+  const [tag, setTag] = useState('');
+  const groupsQ = usePolling(api.deviceGroups, 120_000);
+  const tagsQ = usePolling(api.deviceTags, 120_000);
   const { data, error } = usePolling(
-    () => api.events({ start: Math.floor(Date.now() / 1000) - span.s, kind: kinds, limit: 1000 }),
+    () => api.events({
+      start: Math.floor(Date.now() / 1000) - span.s, kind: kinds, limit: 1000,
+      group_id: group ? Number(group) : undefined, tag: tag || undefined,
+    }),
     15_000,
-    [span.key, kinds.join(',')],
+    [span.key, kinds.join(','), group, tag],
   );
 
   const groups = new Map<string, TimelineEvent[]>();
@@ -53,6 +60,21 @@ export function Timeline() {
           </label>
         ))}
       </div>
+      {((groupsQ.data?.groups.length ?? 0) > 0 || (tagsQ.data?.length ?? 0) > 0) && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
+          <span>Only events about</span>
+          <select aria-label="Group filter" className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1" value={group} onChange={(e) => setGroup(e.target.value)}>
+            <option value="">any device</option>
+            {(groupsQ.data?.groups ?? []).map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+          </select>
+          {(tagsQ.data?.length ?? 0) > 0 && (
+            <select aria-label="Tag filter" className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1" value={tag} onChange={(e) => setTag(e.target.value)}>
+              <option value="">any tag</option>
+              {(tagsQ.data ?? []).map((t) => <option key={t.tag} value={t.tag}>#{t.tag}</option>)}
+            </select>
+          )}
+        </div>
+      )}
       {error && <p className="text-rose-400">{error}</p>}
       {data && data.length === 0 && (
         <p className="rounded-lg border border-dashed border-slate-700 p-8 text-center text-slate-400">

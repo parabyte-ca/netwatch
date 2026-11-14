@@ -14,7 +14,9 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, type Incident, type MapEdge, type MapHighlight, type MapNode, type MapPositions, type NetworkMapResponse } from '../lib/api';
+import { api, type Incident, type MapEdge, type MapHighlight, type MapNode, type MapPositions, type MapView, type NetworkMapResponse } from '../lib/api';
+import { GroupIcon, colourOf } from '../lib/groups';
+import { shapeGraph, type ColourBy } from '../lib/mapGroups';
 import { TopTalkers } from '../components/TopTalkers';
 import { DEVICE_TYPE_LABEL, STATE_STYLE, fmtBps, fmtDurationMs, fmtMs, fmtPct, fmtTime, lossColour } from '../lib/format';
 import { NODE_H, NODE_W, layoutMap } from '../lib/mapLayout';
@@ -34,9 +36,10 @@ const ICON: Record<MapNode['kind'], string> = {
   deco: '📶',
   device: '💻',
   group: '⋯',
+  devgroup: '▣',
 };
 
-type MapNodeData = { node: MapNode; mark: 'cause' | 'failing' | null };
+type MapNodeData = { node: MapNode; mark: 'cause' | 'failing' | null; accent: string | null; faded: boolean };
 type FlowNode = Node<MapNodeData, 'net'>;
 
 function rates(t: { down_bps: number; up_bps: number }): string {
@@ -45,25 +48,33 @@ function rates(t: { down_bps: number; up_bps: number }): string {
 
 function subline(n: MapNode): string {
   if (n.traffic) return rates(n.traffic);
-  if (n.kind === 'group') return 'tap to list';
+  if (n.kind === 'group' || n.kind === 'devgroup') return 'tap to list';
   const m = n.members.find((x) => x.median_ms != null);
   const parts = [n.info.ip, n.info.backhaul && n.kind === 'deco' ? n.info.backhaul : null, m ? fmtMs(m.median_ms) : null];
   return parts.filter(Boolean).join(' · ') || (n.inferred ? 'inferred' : '');
 }
 
 function NetNode({ data, selected }: NodeProps<FlowNode>) {
-  const { node: n, mark } = data;
+  const { node: n, mark, accent, faded } = data;
+  const group = n.info.group;
+  const tags = n.info.tags ?? [];
   const st = STATE_STYLE[n.state];
   const ring =
     mark === 'cause' ? 'ring-4 ring-rose-500' : mark === 'failing' ? 'ring-2 ring-amber-400' : selected ? 'ring-2 ring-sky-500' : `ring-1 ${st.ring}`;
   return (
     <div
-      className={`relative flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-left shadow ${ring} ${n.inferred ? 'border border-dashed border-slate-600' : ''}`}
-      style={{ width: NODE_W, height: NODE_H }}
+      className={`relative flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-left shadow transition-opacity ${ring} ${n.inferred ? 'border border-dashed border-slate-600' : ''} ${faded ? 'opacity-25' : ''} ${n.kind === 'devgroup' ? 'bg-slate-800' : ''}`}
+      style={{ width: NODE_W, height: NODE_H, ...(accent ? { borderLeft: `4px solid ${accent}` } : {}) }}
       data-testid={`node-${n.id}`}
     >
       <Handle type="target" position={Position.Top} className="!h-1 !w-1 !border-0 !bg-slate-600" />
-      <span className="text-xl" aria-hidden>{ICON[n.kind]}</span>
+      {group && (n.kind === 'device' || n.kind === 'devgroup') ? (
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md" style={{ color: colourOf(group.colour).hex, background: `${colourOf(group.colour).hex}22` }} aria-hidden>
+          <GroupIcon icon={group.icon} className="h-4 w-4" />
+        </span>
+      ) : (
+        <span className="text-xl" aria-hidden>{ICON[n.kind]}</span>
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className={`h-2 w-2 shrink-0 rounded-full ${st.dot}`} title={st.label} />
@@ -72,6 +83,12 @@ function NetNode({ data, selected }: NodeProps<FlowNode>) {
         <div className="truncate text-[11px] text-slate-400">{subline(n)}</div>
       </div>
       {mark === 'cause' && <span className="absolute -top-2 right-2 rounded bg-rose-600 px-1 text-[10px] text-white">likely cause</span>}
+      {tags.length > 0 && (
+        <span className="absolute -bottom-2 right-2 flex gap-1">
+          {tags.slice(0, 2).map((t) => <span key={t} className="rounded-full bg-slate-700 px-1.5 text-[9px] leading-4 text-slate-200">#{t}</span>)}
+          {tags.length > 2 && <span className="rounded-full bg-slate-700 px-1.5 text-[9px] leading-4 text-slate-300">+{tags.length - 2}</span>}
+        </span>
+      )}
       <Handle type="source" position={Position.Bottom} className="!h-1 !w-1 !border-0 !bg-slate-600" />
     </div>
   );
@@ -85,14 +102,15 @@ function edgeLabel(e: MapEdge): string | undefined {
   return text || undefined;
 }
 
-function toFlow(g: NetworkMapResponse, pos: MapPositions, hl: MapHighlight | undefined): { nodes: FlowNode[]; edges: Edge[] } {
+function toFlow(g: { nodes: MapNode[]; edges: MapEdge[] }, pos: MapPositions, hl: MapHighlight | undefined,
+  accent: Map<string, string | null>, faded: Set<string>): { nodes: FlowNode[]; edges: Edge[] } {
   const cause = new Set(hl?.cause_nodes ?? []);
   const failing = new Set(hl?.failing_nodes ?? []);
   const nodes: FlowNode[] = g.nodes.map((n) => ({
     id: n.id,
     type: 'net',
     position: pos[n.id] ?? { x: 0, y: 0 },
-    data: { node: n, mark: cause.has(n.id) ? 'cause' : failing.has(n.id) ? 'failing' : null },
+    data: { node: n, mark: cause.has(n.id) ? 'cause' : failing.has(n.id) ? 'failing' : null, accent: accent.get(n.id) ?? null, faded: faded.has(n.id) },
   }));
   const byId = new Map(g.nodes.map((n) => [n.id, n]));
   const edges: Edge[] = g.edges.map((e) => {
@@ -133,6 +151,8 @@ function Details({ n, onClose }: { n: MapNode; onClose: () => void }) {
     ['Type', i.type && (DEVICE_TYPE_LABEL[i.type] ?? i.type)],
     ['Vendor', i.vendor],
     ['Connection', i.connection],
+    ['Group', i.group && <span style={{ color: colourOf(i.group.colour).hex }}>{i.group.name}</span>],
+    ['Tags', i.tags && i.tags.length > 0 && i.tags.map((t) => `#${t}`).join(' ')],
     ['Uptime', i.uptime_s != null && fmtDurationMs(i.uptime_s * 1000)],
     ['Fibre signal', i.rx_dbm != null && `${i.rx_dbm} dBm received${i.tx_dbm != null ? `, ${i.tx_dbm} dBm sent` : ''}`],
     ['Internet', i.wan_up != null && (i.wan_up ? `up${i.wan_ip ? ` · ${i.wan_ip}` : ''}` : 'down')],
@@ -203,16 +223,28 @@ export function NetworkMap() {
   const [graph, setGraph] = useState<NetworkMapResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<MapPositions>({});
+  const [collapsed, setCollapsed] = useState<string[]>([]);
+  const [colourBy, setColourBy] = useState<ColourBy>('group');
+  const [groupFilter, setGroupFilter] = useState<number[]>([]);
+  const [tagFilter, setTagFilter] = useState('');
+  const [showOffline, setShowOffline] = useState(false);
+  const [views, setViews] = useState<MapView[]>([]);
+  const [viewName, setViewName] = useState('');
   const [layoutReady, setLayoutReady] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const flowRef = useRef<{ fitView: (o?: { padding?: number; duration?: number }) => unknown } | null>(null);
   const savedRef = useRef(saved);
   savedRef.current = saved;
 
   useEffect(() => {
-    api.mapLayout().then((r) => setSaved(r.positions), () => undefined).finally(() => setLayoutReady(true));
+    api.mapLayout().then((r) => {
+      setSaved(r.positions);
+      setCollapsed(r.collapsed ?? []);
+    }, () => undefined).finally(() => setLayoutReady(true));
+    api.mapViews().then((r) => setViews(r.views ?? []), () => undefined);
   }, []);
 
   useEffect(() => {
@@ -222,12 +254,12 @@ export function NetworkMap() {
 
   const load = useCallback(async () => {
     try {
-      setGraph(await api.map({ at: atParam, incident: incidentParam, event: eventParam }));
+      setGraph(await api.map({ at: atParam, incident: incidentParam, event: eventParam, show_offline: showOffline }));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [atParam, incidentParam, eventParam]);
+  }, [atParam, incidentParam, eventParam, showOffline]);
 
   useEffect(() => {
     void load();
@@ -238,22 +270,61 @@ export function NetworkMap() {
     return () => clearInterval(t);
   }, [load, replay]);
 
+  const shaped = useMemo(
+    () => (graph ? shapeGraph(graph, { colourBy, groups: groupFilter, tags: tagFilter ? [tagFilter] : [], collapsed }) : null),
+    [graph, colourBy, groupFilter, tagFilter, collapsed],
+  );
   // Recompute positions only when the set of nodes changes, so polling does not undo a drag.
-  const shape = graph ? graph.nodes.map((n) => n.id).sort().join('|') + '#' + graph.edges.map((e) => e.id).sort().join('|') : '';
+  const shape = shaped ? shaped.nodes.map((n) => n.id).sort().join('|') + '#' + shaped.edges.map((e) => e.id).sort().join('|') : '';
   const positions = useMemo(
-    () => (graph ? layoutMap(graph.nodes, graph.edges, saved) : {}),
+    () => (shaped ? layoutMap(shaped.nodes, shaped.edges, saved) : {}),
     [shape, saved],
   );
 
   useEffect(() => {
-    if (!graph || !layoutReady) return;
-    const flow = toFlow(graph, positions, graph.highlight);
+    if (!graph || !shaped || !layoutReady) return;
+    const flow = toFlow(shaped, positions, graph.highlight, shaped.accent, shaped.faded);
     setNodes((cur) => {
       const where = new Map(cur.map((n) => [n.id, n.position]));
       return flow.nodes.map((n) => ({ ...n, position: where.get(n.id) ?? n.position, selected: n.id === selected }));
     });
     setEdges(flow.edges);
-  }, [graph, positions, layoutReady, selected, setNodes, setEdges]);
+  }, [graph, shaped, positions, layoutReady, selected, setNodes, setEdges]);
+
+  // When nodes appear or disappear (a group folded or opened, offline devices shown), fit the
+  // whole map in view again. Not on every poll: only when the shape changes.
+  useEffect(() => {
+    const t = setTimeout(() => void flowRef.current?.fitView({ padding: 0.15, duration: 300 }), 60);
+    return () => clearTimeout(t);
+  }, [shape]);
+
+  const toggleCollapse = (gid: number) => {
+    const key = String(gid);
+    const next = collapsed.includes(key) ? collapsed.filter((c) => c !== key) : [...collapsed, key];
+    setCollapsed(next);
+    api.saveMapLayout(savedRef.current, next).catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  };
+  const toggleGroupFilter = (gid: number) =>
+    setGroupFilter((cur) => (cur.includes(gid) ? cur.filter((x) => x !== gid) : [...cur, gid]));
+  const applyView = (v: MapView) => {
+    setColourBy(v.colour_by);
+    setGroupFilter(v.groups);
+    setTagFilter(v.tags[0] ?? '');
+    setShowOffline(v.show_offline);
+    setCollapsed(v.collapsed);
+    api.saveMapLayout(savedRef.current, v.collapsed).catch(() => undefined);
+  };
+  const saveViews = (next: MapView[]) =>
+    api.saveMapViews(next).then((r) => setViews(r.views), (e) => setError(e instanceof Error ? e.message : String(e)));
+  const saveView = () => {
+    const name = viewName.trim();
+    if (!name) return;
+    const v: MapView = { name, colour_by: colourBy, groups: groupFilter, tags: tagFilter ? [tagFilter] : [], collapsed, show_offline: showOffline };
+    void saveViews([...views.filter((x) => x.name.toLowerCase() !== name.toLowerCase()), v]);
+    setViewName('');
+  };
+  const mapTags = [...new Set((graph?.nodes ?? []).flatMap((n) => n.info.tags ?? []))].sort();
+  const mapGroups = graph?.groups ?? [];
 
   const onDragStop = useCallback((_: unknown, _n: FlowNode, dragged: FlowNode[]) => {
     const next = { ...savedRef.current };
@@ -271,7 +342,7 @@ export function NetworkMap() {
   const setReplay = (p: Record<string, string>) => setParams(p, { replace: true });
   const now = Date.now();
   const at = graph?.at_ms ?? atParam ?? graph?.highlight?.start_ms ?? now;
-  const node = graph?.nodes.find((n) => n.id === selected) ?? null;
+  const node = shaped?.nodes.find((n) => n.id === selected) ?? null;
   const hl = graph?.highlight;
 
   return (
@@ -289,6 +360,63 @@ export function NetworkMap() {
             disabled={Object.keys(saved).length === 0} title="Forget dragged positions">Reset layout</button>
         </div>
       </div>
+
+      <section className="flex flex-wrap items-center gap-2 text-sm" aria-label="Map options">
+        <label className="flex items-center gap-1.5 text-slate-300">
+          Colour by
+          <select aria-label="Colour by" className={input} value={colourBy} onChange={(e) => setColourBy(e.target.value as ColourBy)}>
+            <option value="group">group</option>
+            <option value="status">status only</option>
+            <option value="bandwidth">bandwidth</option>
+          </select>
+        </label>
+        {mapTags.length > 0 && (
+          <select aria-label="Tag filter" className={input} value={tagFilter} onChange={(e) => setTagFilter(e.target.value)}>
+            <option value="">All tags</option>
+            {mapTags.map((t) => <option key={t} value={t}>#{t}</option>)}
+          </select>
+        )}
+        <label className="flex items-center gap-1.5 text-slate-300">
+          <input type="checkbox" checked={showOffline} onChange={(e) => setShowOffline(e.target.checked)} />
+          Show offline (24 h)
+        </label>
+        <span className="flex items-center gap-1.5">
+          <select aria-label="Saved views" className={input} value="" onChange={(e) => { const v = views.find((x) => x.name === e.target.value); if (v) applyView(v); }}>
+            <option value="">Views…</option>
+            {views.map((v) => <option key={v.name} value={v.name}>{v.name}</option>)}
+          </select>
+          <input aria-label="View name" placeholder="Save view as…" className={`${input} w-36`} maxLength={40} value={viewName}
+            onChange={(e) => setViewName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && saveView()} />
+          <button className={`${btn} text-slate-300 ring-1 ring-slate-700 hover:bg-slate-800`} disabled={!viewName.trim()} onClick={saveView}>Save</button>
+        </span>
+      </section>
+      {mapGroups.length > 0 && (
+        <ul className="flex flex-wrap gap-1.5" aria-label="Groups on the map">
+          {mapGroups.map((g) => {
+            const c = colourOf(g.colour);
+            const on = groupFilter.includes(g.id);
+            const isCollapsed = collapsed.includes(String(g.id));
+            return (
+              <li key={g.id} className={`inline-flex items-center overflow-hidden rounded-full text-xs ring-1 ${c.chip} ${groupFilter.length && !on ? 'opacity-50' : ''}`}>
+                <button className="inline-flex items-center gap-1 py-0.5 pl-2 pr-1" aria-pressed={on} onClick={() => toggleGroupFilter(g.id)}
+                  title={on ? 'Stop highlighting' : 'Highlight only this group'}>
+                  <GroupIcon icon={g.icon} className="h-3 w-3" /> {g.name} <span className="opacity-70">{g.nodes.length}</span>
+                </button>
+                <button className="border-l border-current/20 px-1.5 py-0.5 hover:bg-white/10" onClick={() => toggleCollapse(g.id)}
+                  aria-label={isCollapsed ? `Expand ${g.name}` : `Collapse ${g.name}`} title={isCollapsed ? 'Show each device' : 'Show as one node'}>
+                  {isCollapsed ? '▸' : '▾'}
+                </button>
+              </li>
+            );
+          })}
+          {views.length > 0 && <li className="ml-auto text-xs text-slate-500">
+            {views.map((v) => (
+              <button key={v.name} className="ml-2 hover:text-rose-300" title={`Delete the view ${v.name}`}
+                onClick={() => void saveViews(views.filter((x) => x.name !== v.name))}>✕ {v.name}</button>
+            ))}
+          </li>}
+        </ul>
+      )}
 
       {replay && (
         <section className="space-y-2 rounded-lg bg-slate-900 p-3 ring-1 ring-slate-800" aria-label="Replay">
@@ -351,6 +479,7 @@ export function NetworkMap() {
               colorMode="dark"
               fitView
               fitViewOptions={{ padding: 0.15 }}
+              onInit={(inst) => { flowRef.current = inst; }}
               minZoom={0.2}
               proOptions={{ hideAttribution: true }}
             >
@@ -365,7 +494,7 @@ export function NetworkMap() {
           ) : (
             <div className="rounded-lg bg-slate-900 p-4 text-sm text-slate-400 ring-1 ring-slate-800">
               {!replay && graph?.deco_api && <div className="mb-4"><TopTalkers limit={5} compact /></div>}
-              <p>Tap a node for details. Drag nodes to tidy the map; positions are saved.</p>
+              <p>Tap a node for details. Drag nodes to tidy the map; positions are saved. Group chips above the map highlight a group or fold it into one node.</p>
               <ul className="mt-3 space-y-1 text-xs">
                 <li><span className="inline-block w-8 border-t-2 border-slate-500 align-middle" /> wired</li>
                 <li><span className="inline-block w-8 border-t-2 border-dashed border-slate-500 align-middle" /> Wi-Fi</li>
