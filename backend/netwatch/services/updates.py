@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import statistics
 import tempfile
 import threading
 import time
@@ -39,6 +40,30 @@ WINDOW_MINUTES = 60
 REQUEST_STALE_S = 3600
 RUNNING_STALE_S = 1800
 _MAX_FILE = 256 * 1024
+
+# Update stages, in order, and the update.sh log lines that show each one was reached
+# (``common.sh`` prefixes every line with a UTC timestamp). "requested", "started" and "done"
+# come from request.json and status.json instead.
+UPDATE_STAGES = (
+    ("requested", "Requested", None),
+    ("started", "Agent started", None),
+    ("backup", "Backup", re.compile(r"^(Current: v|Database backed up)")),
+    ("download", "Download and verify", re.compile(
+        r"^(Pulling |Verifying the signature|Signed by CI|Checking out release|Building )")),
+    ("restart", "Restart", re.compile(r"^Restarting container")),
+    ("health", "Health check", re.compile(r"^Waiting for health check")),
+    ("done", "Done", None),
+)  # fmt: skip
+ROLLBACK_STAGES = (
+    ("requested", "Requested", None),
+    ("started", "Agent started", None),
+    ("restore", "Restore", re.compile(r"^(Rolling back|Restoring database|Restoring code)")),
+    ("health", "Health check", re.compile(r"^Waiting for health check")),
+    ("done", "Done", None),
+)
+_LOG_LINE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) (?:==>|WARN:|ERROR:) (.*)$")
+LAST_LINE_MAX = 160
+ESTIMATE_FROM = 5  # recent successful runs the time estimate is based on
 
 POLICY_KEY = "update_policy"
 CACHE_KEY = "update_cache"
@@ -224,6 +249,77 @@ class UpgradeFolder:
         return out
 
     def state(self, now: float) -> dict:
+        """Derived progress plus the stages reached, the latest log line and a time estimate."""
+        out = self._state(now)
+        if out["state"] != "idle":
+            out.update(self._stages(out))
+        return out
+
+    def _log_lines(self, since: float | None) -> list[tuple[float, str]]:
+        out = []
+        for line in self.log_tail().splitlines():
+            m = _LOG_LINE.match(line.strip())
+            if not m:
+                continue
+            ts = _parse_ts(m[1])
+            # The log is rotated when a run starts; never show the previous run's lines.
+            if ts is None or (since is not None and ts < since - 5):
+                continue
+            out.append((ts, m[2].strip()))
+        return out
+
+    def _stages(self, progress: dict) -> dict:
+        req = progress.get("request") or {}
+        st = progress.get("status") or {}
+        action = req.get("action") or st.get("action") or "update"
+        table = ROLLBACK_STAGES if action == "rollback" else UPDATE_STAGES
+        started = _parse_ts(st.get("started_at"))
+        reached: dict[str, float | None] = {"requested": _parse_ts(req.get("requested_at"))}
+        last_line = None
+        if st:
+            reached["started"] = started
+            for ts, text in self._log_lines(started):
+                last_line = text
+                for key, _label, pattern in table:
+                    if pattern is not None and key not in reached and pattern.match(text):
+                        reached[key] = ts
+            if progress["state"] == "succeeded":
+                reached["done"] = _parse_ts(st.get("finished_at"))
+        keys = [k for k, _, _ in table]
+        furthest = max((keys.index(k) for k in reached if k in keys), default=0)
+        stages = [
+            {"key": k, "label": label, "at": reached.get(k), "reached": i <= furthest}
+            for i, (k, label, _) in enumerate(table)
+        ]
+        return {
+            "action": action,
+            "stages": stages,
+            "stage": keys[furthest],
+            "failed_at": keys[furthest] if progress["state"] == "failed" else None,
+            "rolled_back": st.get("rolled_back") == "yes",
+            "last_line": (last_line or "")[:LAST_LINE_MAX] or None,
+            "estimate_s": self.estimate(action),
+        }
+
+    def estimate(self, action: str = "update") -> float | None:
+        """Typical run time: the median of the last successful runs of this kind, plus the
+        agent's average wait before it picks a request up."""
+        took = []
+        for h in self.history(50):
+            if h.get("state") != "succeeded" or (h.get("action") or "update") != action:
+                continue
+            a, b = _parse_ts(h.get("started_at")), _parse_ts(h.get("finished_at"))
+            if a is not None and b is not None and b > a:
+                took.append(b - a)
+            if len(took) >= ESTIMATE_FROM:
+                break
+        if not took:
+            return None
+        every = (self.agent() or {}).get("every_minutes", 1)
+        every = every if isinstance(every, int | float) and 0 < every <= 60 else 1
+        return round(statistics.median(took) + every * 30, 1)
+
+    def _state(self, now: float) -> dict:
         """Derived progress: idle | requested | running | succeeded | failed."""
         req, st = self.request(), self.status()
         if req is not None:

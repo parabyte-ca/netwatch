@@ -278,3 +278,94 @@ def test_updates_api(tmp_path):
         )
         (s.upgrade_dir / "upgrade.log").write_text("==> Pulling\n")
         assert c.get("/api/updates/log").text == "==> Pulling\n"
+
+
+def _log(start: datetime, lines: list[str]) -> str:
+    out = []
+    for i, text in enumerate(lines):
+        t = (start + timedelta(seconds=10 * i)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        out.append(text if text.startswith("!") else f"{t} ==> {text}")
+    return "\n".join(x.lstrip("!") for x in out) + "\n"
+
+
+def test_stages_follow_the_update_log(tmp_path):
+    f = UpgradeFolder(tmp_path)
+    now = datetime.now(UTC).replace(microsecond=0)
+    req = f.write_request("update", "0.2.1", "manual", "admin")
+    p = f.state(now.timestamp())
+    assert p["stage"] == "requested" and p["stages"][0]["reached"] and not p["stages"][1]["reached"]
+    assert [s["key"] for s in p["stages"]] == [
+        "requested", "started", "backup", "download", "restart", "health", "done"]  # fmt: skip
+    # The previous run's log must not count for this one.
+    (tmp_path / "upgrade.log").write_text(
+        _log(now - timedelta(hours=1), ["Restarting container ..."])
+    )
+    (tmp_path / "request.json").unlink()
+    status = {"id": req["id"], "action": "update", "state": "running", "started_at": iso(now)}
+    (tmp_path / "status.json").write_text(json.dumps(status))
+    p = f.state(now.timestamp() + 5)
+    assert p["stage"] == "started" and p["last_line"] is None
+    (tmp_path / "upgrade.log").write_text(_log(now, [
+        "Current: v0.2.0 (main @ abc)", "Database backed up to /data/backups/x.db",
+        "Pulling ghcr.io/parabyte-ca/netwatch:0.2.1 ...", "!garbage without a timestamp",
+        "Verifying the signature of sha256:1234 ...", "Restarting container ...",
+    ]))  # fmt: skip
+    p = f.state(now.timestamp() + 60)
+    assert p["stage"] == "restart" and p["state"] == "running"
+    at = {s["key"]: s["at"] for s in p["stages"]}
+    assert at["backup"] == now.timestamp() and at["download"] == now.timestamp() + 20
+    assert p["last_line"] == "Restarting container ..."
+    done = {**status, "state": "succeeded", "finished_at": iso(now + timedelta(seconds=90))}
+    (tmp_path / "status.json").write_text(json.dumps(done))
+    p = f.state(now.timestamp() + 100)
+    assert p["stage"] == "done" and all(s["reached"] for s in p["stages"])
+    assert p["failed_at"] is None
+
+
+def test_failed_update_marks_its_stage_and_rollback(tmp_path):
+    f = UpgradeFolder(tmp_path)
+    now = datetime.now(UTC).replace(microsecond=0)
+    (tmp_path / "upgrade.log").write_text(_log(now, [
+        "Current: v0.2.0", "Pulling x ...", "Restarting container ...",
+        "Waiting for health check (up to 120s) ...", "Rollback complete: running 0.2.0 again.",
+    ]) + f"{now:%Y-%m-%dT%H:%M:%SZ} WARN: Timed out waiting for a healthy container.\n"
+    )  # fmt: skip
+    (tmp_path / "status.json").write_text(json.dumps({
+        "id": "x", "action": "update", "state": "failed", "started_at": iso(now),
+        "finished_at": iso(now), "rolled_back": "yes"}))  # fmt: skip
+    p = f.state(now.timestamp() + 100)
+    assert p["failed_at"] == "health" and p["rolled_back"] is True
+    assert not p["stages"][-1]["reached"]
+    assert p["last_line"] == "Timed out waiting for a healthy container."
+
+
+def test_rollback_has_its_own_stages_and_lines_are_capped(tmp_path):
+    f = UpgradeFolder(tmp_path)
+    now = datetime.now(UTC).replace(microsecond=0)
+    (tmp_path / "upgrade.log").write_text(
+        _log(now, ["Restoring database from x.db ...", "y" * 500])
+    )
+    (tmp_path / "status.json").write_text(json.dumps(
+        {"id": "x", "action": "rollback", "state": "running", "started_at": iso(now)}))  # fmt: skip
+    p = f.state(now.timestamp() + 30)
+    assert [s["key"] for s in p["stages"]] == ["requested", "started", "restore", "health", "done"]
+    assert p["stage"] == "restore" and len(p["last_line"]) == 160
+
+
+def test_estimate_is_the_median_of_recent_successes(tmp_path):
+    f = UpgradeFolder(tmp_path)
+    assert f.estimate() is None
+    t0 = datetime(2026, 11, 1, tzinfo=UTC)
+    runs = [(120, "succeeded"), (900, "failed"), (180, "succeeded"), (150, "succeeded"),
+            (60, "succeeded")]  # fmt: skip
+    lines = [
+        json.dumps({"action": "update", "state": st, "started_at": iso(t0),
+                    "finished_at": iso(t0 + timedelta(seconds=s))})
+        for s, st in runs
+    ]  # fmt: skip
+    lines.append(json.dumps({"action": "rollback", "state": "succeeded", "started_at": iso(t0),
+                             "finished_at": iso(t0 + timedelta(seconds=40))}))  # fmt: skip
+    (tmp_path / "history.jsonl").write_text("\n".join(lines))
+    connect_agent(tmp_path)
+    assert f.estimate() == 135.0 + 30  # median of 120, 180, 150, 60 plus half a minute's wait
+    assert f.estimate("rollback") == 40.0 + 30
