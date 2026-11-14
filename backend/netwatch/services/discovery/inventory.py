@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import Engine, and_, delete, func, insert, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from ...db import device_ips, devices
+from ...db import device_ips, device_tags, devices
 from .classify import classify, is_randomised, mergeable_name, vendor_for
 from .packets import Observation, usable_ip
 
@@ -141,11 +141,13 @@ class DeviceStore:
             return conn.execute(select(func.count()).select_from(devices)).scalar_one()
 
     def purge(self, cutoff_ms: int) -> int:
-        """Forget devices unseen since cutoff, unless named or monitored."""
+        """Forget devices unseen since cutoff, unless named, monitored, grouped or tagged."""
         cond = and_(
             devices.c.last_seen_ms < cutoff_ms,
             devices.c.name.is_(None),
             devices.c.target_id.is_(None),
+            devices.c.group_id.is_(None),
+            ~devices.c.id.in_(select(device_tags.c.device_id)),
         )
         with self.engine.begin() as conn:
             ids = [r[0] for r in conn.execute(select(devices.c.id).where(cond))]
