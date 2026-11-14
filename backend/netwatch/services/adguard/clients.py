@@ -156,3 +156,97 @@ class ClientStore:
         )
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount
+
+
+OK_STATUS = frozenset({"NOERROR", "NXDOMAIN"})
+MEMORY_DOMAINS = 1000  # per client and hour; trimmed back to 300 when exceeded
+
+
+def entry_outcome(e: dict) -> str:
+    """ "blocked", "failed" or "ok" for one query-log entry."""
+    if str(e.get("reason") or "").startswith("Filtered"):
+        return "blocked"
+    status = str(e.get("status") or "").upper()
+    return "failed" if status and status not in OK_STATUS else "ok"
+
+
+def entry_domain(e: dict) -> str | None:
+    q = e.get("question")
+    name = q.get("name") if isinstance(q, dict) else None
+    name = str(name or "").strip().rstrip(".").lower()[:253]
+    return name or None
+
+
+class ClientAccumulator:
+    """Per-client counts and domain counters for the hours touched by recent polls."""
+
+    def __init__(self, store: ClientStore) -> None:
+        self.store = store
+        self.hours: dict[int, dict[str, dict]] = {}  # hour → client → counters
+
+    def _hour(self, h: int) -> dict[str, dict]:
+        if h not in self.hours:
+            # First touch since start (or a late entry): carry on from what is stored.
+            self.hours[h] = {
+                r["client"]: {
+                    "queries": r["queries"], "blocked": r["blocked"], "failed": r["failed"],
+                    "domains": Counter(r["domains"]),
+                    "blocked_domains": Counter(r["blocked_domains"]),
+                }
+                for r in self.store.hour(h)
+            }  # fmt: skip
+        return self.hours[h]
+
+    def add(self, entries: list[dict]) -> set[int]:
+        """Count entries (each has ``_ts``, a datetime); returns the hours touched."""
+        touched: set[int] = set()
+        for e in entries:
+            client = str(e.get("client") or "")[:64]
+            if not client:
+                continue
+            h = hour_of(int(e["_ts"].timestamp() * 1000))
+            touched.add(h)
+            c = self._hour(h).setdefault(client, {
+                "queries": 0, "blocked": 0, "failed": 0,
+                "domains": Counter(), "blocked_domains": Counter()})  # fmt: skip
+            c["queries"] += 1
+            outcome = entry_outcome(e)
+            domain = entry_domain(e)
+            if outcome == "blocked":
+                c["blocked"] += 1
+                if domain:
+                    c["blocked_domains"][domain] += 1
+            else:
+                c["failed"] += outcome == "failed"
+                if domain:
+                    c["domains"][domain] += 1
+            for key in ("domains", "blocked_domains"):
+                if len(c[key]) > MEMORY_DOMAINS:
+                    c[key] = Counter(dict(c[key].most_common(300)))
+        return touched
+
+    def rows(self, hours: set[int], device_of: dict[str, int | None]) -> list[dict]:
+        return [
+            {
+                "hour_ms": h, "client": client, "device_id": device_of.get(client),
+                "queries": c["queries"], "blocked": c["blocked"], "failed": c["failed"],
+                "domains": _top(c["domains"], TOP_DOMAINS),
+                "blocked_domains": _top(c["blocked_domains"], TOP_BLOCKED),
+            }
+            for h in sorted(hours)
+            for client, c in self.hours.get(h, {}).items()
+        ]  # fmt: skip
+
+    def prune(self, now_ms: int) -> None:
+        for h in [h for h in self.hours if h < hour_of(now_ms) - HOUR_MS]:
+            del self.hours[h]
+
+    def last_hour(self, now_ms: int) -> dict[str, tuple[int, int]]:
+        """(queries, blocked) per client in the current and previous hour, for rate checks."""
+        out: dict[str, tuple[int, int]] = {}
+        for h, clients in self.hours.items():
+            if h >= hour_of(now_ms) - HOUR_MS:
+                for client, c in clients.items():
+                    q, b = out.get(client, (0, 0))
+                    out[client] = (q + c["queries"], b + c["blocked"])
+        return out

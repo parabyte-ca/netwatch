@@ -21,10 +21,12 @@ from sqlalchemy import Engine, delete, insert, select
 
 from ...db import adguard_stats, device_ips, devices
 from ..discovery.inventory import device_label
+from ..discovery.packets import Observation
 from ..events import DNS, EventLog
 from ..secrets import SecretBox
 from ..storage import Store
 from .client import AdGuardClient, AdGuardError, AdGuardLoginError, parse_time
+from .clients import ClientAccumulator, ClientStore
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +37,7 @@ CLIENTS_KEY = "adguard_clients"
 POLL_S = 60
 MAX_LOGIN_FAILURES = 3
 UNREACHABLE_AFTER = 3  # failed polls in a row before "unreachable" opens
+INVENTORY_EVERY = 5  # polls between reading AdGuard's clients and DHCP leases into the inventory
 QUERYLOG_LIMIT = 2000  # entries read per poll at most
 CATCH_UP_MS = 10 * 60_000  # after a restart, read at most this far back
 UPSTREAM_FAIL_RATE, UPSTREAM_MIN_QUERIES, UPSTREAM_CLEAN_TO_CLOSE = 0.5, 10, 3
@@ -164,8 +167,15 @@ class AdGuardService:
         secrets: SecretBox,
         *,
         client_factory: ClientFactory | None = None,
+        clients: ClientStore | None = None,
+        inventory=None,
     ) -> None:
         self.store = store
+        self.client_store = clients
+        self.accumulator = ClientAccumulator(clients) if clients is not None else None
+        self.inventory = inventory  # discovery Inventory; AdGuard clients and leases feed it
+        self.dhcp: dict | None = None  # {available, enabled, leases} from the last read
+        self._polls = 0
         self.events = events
         self.adguard_store = adguard_store
         self.secrets = secrets
@@ -313,6 +323,9 @@ class AdGuardService:
                 entries, cut = [], False
                 stats = await client.stats()
             known = await client.clients()
+            dhcp = None
+            if self.inventory is not None and self._polls % INVENTORY_EVERY == 0:
+                dhcp = await client.dhcp_status()
         except AdGuardLoginError as exc:
             self.error = str(exc)
             self._failures += 1
@@ -329,7 +342,13 @@ class AdGuardService:
         self.error = None
         self.last_ok_ms = now
         self.last = status
+        self._polls += 1
         await asyncio.to_thread(self._apply, now, status, entries, cut, stats, known)
+        if self.accumulator is not None:
+            await asyncio.to_thread(self._record_clients, now, entries, known)
+        if dhcp is not None:
+            self.dhcp = dhcp
+            await asyncio.to_thread(self._feed_inventory, now, known, dhcp)
         return True
 
     def _since(self, now: int) -> datetime:
@@ -398,6 +417,77 @@ class AdGuardService:
         self._errors(now, m)
         self._latency(now, m["avg_ms"])
         self._clients(now, [c for c, _ in m["top_clients"]], entries, known)
+
+    # ── per-client history and the device inventory ─────────────────────────
+
+    def _record_clients(self, now: int, entries: list[dict], known: list[dict]) -> None:
+        touched = self.accumulator.add(entries)
+        if touched:
+            clients = {c for h in touched for c in self.accumulator.hours.get(h, {})}
+            self.client_store.put(self.accumulator.rows(touched, self._devices_for(clients, known)))
+        self.accumulator.prune(now)
+
+    def _devices_for(self, clients: set[str], known: list[dict]) -> dict[str, int | None]:
+        """Device id per client: by MAC when AdGuard groups the id with one, else by IP."""
+        macs = {k["id"]: k["group"] for k in known if k.get("kind") == "mac"}
+        group_mac = {g: mac for mac, g in macs.items()}
+        out: dict[str, int | None] = {c: None for c in clients}
+        by_mac: dict[str, str] = {}
+        for k in known:
+            if k["id"] in clients and k.get("group") is not None and k["group"] in group_mac:
+                by_mac[k["id"]] = group_mac[k["group"]]
+        with self.store.engine.connect() as conn:
+            if by_mac:
+                rows = conn.execute(
+                    select(devices.c.id, devices.c.mac).where(
+                        devices.c.mac.in_(set(by_mac.values()))
+                    )
+                ).all()
+                ids = {mac: i for i, mac in rows}
+                for c, mac in by_mac.items():
+                    out[c] = ids.get(mac)
+            ips = [c for c in clients if out[c] is None]
+            if ips:
+                stmt = (
+                    select(device_ips.c.ip, device_ips.c.device_id)
+                    .where(device_ips.c.ip.in_(ips))
+                    .order_by(device_ips.c.last_seen_ms)  # the latest holder wins
+                )
+                for ip, dev in conn.execute(stmt):
+                    out[ip] = dev
+        return out
+
+    def _feed_inventory(self, now: int, known: list[dict], dhcp: dict) -> None:
+        """Names given to clients in AdGuard and its DHCP leases, as discovery observations."""
+        names: dict[str, str] = {}  # MAC → name of the persistent client it belongs to
+        group_name = {k["group"]: k["name"] for k in known if k.get("group") is not None}
+        for k in known:
+            if k.get("kind") == "mac" and group_name.get(k["group"]):
+                names[k["id"]] = group_name[k["group"]]
+        obs: dict[str, Observation] = {}
+        for mac, name in names.items():
+            obs[mac] = Observation(now, "adguard", mac, info={"adguard_name": name})
+        if dhcp.get("enabled"):
+            for lease in dhcp.get("leases") or []:
+                info = {"hostname": lease["hostname"], "lease": True}
+                if lease["mac"] in names:
+                    info["adguard_name"] = names[lease["mac"]]
+                obs[lease["mac"]] = Observation(now, "adguard", lease["mac"], ip=lease["ip"],
+                                                info=info)  # fmt: skip
+        # A persistent client known only by IP names the device currently at that address.
+        with_mac = {k["group"] for k in known if k.get("kind") == "mac"}
+        for k in known:
+            if k.get("kind") != "ip" or k.get("group") is None or not group_name.get(k["group"]):
+                continue
+            if k["group"] in with_mac:
+                continue  # named by its MAC above
+            holders = [d for d in self.inventory.store.with_ip(k["id"]) if d["merged_into"] is None]
+            if len(holders) == 1 and holders[0]["mac"] not in obs:
+                mac = holders[0]["mac"]
+                obs[mac] = Observation(now, "adguard", mac,
+                                       info={"adguard_name": group_name[k["group"]]})  # fmt: skip
+        if obs:
+            self.inventory.apply(list(obs.values()))
 
     def _from_stats(self, s: dict) -> dict:
         """Fallback when the query log is off: deltas of AdGuard's rolling totals."""
@@ -581,6 +671,13 @@ class AdGuardService:
             "paused": self.paused,
             "status": self.last,
             "latest": self.adguard_store.latest(),
+            "dhcp": None
+            if self.dhcp is None
+            else {
+                "available": self.dhcp["available"],
+                "enabled": self.dhcp["enabled"],
+                "leases": len(self.dhcp["leases"]),
+            },
         }
 
     # ── DNS page ────────────────────────────────────────────────────────────

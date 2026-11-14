@@ -314,7 +314,12 @@ def create_app(
         adguard_clients = AdGuardClientStore(engine)
         app.state.adguard_clients = adguard_clients
         app.state.adguard = AdGuardService(
-            store, events, adguard_store, SecretBox(settings.data_dir)
+            store,
+            events,
+            adguard_store,
+            SecretBox(settings.data_dir),
+            clients=adguard_clients,
+            inventory=discovery.inventory,
         )
         app.state.deco = DecoService(
             store,

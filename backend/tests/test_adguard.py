@@ -257,10 +257,7 @@ def test_client_store_hours_summary_purge_and_strip(store):
     n = cs.network(h0, h1 + HOUR_MS)
     assert n["unknown_clients"] == [{"client": "192.168.2.99", "queries": 7}]
     assert n["top_domains"][0]["domain"] == "b.com"
-    assert cs.device_hours(0) == {d1: [(100, 10), (40, 0)]} or sorted(cs.device_hours(0)[d1]) == [
-        (40, 0),
-        (100, 10),
-    ]
+    assert sorted(cs.device_hours(0)[d1]) == [(40, 0), (100, 10)]
     # After 7 days the names go, the counts stay; after the rollup retention the rows go.
     assert cs.strip_domains(h1) == 2
     s = cs.summary([d1], h0, h1 + HOUR_MS)
@@ -303,6 +300,34 @@ def svc(store, tmp_path):
     s.save(HOST, PORT, False, USER, True, PASSWORD)
     s.fake = fake
     return s
+
+
+@pytest.fixture
+def isvc(store, tmp_path):
+    """The service with the per-client store and a device inventory (Phase 2)."""
+    from netwatch.services.adguard.clients import ClientStore
+    from netwatch.services.adguard.service import AdGuardService
+    from netwatch.services.discovery.inventory import DeviceStore, Inventory
+    from netwatch.services.events import EventLog
+    from netwatch.services.secrets import SecretBox
+
+    fake = FakeAdGuard()
+
+    def make():
+        s = AdGuardService(
+            store,
+            EventLog(store.engine),
+            AdGuardStore(store.engine),
+            SecretBox(tmp_path / "data"),
+            client_factory=lambda cfg, pw: client_for(fake, pw),
+            clients=ClientStore(store.engine),
+            inventory=Inventory(DeviceStore(store.engine)),
+        )
+        s.save(HOST, PORT, False, USER, True, PASSWORD)
+        s.fake, s.make = fake, make
+        return s
+
+    return make()
 
 
 def dns_events(svc, typ=None):
@@ -536,3 +561,71 @@ def test_dns_page_summary(client):
     assert r["top_clients"][0]["queries"] == 10
     assert client.get("/api/adguard?hours=0").status_code == 422
     assert PASSWORD not in json.dumps(r)
+
+
+async def test_queries_per_client_and_hour_survive_a_restart(isvc):
+    f = isvc.fake
+    dev = isvc.inventory.store.insert({"mac": "aa:bb:cc:00:00:20", "first_seen_ms": 0,
+                                       "last_seen_ms": 0, "last_ip": "192.168.2.20"})  # fmt: skip
+    isvc.inventory.store.upsert_ip(dev, "192.168.2.20", T_MS - 60_000, "arp")
+    for i in range(5):
+        f.query(at(-40 + i), name="Example.COM.")
+    f.query(at(-30), name="ads.tracker.net", reason="FilteredBlackList", upstream="")
+    f.query(at(-29), name="broken.example", status="SERVFAIL")
+    f.query(at(-28), client="192.168.2.99", name="example.com")
+    assert await isvc.poll(T_MS)
+    prev = T_MS - 3_600_000  # T is on the hour, so these entries belong to the hour before
+    rows = {r["client"]: r for r in isvc.client_store.hour(prev)}
+    r = rows["192.168.2.20"]
+    assert (r["device_id"], r["queries"], r["blocked"], r["failed"]) == (dev, 7, 1, 1)
+    assert r["domains"] == {"example.com": 5, "broken.example": 1}
+    assert r["blocked_domains"] == {"ads.tracker.net": 1}
+    assert rows["192.168.2.99"]["device_id"] is None
+    # A restart carries on counting the same hour instead of starting from zero.
+    again = isvc.make()
+    f.query(at(-10), name="example.com")  # late entry for the previous hour
+    f.query(at(30), name="example.com")
+    assert await again.poll(ms(60))
+    r = {r["client"]: r for r in again.client_store.hour(prev)}["192.168.2.20"]
+    assert r["queries"] == 8 and r["domains"]["example.com"] == 6
+    assert again.client_store.hour(T_MS)[0]["queries"] == 1
+    s = again.client_store.summary([dev], T_MS - 3_600_000, T_MS + 3_600_000)
+    assert s["queries"] == 9 and s["top_blocked"][0]["domain"] == "ads.tracker.net"
+
+
+async def test_clients_and_leases_feed_the_inventory(isvc):
+    f = isvc.fake
+    inv = isvc.inventory
+    tv = inv.store.insert({"mac": "aa:bb:cc:00:00:30", "first_seen_ms": 0, "last_seen_ms": 0,
+                           "last_ip": "192.168.2.30"})  # fmt: skip
+    f.clients = {
+        "clients": [{"name": "Alan's MacBook Air", "ids": ["AA:BB:CC:00:00:40", "192.168.2.40"]},
+                    {"name": "Living room TV", "ids": ["192.168.2.30"]},
+                    {"name": "Nobody here", "ids": ["192.168.2.77"]}],
+        "auto_clients": [{"ip": "192.168.2.88", "name": "printer.lan"}],
+    }  # fmt: skip
+    f.dhcp = {"enabled": True, "leases": [
+        {"mac": "aa:bb:cc:00:00:40", "ip": "192.168.2.41", "hostname": "MacBook-Air"},
+        {"mac": "aa:bb:cc:00:00:50", "ip": "192.168.2.50", "hostname": "pixel-9"}],
+        "static_leases": []}  # fmt: skip
+    assert await isvc.poll(T_MS)
+    mac = inv.store.get_by_mac("aa:bb:cc:00:00:40")
+    assert mac["details"]["adguard_name"] == "Alan's MacBook Air" and mac["type"] == "laptop"
+    assert mac["last_ip"] == "192.168.2.41" and mac["hostname"] == "MacBook-Air"
+    phone = inv.store.get_by_mac("aa:bb:cc:00:00:50")
+    assert phone["hostname"] == "pixel-9" and phone["details"]["adguard_lease"]
+    # An IP-only client names the device known at that address, and invents nothing.
+    assert inv.store.get(tv)["details"]["adguard_name"] == "Living room TV"
+    assert inv.store.with_ip("192.168.2.77") == [] and inv.store.with_ip("192.168.2.88") == []
+    assert isvc.status()["dhcp"] == {"available": True, "enabled": True, "leases": 2}
+    assert inv.store.count() == 3
+    # Read again only every INVENTORY_EVERY polls; no DHCP support means no leases.
+    reqs = len([r for r in f.requests if r.url.path == "/control/dhcp/status"])
+    assert await isvc.poll(ms(60))
+    assert len([r for r in f.requests if r.url.path == "/control/dhcp/status"]) == reqs
+
+
+async def test_without_dhcp_support_leases_are_skipped(isvc):
+    assert await isvc.poll(T_MS)
+    assert isvc.status()["dhcp"] == {"available": False, "enabled": False, "leases": 0}
+    assert isvc.inventory.store.count() == 0
