@@ -92,6 +92,10 @@ FIELDS: tuple[Editable, ...] = (
     Editable("traffic_retention_days", "retention", "Per-device traffic (1-minute)",
              "Bandwidth per device from the Decos; older traffic is kept as hourly totals "
              "for as long as the 1-minute rollups.", True, "days"),
+    # Integrations
+    Editable("adguard_actions", "integrations", "AdGuard Home actions",
+             "Lets NetWatch pause protection, allow or block domains and switch the upstream DNS "
+             "of AdGuard Home, each after you confirm it. Off: NetWatch only reads.", True),
     # Security
     Editable("session_days", "security", "Session lifetime",
              "How long a sign-in lasts (applies to new sign-ins).", True, "days"),
@@ -116,6 +120,7 @@ GROUPS = {
     "discovery": "Discovery",
     "nic": "TrueNAS network interface",
     "retention": "Data retention",
+    "integrations": "Integrations",
     "security": "Security and logging",
 }
 

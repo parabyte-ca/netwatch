@@ -43,6 +43,12 @@ class FakeAdGuard:
             "top_upstreams_avg_time": [{"tls://1.1.1.1:853": 0.015}, {"8.8.8.8:53": 0.020}],
         }  # fmt: skip
         self.dhcp: dict | None = None  # None: no DHCP support (404)
+        self.user_rules = ["||doubleclick.net^", "# my own rule"]
+        self.upstream_dns = ["tls://1.1.1.1", "tls://1.0.0.1"]
+        self.bad_upstreams: set[str] = set()  # fail AdGuard's upstream test
+        self.honour_duration = True  # older AdGuard ignores the pause duration
+        self.paused_until: float | None = None
+        self.posts: list[tuple[str, dict]] = []
         self.fail: int | None = None  # HTTP status to answer with
         self.requests: list[httpx.Request] = []
 
@@ -70,8 +76,14 @@ class FakeAdGuard:
             return httpx.Response(401, text="Unauthorized")
         if self.fail:
             return httpx.Response(self.fail)
-        assert req.method == "GET"  # read-only
         path = req.url.path
+        if req.method == "POST":
+            # Only the action endpoints may ever be written to.
+            assert path in WRITE_PATHS, f"unexpected write to {path}"
+            body = json.loads(req.content or b"{}")
+            self.posts.append((path, body))
+            return self.write(path, body)
+        assert req.method == "GET"  # read-only everywhere else
         if path == "/control/status":
             return httpx.Response(200, json={
                 "version": "v0.107.55", "running": True, "protection_enabled": self.protection,
@@ -92,9 +104,45 @@ class FakeAdGuard:
             )
         if path == "/control/clients":
             return httpx.Response(200, json={**self.clients, "supported_tags": []})
+        if path == "/control/filtering/status":
+            return httpx.Response(200, json={"enabled": True, "user_rules": self.user_rules})
+        if path == "/control/dns_info":
+            return httpx.Response(200, json={"upstream_dns": self.upstream_dns,
+                                             "bootstrap_dns": ["9.9.9.10"]})  # fmt: skip
         if path == "/control/dhcp/status" and self.dhcp is not None:
             return httpx.Response(200, json=self.dhcp)
         return httpx.Response(404)
+
+
+WRITE_PATHS = {"/control/protection", "/control/filtering/set_rules", "/control/dns_config",
+               "/control/test_upstream_dns"}  # fmt: skip
+
+
+def _write(self, path: str, body: dict) -> httpx.Response:
+    if path == "/control/protection":
+        self.protection = bool(body["enabled"])
+        self.paused_until = (
+            None
+            if body["enabled"] or "duration" not in body or not self.honour_duration
+            else body["duration"]
+        )
+        return httpx.Response(200, text="OK")
+    if path == "/control/filtering/set_rules":
+        self.user_rules = list(body["rules"])
+        return httpx.Response(200)
+    if path == "/control/test_upstream_dns":
+        return httpx.Response(200, json={
+            u: (f"couldn't communicate with upstream: {u}" if u in self.bad_upstreams else "OK")
+            for u in body["upstream_dns"]})  # fmt: skip
+    if path == "/control/dns_config":
+        if any(u in self.bad_upstreams for u in body["upstream_dns"]):
+            return httpx.Response(400, text="validating upstream servers: bad upstream\n")
+        self.upstream_dns = list(body["upstream_dns"])
+        return httpx.Response(200)
+    return httpx.Response(404)
+
+
+FakeAdGuard.write = _write
 
 
 def client_for(fake, password=PASSWORD) -> AdGuardClient:
@@ -155,6 +203,29 @@ async def test_dhcp_status_leases_or_not_available():
     fake.fail = 401
     with pytest.raises(AdGuardLoginError):
         await c.dhcp_status()
+    await c.aclose()
+
+
+async def test_write_methods_touch_only_their_endpoints():
+    fake = FakeAdGuard()
+    c = client_for(fake)
+    await c.set_protection(False, 1800)
+    assert fake.posts[-1] == ("/control/protection", {"enabled": False, "duration": 1_800_000})
+    assert fake.protection is False
+    await c.set_protection(True)
+    assert fake.posts[-1] == ("/control/protection", {"enabled": True}) and fake.protection
+    assert await c.user_rules() == ["||doubleclick.net^", "# my own rule"]
+    await c.set_user_rules(["||x.com^"])
+    assert fake.user_rules == ["||x.com^"]
+    assert (await c.upstreams())["upstream_dns"] == ["tls://1.1.1.1", "tls://1.0.0.1"]
+    fake.bad_upstreams = {"udp://10.9.9.9"}
+    r = await c.test_upstreams(["tls://9.9.9.9", "udp://10.9.9.9"], ["9.9.9.10"])
+    assert r["tls://9.9.9.9"] == "OK" and r["udp://10.9.9.9"].startswith("couldn't")
+    with pytest.raises(AdGuardError, match="refused the change \\(HTTP 400\\): validating"):
+        await c.set_upstreams(["udp://10.9.9.9"])
+    fake.fail = 401
+    with pytest.raises(AdGuardLoginError):
+        await c.set_protection(True)
     await c.aclose()
 
 

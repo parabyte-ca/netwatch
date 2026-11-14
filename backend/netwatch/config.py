@@ -98,6 +98,8 @@ class Settings(BaseSettings):
     bufferbloat_nightly: bool = True
     # Nightly exposure scan (open LAN services, Home Hub port forwards), 40 min after the window.
     exposure_scan_nightly: bool = True
+    # Lets NetWatch change AdGuard Home (pause protection, allow/block domains, switch upstream).
+    adguard_actions: bool = False
 
     @property
     def discovery_subnet_list(self) -> list[str]:
