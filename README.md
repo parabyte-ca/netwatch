@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.12.0-blue)
+![Version](https://img.shields.io/badge/version-0.13.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -20,7 +20,8 @@ admin panel; **v0.7** the network map with incident replay and the Deco mesh int
 **v0.8** live per-device bandwidth, the bufferbloat grade and the Home Hub integration;
 **v0.9** the exposure scan, the network health score with weekly reports, and Ask NetWatch;
 **v0.10** a sortable Devices page and in-place renaming; **v0.11** the AdGuard Home integration
-and the DNS page; **v0.12 (this release)** AdGuard Home in the device inventory. See the [Roadmap](#roadmap) for what's next.
+and the DNS page; **v0.12** AdGuard Home in the device inventory; **v0.13 (this release)**
+optional AdGuard Home actions. See the [Roadmap](#roadmap) for what's next.
 
 ## Features
 - **Probes:** ICMP (from every 1 s), DNS query latency/failures, TCP connect, and HTTP checks,
@@ -327,6 +328,26 @@ Any Raspberry Pi 3 or newer is plenty for a home network.
 Optionally add a DNS target aimed at the Pi under **Targets**: probes against it are grouped as
 the "AdGuard Home" layer, so the diagnosis can tell the Pi apart from public DNS.
 
+#### AdGuard Home actions (optional)
+Off by default: NetWatch only reads AdGuard Home. Turn on **Admin → settings → Integrations →
+AdGuard Home actions** to get a **Controls** section on the DNS page:
+- **Pause protection** for 5 minutes to 8 hours. NetWatch turns it back on at the end, even if
+  NetWatch restarted in the meantime (and also if your AdGuard Home version ignores the pause
+  length). While paused on purpose, the timeline shows an information entry, not a warning.
+- **Allow or block a domain:** adds `@@||domain^` (allow) or `||domain^` (block) to AdGuard Home's
+  custom rules, for every device. Also offered as Allow and Block links next to the top (blocked)
+  domains on the DNS page and on each device's page. NetWatch keeps a list of the rules it added
+  and can remove them again; it never edits or removes your own rules. AdGuard Home only accepts
+  the whole rule list at once, so a rule you change in AdGuard Home in the same second could be
+  overwritten.
+- **Switch the upstream DNS** to a preset (Cloudflare, Quad9 or Google, encrypted or plain) or
+  your own servers. AdGuard Home tests them first and NetWatch only switches if every one passes;
+  **Switch back** returns to the previous list.
+
+Every change asks you to confirm exactly what will happen, and every change (and every failed
+attempt) is written to the security log on the timeline. AdGuard Home has no read-only accounts,
+so with actions on, NetWatch uses the admin rights of the user you entered.
+
 ### Ask NetWatch
 Create an API key at [console.anthropic.com](https://console.anthropic.com) (usage is billed to
 that account), then under **Admin → Ask NetWatch** paste it, pick the model and effort, press
@@ -557,7 +578,9 @@ Planned, in order (suggestions welcome):
 
 | Version | Feature |
 |---|---|
-| 0.13 | **AdGuard Home actions (opt-in, off by default):** pause protection for a set time (resumes after a restart too), allow or block a domain, switch upstream; each confirmed in the UI and recorded in the security log |
+| Next | **AdGuard Home per device and per group:** give a device (or several) its own AdGuard Home settings from NetWatch, such as an exception so nothing is blocked for it, using AdGuard Home's persistent clients |
+| Next | **Device groups** (for example "Kids", or one child's phone, tablet and laptop) managed centrally: one AdGuard Home client holding all of the group's devices, with shared settings |
+| Next | **YouTube controls per device or group:** force YouTube Restricted Mode, block or allow YouTube as a whole, optionally on a schedule. Allowing only chosen channels or videos is not possible with DNS: every video comes from the same YouTube domains |
 | Later | **Wi-Fi coverage view:** a floor plan with the Decos placed and each device's signal and roaming per room |
 | Later | **Speed tests against your plan:** nightly tests reported as a share of the plan's speed, with a 90-day trend |
 

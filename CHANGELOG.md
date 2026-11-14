@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] - 2026-11-14
+### Added
+- AdGuard Home actions, off by default (Admin → settings → Integrations). When turned on, the
+  DNS page gets Controls to pause protection for 5 minutes to 8 hours, allow or block a domain,
+  and switch the upstream DNS. Allow and Block links also appear next to the top (blocked)
+  domains on the DNS page and each device's page. Every change asks for confirmation first, and
+  every change or failed attempt is written to the security log.
+- A paused protection is turned back on when its time is up, even after a NetWatch restart or
+  with an AdGuard Home version that ignores the pause length. A pause started from NetWatch shows
+  on the timeline as information instead of a warning.
+- Rules added from NetWatch (`@@||domain^` to allow, `||domain^` to block) are tracked and can be
+  removed again from the DNS page; your own custom rules are never changed.
+- Upstream DNS switches are tested by AdGuard Home first and only applied when every server
+  passes; the previous list is kept for a one-click switch back.
+
 ## [0.12.0] - 2026-11-14
 ### Added
 - AdGuard Home feeds the device inventory. Names given to clients in AdGuard Home (by MAC, or
