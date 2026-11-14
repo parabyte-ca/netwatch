@@ -39,6 +39,7 @@ def device_label(d: dict) -> str:
     return (
         d.get("name")
         or det.get("app_name")
+        or det.get("adguard_name")
         or (f"Deco {det['deco_name']}" if det.get("is_deco") and det.get("deco_name") else None)
         or det.get("friendly")
         or d.get("mdns_name")
@@ -316,6 +317,14 @@ class Inventory:
             add_to("ssdp", [info.get("server"), info.get("type")])
         elif obs.proto == "rdns" and info.get("ptr") and det.get("ptr") != info["ptr"]:
             det["ptr"] = info["ptr"]
+        elif obs.proto == "adguard":
+            # From AdGuard Home: the name given to a client there, and DHCP lease hostnames.
+            if info.get("adguard_name") and det.get("adguard_name") != info["adguard_name"]:
+                det["adguard_name"] = info["adguard_name"]
+            if info.get("hostname") and not row.get("hostname"):
+                upd["hostname"] = str(info["hostname"])[:64]
+            if info.get("lease") and not det.get("adguard_lease"):
+                det["adguard_lease"] = True
         elif obs.proto == "deco":
             # From the Deco API: which Deco and band, and the name given in the Deco app.
             for key, src in (
@@ -378,8 +387,9 @@ class Inventory:
         det = d.get("details") or {}
         if det.get("is_deco"):
             return "access_point", "Deco (from the Deco API)"
-        names = [n for n in (det.get("app_name"), det.get("friendly"), d.get("mdns_name"),
-                             d.get("hostname"), det.get("ptr"), d.get("model")) if n]  # fmt: skip
+        names = [n for n in (det.get("app_name"), det.get("adguard_name"), det.get("friendly"),
+                             d.get("mdns_name"), d.get("hostname"), det.get("ptr"),
+                             d.get("model")) if n]  # fmt: skip
         gw = self.gateway_ip()
         return classify(
             vendor=d.get("vendor"),

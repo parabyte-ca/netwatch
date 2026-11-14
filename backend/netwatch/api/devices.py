@@ -7,7 +7,7 @@ import json
 import time
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..services.discovery.classify import TYPES
@@ -92,6 +92,21 @@ class DeviceEdit(BaseModel):
     name: str | None = Field(default=None, max_length=64)
     type_override: DeviceType | None = None
     notes: str | None = Field(default=None, max_length=500)
+
+
+@router.get("/devices/{device_id}/dns")
+async def device_dns(
+    device_id: int, request: Request, hours: int = Query(24, ge=1, le=168)
+) -> dict:
+    """DNS queries, block rate and top domains for one device, from AdGuard Home."""
+    st = _state(request)
+    _, members = await _primary(request, device_id)
+    configured = await asyncio.to_thread(lambda: st.adguard.configured)
+    end = _now_ms()
+    out = await asyncio.to_thread(
+        st.adguard_clients.summary, [m["id"] for m in members], end - hours * 3_600_000, end
+    )
+    return {"configured": configured, "hours": hours, **out}
 
 
 @router.patch("/devices/{device_id}")

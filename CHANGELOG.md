@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.12.0] - 2026-11-14
+### Added
+- AdGuard Home feeds the device inventory. Names given to clients in AdGuard Home (by MAC, or
+  by IP for the device NetWatch knows at that address) become device names and help classify
+  the device. When AdGuard Home is the DHCP server (detected from `/control/dhcp/status`), its
+  leases add devices with their hostnames and addresses every 5 minutes. Clients known only by
+  an address NetWatch hasn't seen are listed as unknown clients instead of becoming devices.
+- Device page: a DNS section with the device's queries, block rate, queries per hour, top
+  domains and top blocked domains over 24 hours or 7 days.
+- DNS page: top domains, top blocked domains, unknown clients, and whether AdGuard Home is the
+  DHCP server.
+- Anomaly alerts when a device makes far more DNS queries than usual (over 500 in an hour and
+  5 times its usual hour) or has most of its queries blocked (50% or more of at least 100, when
+  it usually has under 15%). A device needs 24 hours of history first; each alert waits 6 hours
+  before repeating for the same device.
+
+### Changed
+- The "more than one DHCP server" alert explains the switch from the Home Hub to AdGuard Home.
+
+### Database
+- Migration 0009 adds the `adguard_clients` table (queries per client and hour). Domain names in
+  it are cleared after the raw-sample retention (7 days by default); the counts are kept as long
+  as the 1-minute rollups.
+
 ## [0.11.0] - 2026-11-14
 ### Added
 - AdGuard Home integration (read-only). Under Admin → AdGuard Home, enter the address, port,

@@ -11,7 +11,7 @@ from netwatch.services.discovery.classify import (
     short_vendor,
     vendor_for,
 )
-from netwatch.services.discovery.inventory import DeviceStore, Inventory
+from netwatch.services.discovery.inventory import DeviceStore, Inventory, device_label
 from netwatch.services.discovery.packets import Observation, parse_frame
 from netwatch.services.events import EventLog
 
@@ -351,3 +351,23 @@ def test_dns_checks(events):
     assert types == ["dns_mismatch", "dns_mismatch", "nxdomain_rewrite"]
     # Different CDN addresses for the same name are normal and not reported.
     assert not any("142.250" in f.title for f in found)
+
+
+def test_adguard_observations_name_and_classify(inv):
+    mac = "aa:bb:cc:dd:ee:51"
+    inv.apply([Observation(1_000, "adguard", mac, ip="192.168.2.101",
+                           info={"hostname": "pixel-9", "lease": True})])  # fmt: skip
+    d = inv.store.get_by_mac(mac)
+    assert d["hostname"] == "pixel-9" and d["last_ip"] == "192.168.2.101"
+    assert d["details"]["adguard_lease"] is True and "adguard" in d["details"]["sources"]
+    assert {r["source"] for r in inv.store.ips([d["id"]])} == {"adguard"}
+    # A name typed in AdGuard wins over the hostname, and feeds classification.
+    inv.apply([Observation(2_000, "adguard", mac, info={"adguard_name": "Alan's MacBook Air"})])
+    d = inv.store.get_by_mac(mac)
+    assert device_label(d) == "Alan's MacBook Air" and d["type"] == "laptop"
+    # An existing hostname is not replaced by a lease hostname.
+    inv.apply([Observation(3_000, "adguard", mac, info={"hostname": "other"})])
+    assert inv.store.get_by_mac(mac)["hostname"] == "pixel-9"
+    # A name given in NetWatch still wins.
+    inv.store.update(d["id"], {"name": "Laptop"})
+    assert device_label(inv.store.get(d["id"])) == "Laptop"

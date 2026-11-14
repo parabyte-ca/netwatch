@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
-import { api, type AdGuardSummary } from '../lib/api';
+import { api, type AdGuardSummary, type DomainCount } from '../lib/api';
 import { fmtAgo } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
 
@@ -27,6 +27,20 @@ function Stat({ label, value, tone = 'text-slate-100' }: { label: string; value:
       <p className="text-xs text-slate-400">{label}</p>
       <p className={`text-lg font-semibold tabular-nums ${tone}`}>{value}</p>
     </div>
+  );
+}
+
+function DomainList({ items, tone }: { items: DomainCount[]; tone: string }) {
+  if (!items.length) return <p className="text-sm text-slate-400">None in this period (needs the query log; names are kept for 7 days).</p>;
+  return (
+    <ul className="divide-y divide-slate-800">
+      {items.map((d) => (
+        <li key={d.domain} className="flex items-baseline justify-between gap-2 py-1 text-sm">
+          <span className={`min-w-0 truncate font-mono text-xs ${tone}`} title={d.domain}>{d.domain}</span>
+          <span className="shrink-0 tabular-nums text-slate-400">{d.queries.toLocaleString()}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -117,6 +131,7 @@ export function Dns() {
                 AdGuard Home{data.status?.version ? ` ${data.status.version}` : ''} at {data.host}
                 {data.last_ok_ms ? `, last read ${fmtAgo(data.last_ok_ms, Date.now())}` : ', not read yet'}
                 {!data.enabled && ' (polling is off)'}.
+                {data.dhcp?.enabled && ` AdGuard Home is the DHCP server (${data.dhcp.leases} leases).`}
               </>
             )}
           </p>
@@ -189,6 +204,15 @@ export function Dns() {
             )}
           </Section>
 
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Section title="Top domains">
+              <DomainList items={data.top_domains} tone="text-slate-200" />
+            </Section>
+            <Section title="Top blocked domains">
+              <DomainList items={data.top_blocked} tone="text-violet-300" />
+            </Section>
+          </div>
+
           <Section title="Busiest clients">
             {data.top_clients.length ? (
               <ul className="divide-y divide-slate-800">
@@ -206,6 +230,23 @@ export function Dns() {
               <p className="text-sm text-slate-400">No clients recorded yet.</p>
             )}
           </Section>
+
+          {data.unknown_clients.length > 0 && (
+            <Section title="Unknown clients">
+              <p className="mb-2 text-xs text-slate-400">
+                Addresses that queried AdGuard Home but match no device NetWatch knows. They usually appear in the device list
+                once NetWatch sees them on the network (or once AdGuard hands them a DHCP lease).
+              </p>
+              <ul className="divide-y divide-slate-800">
+                {data.unknown_clients.map((c) => (
+                  <li key={c.client} className="flex items-baseline justify-between gap-2 py-1.5 text-sm">
+                    <span className="font-mono text-xs text-slate-300">{c.client}</span>
+                    <span className="tabular-nums text-slate-400">{c.queries.toLocaleString()}</span>
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          )}
         </>
       )}
     </div>
