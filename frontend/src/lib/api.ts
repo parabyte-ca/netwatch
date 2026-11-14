@@ -676,6 +676,29 @@ export interface AdGuardUpstream {
   avg_ms: number | null;
 }
 
+export interface AdGuardRule {
+  rule: string;
+  domain: string;
+  kind: 'allow' | 'block';
+  added_ms: number;
+  by: string;
+}
+
+export interface AdGuardActionsState {
+  enabled: boolean;
+  pause: { until_ms: number; started_ms: number; minutes: number; by: string } | null;
+  rules: AdGuardRule[];
+  previous_upstreams: { upstreams: string[]; saved_ms: number } | null;
+  presets: { name: string; upstreams: string[] }[];
+  upstreams: string[] | null;
+}
+
+export interface UpstreamTest {
+  upstreams: string[];
+  results: Record<string, string>;
+  ok: boolean;
+}
+
 export interface DomainCount {
   domain: string;
   queries: number;
@@ -1071,6 +1094,17 @@ export const api = {
     request<AdGuardStatus>('/api/admin/adguard', { method: 'PUT', body: JSON.stringify(body) }),
   testAdGuard: (body: { host: string; port: number; https: boolean; username: string; password?: string }) =>
     request<AdGuardTestResult>('/api/admin/adguard/test', post(body)),
+  adguardActions: () => request<AdGuardActionsState>('/api/adguard/actions'),
+  adguardPause: (minutes: number) => request<unknown>('/api/adguard/actions/pause', post({ minutes })),
+  adguardResume: () => request<unknown>('/api/adguard/actions/resume', post()),
+  adguardAddRule: (domain: string, kind: 'allow' | 'block') =>
+    request<{ rule: AdGuardRule; rules: AdGuardRule[] }>('/api/adguard/actions/rules', post({ domain, kind })),
+  adguardRemoveRule: (rule: string) =>
+    request<{ rules: AdGuardRule[] }>('/api/adguard/actions/rules', { method: 'DELETE', body: JSON.stringify({ rule }) }),
+  adguardTestUpstreams: (upstreams: string[]) => request<UpstreamTest>('/api/adguard/actions/upstreams/test', post({ upstreams })),
+  adguardSwitchUpstreams: (upstreams: string[]) =>
+    request<{ previous: string[]; current: string[] }>('/api/adguard/actions/upstreams', post({ upstreams })),
+  adguardRestoreUpstreams: () => request<{ previous: string[]; current: string[] }>('/api/adguard/actions/upstreams/restore', post()),
   adguardSummary: (hours = 24) => request<AdGuardSummary>(`/api/adguard?hours=${hours}`),
   hub: () => request<HubStatus>('/api/admin/hub'),
   assistant: () => request<AssistantStatus>('/api/admin/assistant'),

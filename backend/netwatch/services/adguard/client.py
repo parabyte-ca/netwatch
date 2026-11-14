@@ -1,8 +1,10 @@
-"""Read-only client for the AdGuard Home REST API (``/control/*``, HTTP basic auth).
+"""Client for the AdGuard Home REST API (``/control/*``, HTTP basic auth).
 
-NetWatch only ever sends GET requests: status, statistics, the query log and the client list.
-Every failure becomes an ``AdGuardError`` whose message is safe to show (it never contains the
-password or the Authorization header).
+Monitoring only sends GET requests: status, statistics, the query log, clients and DHCP. The few
+write methods at the end (pause protection, custom rules, upstream DNS) are only called by
+``AdGuardActions``, which refuses unless "AdGuard Home actions" is turned on. Every failure
+becomes an ``AdGuardError`` whose message is safe to show (never the password or the
+Authorization header).
 """
 
 from __future__ import annotations
@@ -119,6 +121,27 @@ class AdGuardClient:
         except ValueError:
             raise AdGuardError("unexpected answer (is this AdGuard Home?)") from None
 
+    async def _post(self, path: str, body: dict) -> Any:
+        try:
+            r = await self._http.post(path, json=body)
+        except httpx.TimeoutException:
+            raise AdGuardError("AdGuard Home did not answer in time") from None
+        except httpx.HTTPError as exc:
+            raise AdGuardError(f"cannot reach AdGuard Home ({type(exc).__name__})") from None
+        if r.status_code in (401, 403):
+            raise AdGuardLoginError("wrong username or password (or the account is locked out)")
+        if r.status_code >= 300:
+            # AdGuard explains a refused change in plain text (e.g. an invalid upstream).
+            reason = r.text.strip().splitlines()[0][:200] if r.text.strip() else ""
+            raise AdGuardError(
+                f"AdGuard Home refused the change (HTTP {r.status_code})"
+                + (f": {reason}" if reason else "")
+            )
+        try:
+            return r.json() if r.content.strip() else None
+        except ValueError:
+            return None  # "OK" and other plain answers
+
     # ── what NetWatch reads ──────────────────────────────────────────────────
 
     async def status(self) -> dict:
@@ -214,3 +237,42 @@ class AdGuardClient:
                 leases.append({"mac": mac, "ip": ip, "hostname": _name(item.get("hostname")),
                                "static": static})  # fmt: skip
         return {"available": True, "enabled": bool(d.get("enabled")), "leases": leases}
+
+    # ── what NetWatch can change (only through AdGuardActions) ───────────────
+
+    async def set_protection(self, enabled: bool, duration_s: int | None = None) -> None:
+        """Turn protection on, or off for ``duration_s`` (AdGuard resumes by itself)."""
+        body: dict = {"enabled": enabled}
+        if not enabled and duration_s:
+            body["duration"] = int(duration_s) * 1000
+        await self._post("/control/protection", body)
+
+    async def user_rules(self) -> list[str]:
+        f = await self._get("/control/filtering/status")
+        rules = f.get("user_rules") if isinstance(f, dict) else None
+        if not isinstance(rules, list):
+            raise AdGuardError("unexpected filtering answer (is this AdGuard Home?)")
+        return [str(r) for r in rules]
+
+    async def set_user_rules(self, rules: list[str]) -> None:
+        await self._post("/control/filtering/set_rules", {"rules": rules})
+
+    async def upstreams(self) -> dict:
+        d = await self._get("/control/dns_info")
+        if not isinstance(d, dict) or not isinstance(d.get("upstream_dns"), list):
+            raise AdGuardError("unexpected DNS settings answer (is this AdGuard Home?)")
+        return {
+            "upstream_dns": [str(u) for u in d["upstream_dns"]],
+            "bootstrap_dns": [str(u) for u in d.get("bootstrap_dns") or []],
+        }
+
+    async def test_upstreams(self, upstreams: list[str], bootstrap: list[str]) -> dict[str, str]:
+        """AdGuard's own check of each upstream: "OK" or the error it got."""
+        r = await self._post(
+            "/control/test_upstream_dns", {"upstream_dns": upstreams, "bootstrap_dns": bootstrap}
+        )
+        r = r if isinstance(r, dict) else {}
+        return {u: str(r.get(u, "no answer from the test"))[:200] for u in upstreams}
+
+    async def set_upstreams(self, upstreams: list[str]) -> None:
+        await self._post("/control/dns_config", {"upstream_dns": upstreams})

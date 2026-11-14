@@ -43,6 +43,12 @@ class FakeAdGuard:
             "top_upstreams_avg_time": [{"tls://1.1.1.1:853": 0.015}, {"8.8.8.8:53": 0.020}],
         }  # fmt: skip
         self.dhcp: dict | None = None  # None: no DHCP support (404)
+        self.user_rules = ["||doubleclick.net^", "# my own rule"]
+        self.upstream_dns = ["tls://1.1.1.1", "tls://1.0.0.1"]
+        self.bad_upstreams: set[str] = set()  # fail AdGuard's upstream test
+        self.honour_duration = True  # older AdGuard ignores the pause duration
+        self.paused_until: float | None = None
+        self.posts: list[tuple[str, dict]] = []
         self.fail: int | None = None  # HTTP status to answer with
         self.requests: list[httpx.Request] = []
 
@@ -70,8 +76,14 @@ class FakeAdGuard:
             return httpx.Response(401, text="Unauthorized")
         if self.fail:
             return httpx.Response(self.fail)
-        assert req.method == "GET"  # read-only
         path = req.url.path
+        if req.method == "POST":
+            # Only the action endpoints may ever be written to.
+            assert path in WRITE_PATHS, f"unexpected write to {path}"
+            body = json.loads(req.content or b"{}")
+            self.posts.append((path, body))
+            return self.write(path, body)
+        assert req.method == "GET"  # read-only everywhere else
         if path == "/control/status":
             return httpx.Response(200, json={
                 "version": "v0.107.55", "running": True, "protection_enabled": self.protection,
@@ -92,9 +104,45 @@ class FakeAdGuard:
             )
         if path == "/control/clients":
             return httpx.Response(200, json={**self.clients, "supported_tags": []})
+        if path == "/control/filtering/status":
+            return httpx.Response(200, json={"enabled": True, "user_rules": self.user_rules})
+        if path == "/control/dns_info":
+            return httpx.Response(200, json={"upstream_dns": self.upstream_dns,
+                                             "bootstrap_dns": ["9.9.9.10"]})  # fmt: skip
         if path == "/control/dhcp/status" and self.dhcp is not None:
             return httpx.Response(200, json=self.dhcp)
         return httpx.Response(404)
+
+
+WRITE_PATHS = {"/control/protection", "/control/filtering/set_rules", "/control/dns_config",
+               "/control/test_upstream_dns"}  # fmt: skip
+
+
+def _write(self, path: str, body: dict) -> httpx.Response:
+    if path == "/control/protection":
+        self.protection = bool(body["enabled"])
+        self.paused_until = (
+            None
+            if body["enabled"] or "duration" not in body or not self.honour_duration
+            else body["duration"]
+        )
+        return httpx.Response(200, text="OK")
+    if path == "/control/filtering/set_rules":
+        self.user_rules = list(body["rules"])
+        return httpx.Response(200)
+    if path == "/control/test_upstream_dns":
+        return httpx.Response(200, json={
+            u: (f"couldn't communicate with upstream: {u}" if u in self.bad_upstreams else "OK")
+            for u in body["upstream_dns"]})  # fmt: skip
+    if path == "/control/dns_config":
+        if any(u in self.bad_upstreams for u in body["upstream_dns"]):
+            return httpx.Response(400, text="validating upstream servers: bad upstream\n")
+        self.upstream_dns = list(body["upstream_dns"])
+        return httpx.Response(200)
+    return httpx.Response(404)
+
+
+FakeAdGuard.write = _write
 
 
 def client_for(fake, password=PASSWORD) -> AdGuardClient:
@@ -155,6 +203,29 @@ async def test_dhcp_status_leases_or_not_available():
     fake.fail = 401
     with pytest.raises(AdGuardLoginError):
         await c.dhcp_status()
+    await c.aclose()
+
+
+async def test_write_methods_touch_only_their_endpoints():
+    fake = FakeAdGuard()
+    c = client_for(fake)
+    await c.set_protection(False, 1800)
+    assert fake.posts[-1] == ("/control/protection", {"enabled": False, "duration": 1_800_000})
+    assert fake.protection is False
+    await c.set_protection(True)
+    assert fake.posts[-1] == ("/control/protection", {"enabled": True}) and fake.protection
+    assert await c.user_rules() == ["||doubleclick.net^", "# my own rule"]
+    await c.set_user_rules(["||x.com^"])
+    assert fake.user_rules == ["||x.com^"]
+    assert (await c.upstreams())["upstream_dns"] == ["tls://1.1.1.1", "tls://1.0.0.1"]
+    fake.bad_upstreams = {"udp://10.9.9.9"}
+    r = await c.test_upstreams(["tls://9.9.9.9", "udp://10.9.9.9"], ["9.9.9.10"])
+    assert r["tls://9.9.9.9"] == "OK" and r["udp://10.9.9.9"].startswith("couldn't")
+    with pytest.raises(AdGuardError, match="refused the change \\(HTTP 400\\): validating"):
+        await c.set_upstreams(["udp://10.9.9.9"])
+    fake.fail = 401
+    with pytest.raises(AdGuardLoginError):
+        await c.set_protection(True)
     await c.aclose()
 
 
@@ -731,3 +802,187 @@ def test_device_dns_endpoint_and_page_lists(client):
 def test_dns_endpoints_require_sign_in(anon_client):
     for path in ("/api/adguard", "/api/devices/1/dns", "/api/admin/adguard"):
         assert anon_client.get(path).status_code == 401
+
+
+# ── actions (Phase 3) ────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def acts(svc):
+    from types import SimpleNamespace
+
+    from netwatch.services.adguard.actions import AdGuardActions
+
+    settings = SimpleNamespace(adguard_actions=True)
+    a = AdGuardActions(svc, settings, gateway_ip=lambda: "192.168.2.1")
+    svc.actions = a
+    a.settings_ns = settings
+    return a
+
+
+async def test_actions_refuse_when_turned_off(acts):
+    from netwatch.services.adguard.actions import ActionsDisabled
+
+    acts.settings_ns.adguard_actions = False
+    calls = [
+        lambda: acts.pause(30, "admin"),
+        lambda: acts.resume("admin"),
+        lambda: acts.add_rule("x.com", "block", "a"),
+        lambda: acts.switch_upstreams(["tls://9.9.9.9"]),
+        lambda: acts.test_upstreams(["9.9.9.9"]),
+    ]
+    for call in calls:
+        with pytest.raises(ActionsDisabled):
+            await call()
+    assert acts.service.fake.posts == []
+
+
+async def test_pause_resumes_after_its_time_even_after_a_restart(acts, svc):
+    from netwatch.services.adguard.actions import AdGuardActions
+
+    f = svc.fake
+    f.honour_duration = False  # an older AdGuard Home that ignores the duration
+    p = await acts.pause(30, "admin")
+    assert f.posts[-1] == ("/control/protection", {"enabled": False, "duration": 1_800_000})
+    assert f.protection is False and acts.pause_state()["minutes"] == 30
+    # The poll sees protection off: an information event, not a warning.
+    assert await svc.poll()
+    [e] = dns_events(svc, "protection_disabled")
+    assert e["severity"] == "info" and e["details"]["by"] == "admin"
+    # A NetWatch restart: a new actions object reads the pause from the database.
+    again = AdGuardActions(svc, acts.settings_ns)
+    assert not await again.tick(p["until_ms"] - 1000)
+    acts.settings_ns.adguard_actions = False  # turning actions off never leaves it paused
+    assert await again.tick(p["until_ms"] + 1000)
+    assert f.protection is True and again.pause_state() is None
+    assert any(ev["title"].startswith("AdGuard Home protection turned back on")
+               for ev in svc.events.list(0, 10**13, kinds=["security"]))  # fmt: skip
+    assert not await again.tick(p["until_ms"] + 2000)  # nothing left to do
+
+
+async def test_pause_limits_and_resume(acts, svc):
+    from netwatch.services.adguard.actions import ActionError
+
+    for bad in (0, 1441):
+        with pytest.raises(ActionError):
+            await acts.pause(bad, "admin")
+    await acts.pause(5, "admin")
+    await acts.resume("admin")
+    assert svc.fake.protection is True and acts.pause_state() is None
+
+
+async def test_rules_touch_only_netwatch_lines(acts, svc):
+    from netwatch.services.adguard.actions import ActionError
+
+    f = svc.fake
+    entry = await acts.add_rule("Ads.Example.COM.", "allow", "admin")
+    assert entry["rule"] == "@@||ads.example.com^"
+    assert f.user_rules == ["||doubleclick.net^", "# my own rule", "@@||ads.example.com^"]
+    # Blocking what NetWatch allowed replaces NetWatch's own line.
+    await acts.add_rule("ads.example.com", "block", "admin")
+    assert f.user_rules == ["||doubleclick.net^", "# my own rule", "||ads.example.com^"]
+    assert [r["rule"] for r in acts.rules()] == ["||ads.example.com^"]
+    # Your own rules stay yours.
+    with pytest.raises(ActionError, match="your own rules"):
+        await acts.add_rule("doubleclick.net", "block", "admin")
+    with pytest.raises(ActionError, match="only removes rules it added"):
+        await acts.remove_rule("||doubleclick.net^")
+    for bad in ("*.example.com", "https://x.com/a", "192.168.2.53", "localhost", "a b.com", ""):
+        with pytest.raises(ActionError):
+            await acts.add_rule(bad, "block", "admin")
+    await acts.remove_rule("||ads.example.com^")
+    assert f.user_rules == ["||doubleclick.net^", "# my own rule"] and acts.rules() == []
+    assert await acts.add_rule("bücher.example", "block", "admin")
+    assert f.user_rules[-1] == "||xn--bcher-kva.example^"
+
+
+async def test_upstream_switch_is_tested_and_can_be_undone(acts, svc):
+    from netwatch.services.adguard.actions import ActionError
+
+    f = svc.fake
+    f.bad_upstreams = {"udp://10.9.9.9"}
+    t = await acts.test_upstreams(["tls://9.9.9.9", "udp://10.9.9.9"])
+    assert not t["ok"] and t["results"]["tls://9.9.9.9"] == "OK"
+    with pytest.raises(ActionError, match=r"could not use udp://10\.9\.9\.9"):
+        await acts.switch_upstreams(["udp://10.9.9.9"])
+    assert f.upstream_dns == ["tls://1.1.1.1", "tls://1.0.0.1"]  # unchanged
+    for bad in ([], ["ftp://x"], ["a b"], ["1.1.1.1:99999"], [f"9.9.9.{i}" for i in range(6)]):
+        with pytest.raises(ActionError):
+            await acts.test_upstreams(bad)
+    r = await acts.switch_upstreams(["tls://dns.quad9.net", "9.9.9.9:53", "[2620:fe::fe]:53"])
+    assert r["previous"] == ["tls://1.1.1.1", "tls://1.0.0.1"]
+    assert f.upstream_dns == ["tls://dns.quad9.net", "9.9.9.9:53", "[2620:fe::fe]:53"]
+    assert acts.state()["previous_upstreams"]["upstreams"] == ["tls://1.1.1.1", "tls://1.0.0.1"]
+    await acts.restore_upstreams()
+    assert f.upstream_dns == ["tls://1.1.1.1", "tls://1.0.0.1"]
+    assert len(acts.state()["presets"]) == 6
+
+
+def test_actions_api_off_by_default_then_audited(client):
+    from netwatch.services.events import SECURITY
+
+    st = client.app.state
+    fake = FakeAdGuard()
+    st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
+    st.adguard.save(HOST, PORT, False, USER, True, PASSWORD)
+    base = "/api/adguard/actions"
+    s = client.get(base).json()
+    assert s["enabled"] is False and s["upstreams"] is None and len(s["presets"]) == 6
+    calls = [
+        ("/pause", {"minutes": 30}),
+        ("/resume", None),
+        ("/rules", {"domain": "x.com", "kind": "block"}),
+        ("/upstreams", {"upstreams": ["9.9.9.9"]}),
+        ("/upstreams/test", {"upstreams": ["9.9.9.9"]}),
+    ]
+    for path, body in calls:
+        r = client.post(base + path, json=body)
+        assert r.status_code == 403 and "turned off" in r.json()["detail"]
+    assert fake.posts == []
+
+    assert (
+        client.put("/api/admin/settings", json={"changes": {"adguard_actions": True}}).status_code
+        == 200
+    )
+    s = client.get(base).json()
+    assert s["enabled"] and s["upstreams"] == ["tls://1.1.1.1", "tls://1.0.0.1"]
+    assert client.post(base + "/pause", json={"minutes": 0}).status_code == 422
+    assert client.post(base + "/pause", json={"minutes": 30, "x": 1}).status_code == 422
+    r = client.post(base + "/pause", json={"minutes": 30}).json()
+    assert r["pause"]["minutes"] == 30 and fake.protection is False
+    assert client.post(base + "/resume").status_code == 200 and fake.protection is True
+    r = client.post(base + "/rules", json={"domain": "ads.example.com", "kind": "allow"}).json()
+    assert r["rule"]["rule"] == "@@||ads.example.com^" and len(r["rules"]) == 1
+    r = client.post(base + "/rules", json={"domain": "doubleclick.net", "kind": "block"})
+    assert r.status_code == 422 and "your own rules" in r.json()["detail"]
+    r = client.request("DELETE", base + "/rules", json={"rule": "@@||ads.example.com^"})
+    assert r.status_code == 200 and r.json()["rules"] == []
+    fake.bad_upstreams = {"udp://10.9.9.9"}
+    t = client.post(base + "/upstreams/test", json={"upstreams": ["udp://10.9.9.9"]}).json()
+    assert t["ok"] is False
+    assert (
+        client.post(base + "/upstreams", json={"upstreams": ["udp://10.9.9.9"]}).status_code == 422
+    )
+    r = client.post(base + "/upstreams", json={"upstreams": ["tls://dns.quad9.net"]}).json()
+    assert r["previous"] == ["tls://1.1.1.1", "tls://1.0.0.1"]
+    assert client.post(base + "/upstreams/restore").json()["current"] == [
+        "tls://1.1.1.1",
+        "tls://1.0.0.1",
+    ]
+
+    titles = [e["title"] for e in st.events.list(0, 10**13, kinds=[SECURITY])]
+    joined = "\n".join(titles)
+    for want in ("protection paused for 30 min (until", "protection turned back on",
+                 "allowed ads.example.com", "removed rule @@||ads.example.com^",
+                 "could not block doubleclick.net", "could not switch the upstream DNS",
+                 "upstream DNS switched from tls://1.1.1.1, tls://1.0.0.1 to "
+                 "tls://dns.quad9.net"):  # fmt: skip
+        assert want in joined, want
+    assert PASSWORD not in joined and PASSWORD not in json.dumps(client.get(base).json())
+
+
+def test_actions_need_sign_in_and_the_csrf_header(anon_client, client):
+    assert anon_client.get("/api/adguard/actions").status_code == 401
+    assert anon_client.post("/api/adguard/actions/resume").status_code in (401, 403)
+    r = client.post("/api/adguard/actions/resume", headers={"X-Requested-With": ""})
+    assert r.status_code == 403

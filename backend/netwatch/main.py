@@ -21,6 +21,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from . import __version__
 from .api import (
+    adguard_actions,
     admin,
     ask,
     devices,
@@ -39,6 +40,7 @@ from .auth import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, AuthStore, LoginThrottle
 from .config import Settings, get_settings
 from .db import make_engine, run_migrations
 from .probes import Prober
+from .services.adguard.actions import AdGuardActions
 from .services.adguard.clients import ClientStore as AdGuardClientStore
 from .services.adguard.service import AdGuardService, AdGuardStore
 from .services.assistant import Assistant
@@ -321,6 +323,10 @@ def create_app(
             clients=adguard_clients,
             inventory=discovery.inventory,
         )
+        app.state.adguard_actions = AdGuardActions(
+            app.state.adguard, settings, gateway_ip=lambda: discovery.gateway_ip()
+        )
+        app.state.adguard.actions = app.state.adguard_actions
         app.state.deco = DecoService(
             store,
             events,
@@ -492,6 +498,7 @@ def create_app(
     app.include_router(devices.router)
     app.include_router(diagnosis.router)
     app.include_router(admin.router)
+    app.include_router(adguard_actions.router)
     app.include_router(netmap.router)
     app.include_router(traffic.router)
     app.include_router(score.router)
