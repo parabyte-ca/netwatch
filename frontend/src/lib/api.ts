@@ -774,7 +774,7 @@ export interface HubStatus {
   suggestion?: string | null;
 }
 
-export type MapNodeKind = 'internet' | 'isp' | 'hub' | 'switch' | 'host' | 'deco' | 'device' | 'group';
+export type MapNodeKind = 'internet' | 'isp' | 'hub' | 'switch' | 'host' | 'deco' | 'device' | 'group' | 'devgroup';
 
 export interface MapMember {
   target_id: number;
@@ -821,7 +821,25 @@ export interface MapNode {
     tx_dbm?: number | null;
     wan_up?: boolean | null;
     wan_ip?: string | null;
+    last_seen_ms?: number;
+    group?: GroupRef | null;
+    tags?: string[];
+    parent?: string;
+    collapsed?: string[];
   };
+}
+
+export interface MapGroup extends GroupRef {
+  nodes: string[];
+}
+
+export interface MapView {
+  name: string;
+  colour_by: 'group' | 'status' | 'bandwidth';
+  groups: number[];
+  tags: string[];
+  collapsed: string[];
+  show_offline: boolean;
 }
 
 export interface MapEdge {
@@ -847,6 +865,8 @@ export interface NetworkMapResponse {
   generated_ms: number;
   at_ms: number | null;
   deco_api: boolean;
+  show_offline?: boolean;
+  groups?: MapGroup[];
   nodes: MapNode[];
   edges: MapEdge[];
   highlight?: MapHighlight;
@@ -1121,8 +1141,9 @@ export const api = {
   diagnosisForEvent: (eventId: number) => request<Incident>(`/api/diagnosis/event/${eventId}`),
   report: (start: number, scope: 'all' | 'isp') => request<Report>(`/api/report?start=${start}&scope=${scope}`),
   reportMarkdownUrl: (start: number, scope: 'all' | 'isp') => `/api/report?start=${start}&scope=${scope}&format=md`,
-  map: (params: { at?: number; incident?: string; event?: number } = {}) => {
+  map: (params: { at?: number; incident?: string; event?: number; show_offline?: boolean } = {}) => {
     const q = new URLSearchParams();
+    if (params.show_offline) q.set('show_offline', 'true');
     if (params.at) q.set('at', String(params.at));
     if (params.incident) q.set('incident', params.incident);
     if (params.event) q.set('event', String(params.event));
@@ -1172,9 +1193,13 @@ export const api = {
   trafficTop: (hours: number) => request<TrafficTop>(`/api/traffic/top?hours=${hours}`),
   deviceDns: (id: number, hours: number) => request<DeviceDns>(`/api/devices/${id}/dns?hours=${hours}`),
   deviceTraffic: (id: number, hours: number) => request<DeviceTraffic>(`/api/devices/${id}/traffic?hours=${hours}`),
-  mapLayout: () => request<{ positions: MapPositions }>('/api/map/layout'),
-  saveMapLayout: (positions: MapPositions) =>
-    request<{ positions: MapPositions }>('/api/map/layout', { method: 'PUT', body: JSON.stringify({ positions }) }),
+  mapLayout: () => request<{ positions: MapPositions; collapsed?: string[] }>('/api/map/layout'),
+  saveMapLayout: (positions: MapPositions, collapsed?: string[]) =>
+    request<{ positions: MapPositions; collapsed: string[] }>('/api/map/layout', {
+      method: 'PUT', body: JSON.stringify(collapsed === undefined ? { positions } : { positions, collapsed }),
+    }),
+  mapViews: () => request<{ views: MapView[] }>('/api/map/views'),
+  saveMapViews: (views: MapView[]) => request<{ views: MapView[] }>('/api/map/views', { method: 'PUT', body: JSON.stringify({ views }) }),
   resetMapLayout: () => request<void>('/api/map/layout', { method: 'DELETE' }),
   deco: () => request<DecoStatus>('/api/admin/deco'),
   saveDeco: (body: { host: string; enabled: boolean; password?: string; forget_password?: boolean }) =>
