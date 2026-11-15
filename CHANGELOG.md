@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.16.0] - 2026-11-15
+### Added
+- Full screen map: a Full screen button (or the F key; Esc leaves) fills the screen with the map,
+  with the options in a slim bar and the details panel over the map. `/map?full=1` opens straight
+  into it, for a wall tablet.
+- DHCP reservations through AdGuard Home, when it is the DHCP server and AdGuard Home actions are
+  on: reserve a device's address from its page (IP, MAC and name filled in), change or remove
+  reservations from the DNS page (also ones made in AdGuard Home, after a warning), and reserve
+  the current addresses of the devices ticked on the Devices page. The address must be inside
+  AdGuard Home's DHCP network, not the gateway or AdGuard Home, and not reserved for or leased to
+  another device; a failed change puts the old reservation back. Every change is confirmed and
+  written to the security log. Private (randomised) Wi-Fi addresses are flagged.
+- `GET /api/adguard/actions/dhcp`, `POST`/`DELETE /api/adguard/actions/dhcp/reservations` and
+  `POST /api/adguard/actions/dhcp/reservations/bulk`.
+
 ## [0.15.1] - 2026-11-15
 ### Fixed
 - Allowing or blocking a domain from the DNS page failed with "unexpected filtering answer"
