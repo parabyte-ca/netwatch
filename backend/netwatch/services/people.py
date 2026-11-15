@@ -24,7 +24,7 @@ from .events import PRESENCE, EventLog
 
 log = logging.getLogger(__name__)
 
-STATE_KEY = "presence_state"  # {person_id: {"home": bool, "since_ms": int}}
+STATE_KEY = "presence_state"  # {person_id: {"home", "since_ms" or None, "devices": [ids]}}
 SETTINGS_KEY = "presence_settings"  # {"away_after_min": int}
 DEFAULT_AWAY_MIN = 15
 AWAY_RANGE = (5, 240)
@@ -198,22 +198,25 @@ class PresenceService:
         for pid, p in plist.items():
             last = seen.get(pid)
             prev = old.get(str(pid))
+            devs = p["device_ids"]
+            if prev is not None and prev.get("devices", devs) != devs:
+                prev = None  # devices changed: start again without an event
             if last is None:  # no devices, or none seen yet
-                state[str(pid)] = prev or {"home": False, "since_ms": now}
+                state[str(pid)] = prev or {"home": False, "since_ms": None, "devices": devs}
                 continue
             home = now - last <= away_ms
-            if prev is None:  # newly added: start from what is true now, without an event
-                state[str(pid)] = {"home": home, "since_ms": last if home else last + away_ms}
+            if prev is None:  # newly added: what is true now, without an event or a guessed time
+                state[str(pid)] = {"home": home, "since_ms": None, "devices": devs}
                 continue
-            if home and not prev["home"] and last > prev["since_ms"]:
-                state[str(pid)] = {"home": True, "since_ms": last}
+            if home and not prev["home"] and last > (prev["since_ms"] or 0):
+                state[str(pid)] = {"home": True, "since_ms": last, "devices": devs}
                 changes.append(self._record(p, "arrived", last))
             elif not home and prev["home"]:
                 # Leaving is dated by the last sighting; the gap proves they had gone.
-                state[str(pid)] = {"home": False, "since_ms": last}
+                state[str(pid)] = {"home": False, "since_ms": last, "devices": devs}
                 changes.append(self._record(p, "left", last))
             else:
-                state[str(pid)] = prev
+                state[str(pid)] = {**prev, "devices": devs}
         if state != old:
             self.kv_set(STATE_KEY, state)
         return changes

@@ -46,6 +46,7 @@ def test_sleeping_phone_does_not_flap_then_leaves_and_comes_back(store, env):
     sam = people.create("Sam", "sky", [phone])
     assert svc.tick(T0) == []  # newly added: no event, just the current state
     assert svc.status()[0]["home"] is True
+    assert svc.status()[0]["since_ms"] is None  # not known when they arrived
     # Wi-Fi asleep for 12 minutes at a time, under the 15-minute threshold: still home.
     for i in range(1, 6):
         t = T0 + i * 12 * MIN
@@ -127,10 +128,15 @@ def test_person_validation_and_delete_removes_their_events(store, env):
 
 
 def test_person_without_devices_is_unknown(store, env):
-    svc, people, _, _, _ = env
-    people.create("Guest", "slate")
+    svc, people, devs, events, _ = env
+    guest = people.create("Guest", "slate")
     svc.tick(T0)
     assert svc.status()[0]["home"] is None
+    # Giving them a device that is on the network now is not an arrival.
+    phone = add_device(devs, "aa:00:00:00:00:12", T0)
+    people.update(guest["id"], device_ids=[phone])
+    assert svc.tick(T0 + MIN) == []
+    assert svc.status()[0]["home"] is True and presence_events(events) == []
 
 
 def test_history_days_and_week_summary(store, env):
