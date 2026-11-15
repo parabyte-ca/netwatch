@@ -269,6 +269,25 @@ class AdGuardClient:
             raise AdGuardError("unexpected filtering answer (is this AdGuard Home?)")
         return [str(r) for r in rules]
 
+    async def persistent_clients(self) -> list[dict]:
+        """AdGuard Home's persistent clients as it sends them (name, ids and settings)."""
+        c = await self._get("/control/clients")
+        items = c.get("clients") if isinstance(c, dict) else None
+        if items is None:
+            return []  # none set up yet (AdGuard sends null)
+        if not isinstance(items, list):
+            raise AdGuardError("unexpected clients answer (is this AdGuard Home?)")
+        return [x for x in items if isinstance(x, dict) and x.get("name")]
+
+    async def add_client(self, data: dict) -> None:
+        await self._post("/control/clients/add", data)
+
+    async def update_client(self, name: str, data: dict) -> None:
+        await self._post("/control/clients/update", {"name": name, "data": data})
+
+    async def delete_client(self, name: str) -> None:
+        await self._post("/control/clients/delete", {"name": name})
+
     async def add_static_lease(self, mac: str, ip: str, hostname: str) -> None:
         await self._post("/control/dhcp/add_static_lease",
                          {"mac": mac, "ip": ip, "hostname": hostname})  # fmt: skip
