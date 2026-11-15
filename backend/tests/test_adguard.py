@@ -1584,7 +1584,8 @@ async def test_a_schedule_turns_the_internet_off_with_a_client_rule(sprof):
         for e in p.actions.events.list(0, 10**13, kinds=[DNS])
         if e["details"].get("type") == "schedule"
     ]
-    assert ev and ev[0]["title"] == "Kids: internet off (Bedtime)" and ev[0]["end_ms"] is None
+    planned = ev[0]["end_ms"]  # recorded with its planned end: on the timeline, not an incident
+    assert ev[0]["title"] == "Kids: internet off (Bedtime)" and planned > time.time() * 1000
     assert (await p.reconcile())["changes"] == []  # stable
     # +15 min: the line goes, the user's rules stay, the event ends
     p.schedules.extend(s["id"], "15")
@@ -1596,7 +1597,7 @@ async def test_a_schedule_turns_the_internet_off_with_a_client_rule(sprof):
         for e in p.actions.events.list(0, 10**13, kinds=[DNS])
         if e["details"].get("type") == "schedule"
     ]
-    assert ev[0]["end_ms"] is not None
+    assert ev[0]["end_ms"] < planned  # ended early with +15 min
 
 
 async def test_schedule_effects_overlay_settings_and_reach_device_clients(sprof):

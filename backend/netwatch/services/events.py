@@ -109,6 +109,11 @@ class EventLog:
                 .values(end_ms=end_ms, details=json.dumps(details))
             )
 
+    def set_end(self, event_id: int, end_ms: int) -> None:
+        """Move the end of an event that was recorded with a planned end (a schedule)."""
+        with self.engine.begin() as conn:
+            conn.execute(update(events).where(events.c.id == event_id).values(end_ms=end_ms))
+
     def close_interrupted(self, end_ms: int) -> int:
         """Close events left open by an unclean stop; they can no longer be observed ending."""
         with self.engine.begin() as conn:

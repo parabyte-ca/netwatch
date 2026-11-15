@@ -166,7 +166,7 @@ class ProfileSync:
         self.inventory = inventory
         self.groups = groups
         self.schedules = schedules  # ScheduleStore, or None
-        self._events: dict[str, int] = {}  # active schedule on a target → its open event
+        self._events: dict[str, tuple[int, int]] = {}  # active schedule → (event id, planned end)
         self._last_sig: tuple | None = None
         self.store = actions.store
         self.conflicts: list[dict] = []
@@ -416,7 +416,9 @@ class ProfileSync:
         return added + [{"action": "internet back on", "client": r} for r in had if r not in want]
 
     def _schedule_events(self, desired: dict) -> None:
-        """One information event per schedule while it is in force on a group or device."""
+        """One information event per schedule on a group or device, recorded with its planned
+        end (so it shows on the timeline, not as an ongoing incident) and shortened if it ends
+        early."""
         if self.schedules is None:
             return
         now = int(time.time() * 1000)
@@ -429,13 +431,17 @@ class ProfileSync:
             if key in self._events:
                 continue
             who = labels.get(f"{a['target']['kind']}:{a['target']['id']}", a["target"]["kind"])
-            self._events[key] = self.actions.events.open(
+            eid = self.actions.events.open(
                 DNS, "info", now, f"{who}: {describe_effects(a['effects'])} ({a['name']})",
                 details={"type": "schedule", "schedule": a["id"], "target": a["target"],
                          "until_ms": a["end_ms"], "manual": a["manual"]},
+                end_ms=a["end_ms"],
             )  # fmt: skip
+            self._events[key] = (eid, a["end_ms"])
         for key in [k for k in self._events if k not in current]:
-            self.actions.events.close(self._events.pop(key), now)
+            eid, planned = self._events.pop(key)
+            if now < planned:  # ended early: +15 min, back on now, turned off
+                self.actions.events.set_end(eid, now)
 
     async def _check_apps(self, s: dict) -> None:
         if not s["services"]:
