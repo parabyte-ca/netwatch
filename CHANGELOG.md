@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.20.0] - 2026-11-15
+### Added
+- Install NetWatch as an app: a web app manifest and icons, and **Install app** in the menu when
+  the browser offers it (Chrome, Edge, Android), or Share, then Add to Home Screen instructions in
+  Safari on iPhone and iPad. Hidden once installed. Installing needs HTTPS (or `localhost`).
+- A small service worker keeps only the page shell, the logo and the hashed app files, so the
+  installed app opens without a connection. API answers are never stored. A new version takes
+  over the next time the app opens.
+- "No connection to NetWatch" banner while NetWatch does not answer; the sign-in screen says the
+  same when the app is opened away from home and tries again every 10 seconds by itself.
+
 ## [0.19.1] - 2026-11-15
 ### Fixed
 - YouTube **Allowed** now also turns off Restricted Mode. Before, a device left on Default filtering
