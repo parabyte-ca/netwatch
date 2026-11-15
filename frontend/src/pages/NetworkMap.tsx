@@ -238,6 +238,11 @@ export function NetworkMap() {
   const flowRef = useRef<{ fitView: (o?: { padding?: number; duration?: number }) => unknown } | null>(null);
   const savedRef = useRef(saved);
   savedRef.current = saved;
+  // Full screen: the map fills the window (and the screen, where the browser allows it).
+  // ?full=1 opens straight into it, for a wall tablet bookmark.
+  const [full, setFull] = useState(params.get('full') === '1');
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const usedApi = useRef(false);
 
   useEffect(() => {
     api.mapLayout().then((r) => {
@@ -291,6 +296,44 @@ export function NetworkMap() {
     setEdges(flow.edges);
   }, [graph, shaped, positions, layoutReady, selected, setNodes, setEdges]);
 
+  const enterFull = useCallback(() => {
+    setFull(true);
+    setParams((p) => { const q = new URLSearchParams(p); q.set('full', '1'); return q; }, { replace: true });
+    const el = rootRef.current;
+    if (el?.requestFullscreen && !document.fullscreenElement) {
+      el.requestFullscreen().then(() => { usedApi.current = true; }, () => { /* the window-filling view is enough */ });
+    }
+  }, [setParams]);
+  const exitFull = useCallback(() => {
+    setFull(false);
+    setParams((p) => { const q = new URLSearchParams(p); q.delete('full'); return q; }, { replace: true });
+    if (usedApi.current && document.fullscreenElement && document.exitFullscreen) void document.exitFullscreen().catch(() => {});
+    usedApi.current = false;
+  }, [setParams]);
+
+  // F toggles full screen (not while typing); Esc leaves it. When the browser leaves its own
+  // full screen mode (its Esc), leave ours too.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const typing = t && (t.isContentEditable || ['INPUT', 'SELECT', 'TEXTAREA'].includes(t.tagName));
+      if (e.key === 'Escape' && full) exitFull();
+      else if ((e.key === 'f' || e.key === 'F') && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (full) exitFull();
+        else enterFull();
+      }
+    };
+    const onChange = () => { if (!document.fullscreenElement && usedApi.current) exitFull(); };
+    window.addEventListener('keydown', onKey);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => { window.removeEventListener('keydown', onKey); document.removeEventListener('fullscreenchange', onChange); };
+  }, [full, enterFull, exitFull]);
+
+  useEffect(() => {
+    const t = setTimeout(() => void flowRef.current?.fitView({ padding: 0.15, duration: 300 }), 120);
+    return () => clearTimeout(t);
+  }, [full]);
+
   // When nodes appear or disappear (a group folded or opened, offline devices shown), fit the
   // whole map in view again. Not on every poll: only when the shape changes.
   useEffect(() => {
@@ -339,17 +382,22 @@ export function NetworkMap() {
     setNodes([]);
   }
 
-  const setReplay = (p: Record<string, string>) => setParams(p, { replace: true });
+  const setReplay = (p: Record<string, string>) => setParams(full ? { ...p, full: '1' } : p, { replace: true });
   const now = Date.now();
   const at = graph?.at_ms ?? atParam ?? graph?.highlight?.start_ms ?? now;
   const node = shaped?.nodes.find((n) => n.id === selected) ?? null;
   const hl = graph?.highlight;
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold text-white">Network map</h1>
+    <div ref={rootRef} data-testid="map-page" aria-label={full ? 'Network map, full screen' : undefined}
+      className={full ? 'fixed inset-0 z-50 flex flex-col gap-2 overflow-hidden bg-slate-950 p-2 sm:p-3' : 'space-y-4'}>
+      <div className={`flex flex-wrap items-center justify-between ${full ? 'gap-2' : 'gap-3'}`}>
+        <h1 className={full ? 'text-sm font-semibold text-slate-300' : 'text-xl font-semibold text-white'}>Network map</h1>
         <div className="flex flex-wrap items-center gap-2">
+          <button className={`${btn} text-slate-200 ring-1 ring-slate-700 hover:bg-slate-800`} onClick={full ? exitFull : enterFull}
+            title={full ? 'Leave full screen (Esc or F)' : 'Full screen (F)'} aria-pressed={full}>
+            {full ? 'Exit full screen' : 'Full screen'}
+          </button>
           <div className="inline-flex overflow-hidden rounded-md ring-1 ring-slate-700" role="group" aria-label="Mode">
             <button className={`${btn} rounded-none ${!replay ? 'bg-sky-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}
               onClick={() => setReplay({})} aria-pressed={!replay}>Live</button>
@@ -455,10 +503,10 @@ export function NetworkMap() {
       )}
 
       {error && <p className="text-rose-400">{error}</p>}
-      {graph && !graph.at_ms && <DecoNote graph={graph} />}
+      {graph && !graph.at_ms && !full && <DecoNote graph={graph} />}
 
-      <div className="grid gap-4 lg:grid-cols-[1fr_20rem]">
-        <div className="h-[65vh] min-h-[420px] overflow-hidden rounded-lg bg-slate-950 ring-1 ring-slate-800" data-testid="map-canvas">
+      <div className={full ? 'relative min-h-0 flex-1' : 'grid gap-4 lg:grid-cols-[1fr_20rem]'}>
+        <div className={`overflow-hidden rounded-lg bg-slate-950 ring-1 ring-slate-800 ${full ? 'h-full' : 'h-[65vh] min-h-[420px]'}`} data-testid="map-canvas">
           {graph && layoutReady && (
             <ReactFlow
               nodes={nodes}
@@ -483,10 +531,10 @@ export function NetworkMap() {
             </ReactFlow>
           )}
         </div>
-        <div className="space-y-3">
+        <div className={full ? 'absolute right-2 top-2 z-10 max-h-[calc(100%-1rem)] w-[min(20rem,calc(100%-1rem))] overflow-y-auto' : 'space-y-3'}>
           {node ? (
             <Details n={node} onClose={() => setSelected(null)} />
-          ) : (
+          ) : full ? null : (
             <div className="rounded-lg bg-slate-900 p-4 text-sm text-slate-400 ring-1 ring-slate-800">
               {!replay && graph?.deco_api && <div className="mb-4"><TopTalkers limit={5} compact /></div>}
               <p>Tap a node for details. Drag nodes to tidy the map; positions are saved. Group chips above the map highlight a group or fold it into one node.</p>
@@ -500,7 +548,7 @@ export function NetworkMap() {
           )}
         </div>
       </div>
-      {graph && <p className="text-xs text-slate-500">Updated {fmtTime(graph.generated_ms)}</p>}
+      {graph && !full && <p className="text-xs text-slate-500">Updated {fmtTime(graph.generated_ms)}</p>}
     </div>
   );
 }

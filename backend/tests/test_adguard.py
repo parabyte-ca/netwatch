@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
@@ -43,6 +44,7 @@ class FakeAdGuard:
             "top_upstreams_avg_time": [{"tls://1.1.1.1:853": 0.015}, {"8.8.8.8:53": 0.020}],
         }  # fmt: skip
         self.dhcp: dict | None = None  # None: no DHCP support (404)
+        self.refuse_lease = 0  # refuse this many add_static_lease calls
         self.user_rules = ["||doubleclick.net^", "# my own rule"]
         self.upstream_dns = ["tls://1.1.1.1", "tls://1.0.0.1"]
         self.bad_upstreams: set[str] = set()  # fail AdGuard's upstream test
@@ -115,7 +117,8 @@ class FakeAdGuard:
 
 
 WRITE_PATHS = {"/control/protection", "/control/filtering/set_rules", "/control/dns_config",
-               "/control/test_upstream_dns"}  # fmt: skip
+               "/control/test_upstream_dns", "/control/dhcp/add_static_lease",
+               "/control/dhcp/remove_static_lease"}  # fmt: skip
 
 
 def _write(self, path: str, body: dict) -> httpx.Response:
@@ -129,6 +132,21 @@ def _write(self, path: str, body: dict) -> httpx.Response:
         return httpx.Response(200, text="OK")
     if path == "/control/filtering/set_rules":
         self.user_rules = list(body["rules"])
+        return httpx.Response(200)
+    if path == "/control/dhcp/add_static_lease":
+        statics = self.dhcp.setdefault("static_leases", [])
+        if self.refuse_lease:
+            self.refuse_lease -= 1
+            return httpx.Response(400, text="invalid static lease\n")
+        if any(x["mac"] == body["mac"] or x["ip"] == body["ip"] for x in statics):
+            return httpx.Response(400, text="static lease already exists\n")
+        statics.append(dict(body))
+        return httpx.Response(200)
+    if path == "/control/dhcp/remove_static_lease":
+        statics = self.dhcp.get("static_leases") or []
+        if body not in statics:
+            return httpx.Response(400, text="lease not found\n")
+        statics.remove(body)
         return httpx.Response(200)
     if path == "/control/test_upstream_dns":
         return httpx.Response(200, json={
@@ -998,3 +1016,176 @@ def test_actions_need_sign_in_and_the_csrf_header(anon_client, client):
     assert anon_client.post("/api/adguard/actions/resume").status_code in (401, 403)
     r = client.post("/api/adguard/actions/resume", headers={"X-Requested-With": ""})
     assert r.status_code == 403
+
+
+# ── DHCP reservations ────────────────────────────────────────────────────────
+
+DHCP_V4 = {"gateway_ip": "192.168.2.1", "subnet_mask": "255.255.255.0",
+           "range_start": "192.168.2.100", "range_end": "192.168.2.200",
+           "lease_duration": 86400}  # fmt: skip
+
+
+def dhcp_on(fake):
+    fake.dhcp = {
+        "enabled": True, "interface_name": "eth0", "v4": dict(DHCP_V4),
+        "leases": [{"mac": "aa:bb:cc:00:00:50", "ip": "192.168.2.150", "hostname": "pixel-9",
+                    "expires": "2026-11-16T12:00:00Z"},
+                   {"mac": "aa:bb:cc:00:00:60", "ip": "192.168.2.160", "hostname": "tv",
+                    "expires": "2026-11-16T12:00:00Z"}],
+        "static_leases": [{"mac": "aa:bb:cc:00:00:70", "ip": "192.168.2.20", "hostname": "nas"}],
+    }  # fmt: skip
+
+
+async def test_dhcp_status_reads_the_dhcp_settings():
+    fake = FakeAdGuard()
+    dhcp_on(fake)
+    d = await client_for(fake).dhcp_status()
+    assert d["v4"] == {k: DHCP_V4[k] for k in ("gateway_ip", "subnet_mask", "range_start",
+                                                 "range_end")}  # fmt: skip
+    fake.dhcp["v4"] = {"gateway_ip": "", "subnet_mask": "255.255.255.0"}
+    assert (await client_for(fake).dhcp_status())["v4"] is None
+
+
+async def test_reserve_checks_the_address(acts, svc):
+    from netwatch.services.adguard.actions import ActionError
+
+    f = svc.fake
+    with pytest.raises(ActionError, match="not the DHCP server"):
+        await acts.reserve("aa:bb:cc:00:00:50", "192.168.2.50", "pixel", "admin")
+    dhcp_on(f)
+    bad = {
+        "10.0.0.5": "outside AdGuard Home's DHCP network \\(192.168.2.0/24\\)",
+        "192.168.2.0": "network's own address",
+        "192.168.2.255": "network's own address",
+        "192.168.2.1": "gateway or AdGuard Home",
+        HOST: "gateway or AdGuard Home",
+        "192.168.2.20": "already reserved for nas",
+        "192.168.2.160": "already in use by tv",
+        "192.168.2": "IPv4 address",
+        "fe80::1": "IPv4 address",
+    }
+    for ip, msg in bad.items():
+        with pytest.raises(ActionError, match=msg):
+            await acts.reserve("aa:bb:cc:00:00:50", ip, "pixel", "admin")
+    with pytest.raises(ActionError, match="valid MAC"):
+        await acts.reserve("not-a-mac", "192.168.2.50", "x", "admin")
+    assert all(p[0] != "/control/dhcp/add_static_lease" for p in f.posts)
+
+    # Its own current address is fine; the name is cleaned for AdGuard Home.
+    r = await acts.reserve("AA-BB-CC-00-00-50", "192.168.2.150", "Sam's Pixel 9!", "admin")
+    assert r == {"mac": "aa:bb:cc:00:00:50", "ip": "192.168.2.150", "hostname": "sam-s-pixel-9",
+                 "changed_from": None, "private_mac": True, "by": "admin"}  # fmt: skip
+    assert {"mac": "aa:bb:cc:00:00:50", "ip": "192.168.2.150", "hostname": "sam-s-pixel-9"} in (
+        f.dhcp["static_leases"]
+    )
+    assert acts.reserved_by_netwatch() == ["aa:bb:cc:00:00:50"]
+    with pytest.raises(ActionError, match=r"already reserved at 192\.168\.2\.150"):
+        await acts.reserve("aa:bb:cc:00:00:50", "192.168.2.150", "sam-s-pixel-9", "admin")
+
+
+async def test_change_puts_the_old_reservation_back_when_adguard_refuses(acts, svc):
+    from netwatch.services.adguard.actions import ActionError
+
+    f = svc.fake
+    dhcp_on(f)
+    r = await acts.reserve("aa:bb:cc:00:00:70", "192.168.2.21", "nas", "admin")
+    assert r["changed_from"] == "192.168.2.20"
+    assert {"mac": "aa:bb:cc:00:00:70", "ip": "192.168.2.21", "hostname": "nas"} in (
+        f.dhcp["static_leases"]
+    )
+    f.refuse_lease = 1  # only the new address is refused; the old one goes back
+    with pytest.raises(ActionError, match="refused the change"):
+        await acts.reserve("aa:bb:cc:00:00:70", "192.168.2.22", "nas", "admin")
+    assert [x for x in f.dhcp["static_leases"] if x["mac"] == "aa:bb:cc:00:00:70"] == [
+        {"mac": "aa:bb:cc:00:00:70", "ip": "192.168.2.21", "hostname": "nas"}
+    ]
+
+
+async def test_unreserve_and_private_addresses(acts, svc):
+    from netwatch.services.adguard.actions import ActionError
+
+    f = svc.fake
+    dhcp_on(f)
+    from netwatch.services.adguard.actions import private_mac
+
+    assert private_mac("ba:bb:cc:00:00:99") and not private_mac("00:11:22:33:44:55")
+    r = await acts.reserve("ba:bb:cc:00:00:99", "192.168.2.99", "", "admin")
+    assert r["private_mac"] and r["hostname"] is None
+    await acts.unreserve("ba:bb:cc:00:00:99", "admin")
+    assert all(x["mac"] != "ba:bb:cc:00:00:99" for x in f.dhcp["static_leases"])
+    assert acts.reserved_by_netwatch() == []
+    await acts.unreserve("aa:bb:cc:00:00:70", "admin")  # one made in AdGuard Home
+    assert f.dhcp["static_leases"] == []
+    with pytest.raises(ActionError, match="no reservation"):
+        await acts.unreserve("aa:bb:cc:00:00:70", "admin")
+
+
+async def test_reservations_refuse_when_actions_are_off(acts, svc):
+    from netwatch.services.adguard.actions import ActionsDisabled
+
+    dhcp_on(svc.fake)
+    acts.settings_ns.adguard_actions = False
+    for coro in (acts.dhcp(), acts.reserve("aa:bb:cc:00:00:50", "192.168.2.50", "x", "admin"),
+                 acts.unreserve("aa:bb:cc:00:00:70", "admin")):  # fmt: skip
+        with pytest.raises(ActionsDisabled):
+            await coro
+    assert svc.fake.posts == []
+
+
+def test_reservations_api_and_security_log(client):
+    from netwatch.services.events import SECURITY
+
+    st = client.app.state
+    fake = FakeAdGuard()
+    dhcp_on(fake)
+    st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
+    st.adguard.save(HOST, PORT, False, USER, True, PASSWORD)
+    base = "/api/adguard/actions/dhcp"
+    assert client.get(base).status_code == 403
+    body = {"mac": "aa:bb:cc:00:00:50", "ip": "192.168.2.50"}
+    assert client.post(base + "/reservations", json=body).status_code == 403
+    client.put("/api/admin/settings", json={"changes": {"adguard_actions": True}})
+    pixel = st.device_store.insert({"mac": "aa:bb:cc:00:00:50", "first_seen_ms": 1,
+                                    "last_seen_ms": int(time.time() * 1000),
+                                    "last_ip": "192.168.2.150", "name": "Sam's Pixel"})  # fmt: skip
+    st.discovery.inventory.forget()
+    d = client.get(base).json()
+    assert d["enabled"] and d["v4"]["gateway_ip"] == "192.168.2.1"
+    assert (
+        d["reservations"][0]["mac"] == "aa:bb:cc:00:00:70"
+        and not d["reservations"][0]["by_netwatch"]
+    )
+    lease = next(x for x in d["leases"] if x["mac"] == "aa:bb:cc:00:00:50")
+    assert lease["device"] == {"id": pixel, "label": "Sam's Pixel"}
+
+    r = client.post(base + "/reservations", json={"mac": "aa:bb:cc:00:00:50", "ip": "192.168.2.20"})
+    assert r.status_code == 422 and "already reserved for nas" in r.json()["detail"]
+    assert client.post(base + "/reservations", json={"mac": "x", "ip": "1"}).status_code == 422
+    r = client.post(base + "/reservations/bulk", json={"device_ids": [pixel, 999999]}).json()
+    assert r["results"][0] == {
+        "id": pixel,
+        "label": "Sam's Pixel",
+        "ok": True,
+        "ip": "192.168.2.150",
+    }
+    assert r["results"][1] == {"id": 999999, "ok": False, "error": "unknown device"}
+    d = client.get(base).json()
+    mine = next(x for x in d["reservations"] if x["mac"] == "aa:bb:cc:00:00:50")
+    assert mine["by_netwatch"] and mine["device"]["id"] == pixel
+    again = client.post(base + "/reservations/bulk", json={"device_ids": [pixel]}).json()
+    assert again["results"][0]["already"] is True
+    r = client.post(
+        base + "/reservations",
+        json={"mac": "aa:bb:cc:00:00:50", "ip": "192.168.2.51", "hostname": "pixel"},
+    )
+    assert r.json()["reservation"]["changed_from"] == "192.168.2.150"
+    r = client.request("DELETE", base + "/reservations", json={"mac": "aa:bb:cc:00:00:50"})
+    assert r.status_code == 200 and r.json()["removed"]["ip"] == "192.168.2.51"
+
+    joined = "\n".join(e["title"] for e in st.events.list(0, 10**13, kinds=[SECURITY]))
+    for want in ("could not reserve 192.168.2.20: 192.168.2.20 is already reserved for nas",
+                 "reserved 192.168.2.150 for Sam's Pixel (aa:bb:cc:00:00:50)",
+                 "changed 192.168.2.150 to 192.168.2.51 for Sam's Pixel (aa:bb:cc:00:00:50)",
+                 "removed the reservation of 192.168.2.51 for Sam's Pixel"):  # fmt: skip
+        assert want in joined, want
+    assert PASSWORD not in joined and PASSWORD not in json.dumps(client.get(base).json())

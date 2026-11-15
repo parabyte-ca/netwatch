@@ -11,6 +11,7 @@ removes only its own exact lines and keeps a list of them, so it never touches y
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ipaddress
 import logging
 import re
@@ -25,6 +26,7 @@ log = logging.getLogger(__name__)
 PAUSE_KEY = "adguard_pause"
 RULES_KEY = "adguard_rules"
 PREV_UPSTREAMS_KEY = "adguard_prev_upstreams"
+LEASES_KEY = "adguard_reservations"  # MACs whose reservation NetWatch made
 PAUSE_MIN, PAUSE_MAX = 1, 1440  # minutes
 MAX_RULES = 200
 MAX_UPSTREAMS = 5
@@ -105,6 +107,20 @@ def _plain_address(u: str) -> bool:
     except ValueError:
         return False
     return port is None or (port.isdigit() and 0 < int(port) < 65536)
+
+
+_MAC = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
+
+
+def clean_hostname(raw: str | None) -> str:
+    """A DHCP hostname AdGuard Home accepts: letters, digits and hyphens, at most 63."""
+    h = re.sub(r"[^a-z0-9-]+", "-", (raw or "").strip().lower())
+    return re.sub(r"-{2,}", "-", h).strip("-")[:63].strip("-")
+
+
+def private_mac(mac: str) -> bool:
+    """A locally administered (randomised, "private Wi-Fi address") MAC."""
+    return int(mac[1], 16) & 2 == 2
 
 
 class AdGuardActions:
@@ -248,6 +264,95 @@ class AdGuardActions:
                 self.store.kv_set, RULES_KEY, [r for r in ours if r["rule"] != rule]
             )
             return entry
+
+    # ── DHCP reservations ────────────────────────────────────────────────────
+
+    def reserved_by_netwatch(self) -> list[str]:
+        r = self.store.kv_get(LEASES_KEY, []) or []
+        return [m for m in r if isinstance(m, str)] if isinstance(r, list) else []
+
+    async def dhcp(self) -> dict:
+        """AdGuard Home's DHCP settings and leases, for the reservations UI."""
+        client = await self._client()
+        d = await self._call(client.dhcp_status())
+        return {**d, "ours": self.reserved_by_netwatch()}
+
+    def _check_ip(self, d: dict, mac: str, ip: str) -> None:
+        if not d["available"] or not d["enabled"]:
+            raise ActionError("AdGuard Home is not the DHCP server")
+        v4 = d.get("v4")
+        if not v4:
+            raise ActionError("could not read AdGuard Home's DHCP settings")
+        try:
+            addr = ipaddress.IPv4Address(ip)
+            net = ipaddress.IPv4Network(f"{v4['gateway_ip']}/{v4['subnet_mask']}", strict=False)
+        except ValueError:
+            raise ActionError("enter an IPv4 address, such as 192.168.2.50") from None
+        if addr not in net:
+            raise ActionError(f"{ip} is outside AdGuard Home's DHCP network ({net})")
+        if addr in (net.network_address, net.broadcast_address):
+            raise ActionError(f"{ip} is the network's own address; pick another")
+        host = (self.service.config().get("host") or "").strip()
+        if ip in {v4["gateway_ip"], self.gateway_ip() or "", host}:
+            raise ActionError(f"{ip} is the gateway or AdGuard Home itself")
+        for lease in d["leases"]:
+            if lease["ip"] == ip and lease["mac"] != mac:
+                who = lease["hostname"] or lease["mac"]
+                kind = "reserved for" if lease["static"] else "in use by"
+                raise ActionError(f"{ip} is already {kind} {who}")
+
+    async def reserve(self, mac: str, ip: str, hostname: str | None, by: str) -> dict:
+        """Reserve ip for mac, or change the device's reservation. Returns the reservation."""
+        mac = (mac or "").strip().lower().replace("-", ":")
+        if not _MAC.match(mac):
+            raise ActionError("not a valid MAC address")
+        ip = (ip or "").strip()
+        name = clean_hostname(hostname)
+        async with self._lock:
+            client = await self._client()
+            d = await self._call(client.dhcp_status())
+            self._check_ip(d, mac, ip)
+            old = next((x for x in d["leases"] if x["static"] and x["mac"] == mac), None)
+            if old and old["ip"] == ip and (old["hostname"] or "") == name:
+                raise ActionError(f"{mac} is already reserved at {ip}")
+            if old:
+                await self._call(client.remove_static_lease(mac, old["ip"], old["hostname"] or ""))
+            try:
+                await self._call(client.add_static_lease(mac, ip, name))
+            except ActionError:
+                if old:  # put the old reservation back, so a failed change loses nothing
+                    with contextlib.suppress(ActionError):
+                        await self._call(
+                            client.add_static_lease(mac, old["ip"], old["hostname"] or "")
+                        )
+                raise
+            ours = self.reserved_by_netwatch()
+            if mac not in ours:
+                await asyncio.to_thread(self.store.kv_set, LEASES_KEY, [*ours, mac][-500:])
+            return {
+                "mac": mac,
+                "ip": ip,
+                "hostname": name or None,
+                "changed_from": old["ip"] if old else None,
+                "private_mac": private_mac(mac),
+                "by": by,
+            }
+
+    async def unreserve(self, mac: str, by: str) -> dict:
+        mac = (mac or "").strip().lower().replace("-", ":")
+        async with self._lock:
+            client = await self._client()
+            d = await self._call(client.dhcp_status())
+            old = next((x for x in d["leases"] if x["static"] and x["mac"] == mac), None)
+            if old is None:
+                raise ActionError("there is no reservation for that device")
+            await self._call(client.remove_static_lease(mac, old["ip"], old["hostname"] or ""))
+            ours = self.reserved_by_netwatch()
+            if mac in ours:
+                await asyncio.to_thread(
+                    self.store.kv_set, LEASES_KEY, [m for m in ours if m != mac]
+                )
+            return {**old, "by": by}
 
     # ── upstream DNS ─────────────────────────────────────────────────────────
 

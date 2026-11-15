@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { GroupManager } from '../components/GroupManager';
 import { GroupStrip } from '../components/GroupStrip';
+import { ReserveCurrentButton } from '../components/DhcpReservations';
 import { api, type DeviceGroup, type DeviceRow, type DiscoveryStatus, type GroupSuggestion } from '../lib/api';
 import { GroupBadge, GroupIcon, TagChip, colourOf } from '../lib/groups';
 import { DEVICE_TYPE_LABEL, fmtAgo, fmtTime } from '../lib/format';
@@ -228,6 +229,7 @@ function BulkBar({ ids, groups, onDone, onClear }: { ids: number[]; groups: Devi
       <input aria-label="Tag" placeholder="tag" className={`${input} w-28`} value={tag} onChange={(e) => setTag(e.target.value)} />
       <button className={`${btn} bg-slate-700 text-slate-100 hover:bg-slate-600`} disabled={!tag.trim()} onClick={() => void run({ add_tags: [tag.trim()] })}>Add tag</button>
       <button className={`${btn} bg-slate-700 text-slate-100 hover:bg-slate-600`} disabled={!tag.trim()} onClick={() => void run({ remove_tags: [tag.trim()] })}>Remove tag</button>
+      <ReserveCurrentButton ids={ids} onDone={onDone} />
       <button className="ml-auto px-2 text-xs text-slate-400 hover:text-white" onClick={onClear}>Clear selection</button>
       {err && <p className="w-full text-xs text-rose-300">{err}</p>}
     </div>

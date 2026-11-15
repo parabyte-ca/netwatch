@@ -236,7 +236,16 @@ class AdGuardClient:
                     continue
                 leases.append({"mac": mac, "ip": ip, "hostname": _name(item.get("hostname")),
                                "static": static})  # fmt: skip
-        return {"available": True, "enabled": bool(d.get("enabled")), "leases": leases}
+        v4 = d.get("v4") if isinstance(d.get("v4"), dict) else {}
+        keys = ("gateway_ip", "subnet_mask", "range_start", "range_end")
+        cfg = {k: str(v4.get(k) or "").strip() for k in keys}
+        return {
+            "available": True,
+            "enabled": bool(d.get("enabled")),
+            "leases": leases,
+            # The DHCP settings, when AdGuard reports a complete, valid set.
+            "v4": cfg if all(id_kind(v) == "ip" for v in cfg.values()) else None,
+        }
 
     # ── what NetWatch can change (only through AdGuardActions) ───────────────
 
@@ -259,6 +268,14 @@ class AdGuardClient:
         if not isinstance(rules, list):
             raise AdGuardError("unexpected filtering answer (is this AdGuard Home?)")
         return [str(r) for r in rules]
+
+    async def add_static_lease(self, mac: str, ip: str, hostname: str) -> None:
+        await self._post("/control/dhcp/add_static_lease",
+                         {"mac": mac, "ip": ip, "hostname": hostname})  # fmt: skip
+
+    async def remove_static_lease(self, mac: str, ip: str, hostname: str) -> None:
+        await self._post("/control/dhcp/remove_static_lease",
+                         {"mac": mac, "ip": ip, "hostname": hostname})  # fmt: skip
 
     async def set_user_rules(self, rules: list[str]) -> None:
         await self._post("/control/filtering/set_rules", {"rules": rules})

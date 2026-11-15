@@ -6,6 +6,7 @@ import { api, type AdGuardSummary, type DomainCount } from '../lib/api';
 import { fmtAgo } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
 import { AdGuardControls, useRuleAction } from '../components/AdGuardControls';
+import { ReservationList } from '../components/DhcpReservations';
 
 const SPANS = [
   { label: '6 h', hours: 6 },
@@ -196,6 +197,8 @@ export function Dns() {
           <Section title="Controls">
             <AdGuardControls protection={data.latest?.reachable ? data.latest.protection : null} onChanged={() => void refresh()} reload={reload} />
           </Section>
+
+          <ReservationList />
 
           <Section title="Upstream resolvers">
             {data.upstreams.length ? (
