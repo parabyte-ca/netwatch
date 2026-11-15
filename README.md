@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.18.0-blue)
+![Version](https://img.shields.io/badge/version-0.18.1-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -285,6 +285,10 @@ NetWatch out (it signs in again on its next poll). To avoid that tug-of-war, inv
 account as a **manager** in the Deco app (Me → Managers) and use that one on your phone; leave
 the owner account to NetWatch. Only LAN addresses are accepted, so the password never leaves
 the network.
+
+**No data on the map or the DNS page?** An integration saved with polling unticked reads
+nothing. From 0.18.1 the Poll box starts ticked for a new set-up, and the Overview, the DNS page
+and the Admin card say when one is set up but not polling, with a one-click fix.
 
 **Every device is under the Home Hub on the map?** Test connection only checks the sign-in; the
 map needs **Poll every 30 s** ticked and saved. The map and the Deco card now say so when the

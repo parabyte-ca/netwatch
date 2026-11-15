@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.18.1] - 2026-11-15
+### Changed
+- New Deco, Home Hub and AdGuard Home set-ups poll by default (the box starts ticked); a saved
+  set-up keeps its choice.
+
+### Added
+- The DNS page shows "Saved, but not polling" with a Turn on polling and save button, and the
+  Overview says when an integration is set up but not polling, so a gap in the data is noticed.
+- `GET /api/admin/integrations` and `POST /api/admin/integrations/{name}/polling`.
+
 ## [0.18.0] - 2026-11-15
 ### Added
 - YouTube and app controls per device and per group, next to filtering: YouTube Restricted Mode,
