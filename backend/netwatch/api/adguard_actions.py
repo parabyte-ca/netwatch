@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..services.adguard.actions import ActionError, ActionsDisabled
+from ..services.adguard.profiles import PROFILE_LABEL
 from .auth import security_event
 
 router = APIRouter(prefix="/api/adguard/actions")
@@ -314,3 +315,75 @@ async def reserve_current(body: BulkReserveIn, request: Request) -> dict:
         )
         results.append({"id": device_id, "label": dev["label"], "ok": True, "ip": r["ip"]})
     return {"results": results}
+
+
+# ── settings per device and per group ───────────────────────────────────────
+
+
+class ProfileIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    profile: Literal["default", "no_blocking", "strict"]
+
+
+def _profiles(request: Request):
+    return request.app.state.adguard_profiles
+
+
+@router.get("/profiles")
+async def profiles(request: Request) -> dict:
+    """The choices, the clients NetWatch keeps for them (with their devices) and conflicts."""
+    if not _acts(request).enabled():
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "AdGuard Home actions are turned off")
+    p = _profiles(request)
+    desired = await asyncio.to_thread(p.desired)
+    conflict_ids = {c["device_id"] for c in p.conflicts}
+    clients = [
+        {
+            "key": key,
+            "name": d["name"],
+            "profile": d["profile"],
+            "label": d["label"],
+            "devices": [
+                {"id": x["id"], "label": x["label"]}
+                for x in d["devices"]
+                if x["id"] not in conflict_ids
+            ],
+        }
+        for key, d in sorted(desired.items(), key=lambda kv: kv[1]["name"].lower())
+    ]
+    return {**p.state(), "managed": clients}
+
+
+async def _set(request: Request, kind: str, target_id: int, body: ProfileIn) -> dict:
+    p = _profiles(request)
+    setter = p.set_device if kind == "device" else p.set_group
+    if kind == "device":
+        dev = await asyncio.to_thread(request.app.state.device_store.get, target_id)
+        if dev is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such device")
+        what = (dev.get("name") or dev["mac"])[:60]
+    else:
+        g = await asyncio.to_thread(request.app.state.groups.get, target_id)
+        if g is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such group")
+        what = f"the group {g['name']}"
+    label = PROFILE_LABEL[body.profile]
+    r = await _run(request, f"set {what} to {label}", setter(target_id, body.profile))
+    changes = ", ".join(f"{c['action']} {c['client']}" for c in r["changes"]) or "no change needed"
+    await security_event(
+        request,
+        "info",
+        f"AdGuard Home: {what} set to {label} ({changes})",
+        {"action": "adguard_profile", "kind": kind, "id": target_id, "profile": body.profile},
+    )
+    return {**r, "state": p.state()}
+
+
+@router.put("/profiles/device/{device_id}")
+async def set_device_profile(device_id: int, body: ProfileIn, request: Request) -> dict:
+    return await _set(request, "device", device_id, body)
+
+
+@router.put("/profiles/group/{group_id}")
+async def set_group_profile(group_id: int, body: ProfileIn, request: Request) -> dict:
+    return await _set(request, "group", group_id, body)

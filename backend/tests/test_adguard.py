@@ -1317,3 +1317,49 @@ async def test_profiles_refuse_when_actions_are_off(prof):
     with pytest.raises(ActionsDisabled):
         await prof.set_group(kids, "strict")
     assert prof.fake.posts == []
+
+
+def test_profiles_api_and_security_log(client):
+    from netwatch.services.events import SECURITY
+
+    st = client.app.state
+    fake = FakeAdGuard()
+    fake.clients = {
+        "clients": [{"name": "My TV", "ids": ["00:11:22:00:00:99"]}],
+        "auto_clients": [],
+    }
+    st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
+    st.adguard.save(HOST, PORT, False, USER, True, PASSWORD)
+    base = "/api/adguard/actions/profiles"
+    assert client.get(base).status_code == 403
+    client.put("/api/admin/settings", json={"changes": {"adguard_actions": True}})
+    now = int(time.time() * 1000)
+    ipad = st.device_store.insert({"mac": "00:11:22:00:00:01", "first_seen_ms": 0,
+                                   "last_seen_ms": now, "name": "Sam's iPad"})  # fmt: skip
+    tv = st.device_store.insert({"mac": "00:11:22:00:00:99", "first_seen_ms": 0,
+                                 "last_seen_ms": now, "name": "Living room TV"})  # fmt: skip
+    kids = client.post("/api/device-groups", json={"name": "Kids", "colour": "rose",
+                                                   "icon": "child"}).json()["id"]  # fmt: skip
+    st.adguard_profiles.dirty = False
+    client.post("/api/devices/bulk", json={"ids": [ipad, tv], "group_id": kids})
+    assert st.adguard_profiles.dirty  # a group change asks for a sync
+    st.discovery.inventory.forget()
+
+    assert client.put(f"{base}/group/{kids}", json={"profile": "loose"}).status_code == 422
+    assert client.put(f"{base}/group/99999", json={"profile": "strict"}).status_code == 404
+    r = client.put(f"{base}/group/{kids}", json={"profile": "strict"}).json()
+    assert r["changes"] == [{"action": "added", "client": "NetWatch: Kids"}]
+    assert r["conflicts"][0]["client"] == "My TV"
+    g = client.get(base).json()
+    assert g["profiles"]["groups"] == {str(kids): "strict"}
+    kids_client = next(c for c in g["managed"] if c["key"] == f"group:{kids}")
+    assert kids_client["devices"] == [{"id": ipad, "label": "Sam's iPad"}]
+    r = client.put(f"{base}/device/{ipad}", json={"profile": "no_blocking"}).json()
+    assert {"action": "added", "client": "NetWatch: Sam's iPad"} in r["changes"]
+    assert {"action": "removed", "client": "NetWatch: Kids"} in r["changes"]
+    assert client.put(f"{base}/device/99999", json={"profile": "strict"}).status_code == 404
+
+    joined = "\n".join(e["title"] for e in st.events.list(0, 10**13, kinds=[SECURITY]))
+    assert "AdGuard Home: the group Kids set to Strict (added NetWatch: Kids)" in joined
+    assert "AdGuard Home: Sam's iPad set to No blocking (" in joined
+    assert PASSWORD not in joined and PASSWORD not in json.dumps(client.get(base).json())
