@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.15.1] - 2026-11-15
+### Fixed
+- Allowing or blocking a domain from the DNS page failed with "unexpected filtering answer"
+  when AdGuard Home had no custom rules yet (it answers `user_rules: null`). An answer with no
+  `user_rules` at all is still refused, so NetWatch never writes over rules it could not read.
+
+### Added
+- The map explains why every device is shown under the Home Hub: Deco polling off, paused (with
+  the reason) or waiting for the first reading, with a link to Admin.
+- The Deco, Home Hub and AdGuard Home cards in Admin warn when settings are saved but polling is
+  off, with a Turn on polling and save button.
+- `state` (`off`, `not_polling`, `paused`, `waiting`, `ok`) in each integration's Admin status,
+  and `deco` on `GET /api/map`.
+
 ## [0.15.0] - 2026-11-14
 ### Added
 - Quiet groups. Tick Quiet on a group and alerts about its devices (address changes, rejoining,

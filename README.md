@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.15.0-blue)
+![Version](https://img.shields.io/badge/version-0.15.1-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -282,6 +282,11 @@ NetWatch out (it signs in again on its next poll). To avoid that tug-of-war, inv
 account as a **manager** in the Deco app (Me → Managers) and use that one on your phone; leave
 the owner account to NetWatch. Only LAN addresses are accepted, so the password never leaves
 the network.
+
+**Every device is under the Home Hub on the map?** Test connection only checks the sign-in; the
+map needs **Poll every 30 s** ticked and saved. The map and the Deco card now say so when the
+settings are saved but polling is off, with a **Turn on polling and save** button. Decos in
+access point mode work the same way.
 
 ### Home Hub
 Under **Admin → Home Hub**, check the address (NetWatch suggests your gateway, normally
@@ -609,7 +614,7 @@ Planned, in order (suggestions welcome):
 
 | Version | Feature |
 |---|---|
-| Next (fix) | **Devices under the right Deco on the map:** devices currently all hang off the Home Hub instead of the Deco access point they are connected to. Find out why the Deco client list is not reaching the map (for example Decos in access point mode, clients reported under a different Deco MAC, or the link stored on a merged device's other row), fix it, and show a clear note on the map when the Deco data is missing |
+| Done in 0.15.1 | **Why devices sit under the Home Hub:** the cause was Deco polling left off after a successful test. The map now says when the Deco link is off, not polling, paused or not read yet, and the Deco, Home Hub and AdGuard Home cards warn when settings are saved but polling is off, with a one-click fix |
 | Next | **Full screen map:** a button (and the F key) to show the map on the whole screen, with the controls kept in a slim bar and Esc to leave; handy on a wall tablet |
 | Next | **Static DHCP reservations through AdGuard Home:** when AdGuard Home is the DHCP server, reserve an address for a device from its NetWatch page or the Devices list (MAC, IP and name filled in for you), see and remove existing reservations, with checks that the address is in the DHCP range and not already taken. Off unless AdGuard Home actions are on; confirmed and written to the security log |
 | Next | **AdGuard Home per device and per group:** give a device (or several) its own AdGuard Home settings from NetWatch, such as an exception so nothing is blocked for it, using AdGuard Home's persistent clients |
