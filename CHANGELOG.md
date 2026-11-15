@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.19.1] - 2026-11-15
+### Fixed
+- YouTube **Allowed** now also turns off Restricted Mode. Before, a device left on Default filtering
+  copied AdGuard Home's global Safe Search, which includes YouTube, so comments stayed hidden
+  ("Restricted Mode has hidden comments"). Existing settings are corrected on the next sync.
+- Calmer rejoin and address-change alerts for phones with private Wi-Fi addresses: a device that
+  asks for the address it already had is not counted, flipping back to a recent address counts
+  once, a rotated private MAC settling in is ignored, and phones, tablets, laptops and
+  private-address devices need 12 rejoins an hour or 6 new addresses a day (others 4 and 3). The
+  alert says why it matters: "rejoined the network 5 times in an hour (it may be losing Wi-Fi)".
+
+### Added
+- CI checks every page at phone width (390 px, also with 1.3x text) against seeded data; images
+  and releases wait for it.
+
 ## [0.19.0] - 2026-11-15
 ### Added
 - Schedules for a group or a device (with AdGuard Home actions on): days, a start and an end time
