@@ -7,6 +7,8 @@ import { UpdateBar } from './UpdateBar';
 import { isActive, readPending } from '../lib/updateProgress';
 import { ErrorBoundary } from './ErrorBoundary';
 import { useAuth } from './AuthGate';
+import { InstallButton } from './InstallButton';
+import { OfflineBanner } from './OfflineBanner';
 
 const NAV = [
   { to: '/', label: 'Overview', end: true },
@@ -60,6 +62,7 @@ export function Layout() {
   return (
     <div className="min-h-screen">
       <UpdateBar summary={upd} offline={!!updError} />
+      <OfflineBanner hidden={busy || !!readPending()} />
       <header className="border-b border-slate-800 bg-slate-900/60 print:hidden">
         <div className="mx-auto flex max-w-7xl items-center gap-x-6 px-4 py-3">
           <Link to="/" className="flex shrink-0 items-center gap-2">
@@ -76,6 +79,7 @@ export function Layout() {
           <div className="ml-auto hidden items-center gap-4 text-xs text-slate-500 lg:flex">
             {badge}
             {status}
+            <InstallButton className="text-sky-400 hover:text-sky-300" />
             <span className="text-slate-400">{username}</span>
             <button onClick={() => void logout()} className="text-slate-400 hover:text-white">
               Sign out
@@ -109,6 +113,7 @@ export function Layout() {
             <div className="mt-3 flex items-center justify-between border-t border-slate-800 pt-3 text-sm text-slate-400">
               <span className="truncate">{status}</span>
               <span className="flex shrink-0 items-center gap-4">
+                <InstallButton className="text-sky-400 hover:text-sky-300" />
                 <span>{username}</span>
                 <button onClick={() => void logout()} className="text-slate-300 hover:text-white">
                   Sign out

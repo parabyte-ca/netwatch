@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { api, ApiError, UNAUTHORIZED_EVENT } from '../lib/api';
+import { api, ApiError, OfflineError, UNAUTHORIZED_EVENT } from '../lib/api';
 
 interface AuthContextValue {
   username: string;
@@ -14,7 +14,7 @@ export function useAuth(): AuthContextValue {
   return ctx;
 }
 
-type Phase = { kind: 'loading' } | { kind: 'error'; message: string; host?: boolean } | { kind: 'setup'; code: boolean } | { kind: 'login' } | { kind: 'ready'; username: string };
+type Phase = { kind: 'loading' } | { kind: 'error'; message: string; host?: boolean; offline?: boolean } | { kind: 'setup'; code: boolean } | { kind: 'login' } | { kind: 'ready'; username: string };
 
 const input =
   'w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-sky-500 focus:outline-none';
@@ -30,7 +30,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       else if (st.authenticated && st.username) setPhase({ kind: 'ready', username: st.username });
       else setPhase({ kind: 'login' });
     } catch (e) {
-      setPhase({ kind: 'error', message: e instanceof Error ? e.message : String(e), host: e instanceof ApiError && e.status === 421 });
+      setPhase({ kind: 'error', message: e instanceof Error ? e.message : String(e), host: e instanceof ApiError && e.status === 421, offline: e instanceof OfflineError });
     }
   }, []);
 
@@ -40,6 +40,19 @@ export function AuthGate({ children }: { children: ReactNode }) {
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
   }, [refresh]);
+
+  // Opened with no connection (an installed app away from home): try again by itself.
+  const offline = phase.kind === 'error' && phase.offline;
+  useEffect(() => {
+    if (!offline) return;
+    const retry = () => void refresh();
+    const timer = window.setInterval(retry, 10_000);
+    window.addEventListener('online', retry);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('online', retry);
+    };
+  }, [offline, refresh]);
 
   const logout = useCallback(async () => {
     await api.logout().catch(() => undefined);
@@ -54,7 +67,14 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (phase.kind === 'error') {
     return (
       <Screen title="NetWatch">
-        <p className="text-sm text-rose-300">Cannot reach the server: {phase.message}</p>
+        {phase.offline ? (
+          <p className="text-sm text-amber-200">
+            No connection to NetWatch. Check that this device is on your home network (or VPN); it
+            will try again by itself.
+          </p>
+        ) : (
+          <p className="text-sm text-rose-300">Cannot reach the server: {phase.message}</p>
+        )}
         <button onClick={() => void refresh()} className="mt-4 text-sm text-sky-400 hover:underline">
           Retry
         </button>
