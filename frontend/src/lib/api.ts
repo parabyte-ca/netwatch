@@ -697,6 +697,7 @@ export interface AdGuardStatus {
   last_ok_ms: number | null;
   error: string | null;
   paused: string | null;
+  state?: PollState;
   status: { version: string | null; protection: boolean } | null;
   latest: (AdGuardRow & { protection: boolean | null; source: string; details: { version?: string | null } }) | null;
   dhcp: { available: boolean; enabled: boolean; leases: number } | null;
@@ -789,6 +790,7 @@ export interface HubStatus {
   last_ok_ms: number | null;
   error: string | null;
   paused: string | null;
+  state?: PollState;
   snapshot: HubSnapshot | null;
   suggestion?: string | null;
 }
@@ -880,10 +882,14 @@ export interface MapHighlight {
   failing_nodes: string[];
 }
 
+/** Whether an integration is actually reading: not set up, saved but polling off, stopped after errors, no reading yet, or reading. */
+export type PollState = 'off' | 'not_polling' | 'paused' | 'waiting' | 'ok';
+
 export interface NetworkMapResponse {
   generated_ms: number;
   at_ms: number | null;
   deco_api: boolean;
+  deco?: { state: PollState; paused: string | null };
   show_offline?: boolean;
   groups?: MapGroup[];
   nodes: MapNode[];
@@ -912,6 +918,7 @@ export interface DecoStatus {
   last_ok_ms: number | null;
   error: string | null;
   paused: string | null;
+  state?: PollState;
   decos: DecoUnit[];
   clients: number;
   suggestions: { ip: string; label: string }[];

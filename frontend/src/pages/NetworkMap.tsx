@@ -455,12 +455,7 @@ export function NetworkMap() {
       )}
 
       {error && <p className="text-rose-400">{error}</p>}
-      {graph && !graph.deco_api && (
-        <p className="text-xs text-slate-500">
-          Decos and which device is on which Deco come from the Deco API: connect it under{' '}
-          <Link to="/admin" className="text-sky-400 hover:underline">Admin → Deco mesh</Link>.
-        </p>
-      )}
+      {graph && !graph.at_ms && <DecoNote graph={graph} />}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_20rem]">
         <div className="h-[65vh] min-h-[420px] overflow-hidden rounded-lg bg-slate-950 ring-1 ring-slate-800" data-testid="map-canvas">
@@ -509,3 +504,24 @@ export function NetworkMap() {
     </div>
   );
 }
+
+/** Why devices may all be shown under the Home Hub: the Deco link is off, not polling, paused or not read yet. */
+function DecoNote({ graph }: { graph: NetworkMapResponse }) {
+  const state = graph.deco?.state ?? (graph.deco_api ? 'ok' : 'off');
+  if (state === 'ok') return null;
+  const admin = <Link to="/admin" className="text-sky-400 hover:underline">Admin → Deco mesh</Link>;
+  const warn = 'rounded-md bg-amber-950/40 p-2 text-xs text-amber-200 ring-1 ring-amber-900';
+  if (state === 'not_polling') {
+    return <p role="status" className={warn}>Deco polling is off, so every device is shown under the Home Hub. Turn on polling in {admin}.</p>;
+  }
+  if (state === 'paused') {
+    return <p role="status" className={warn}>Deco polling stopped ({graph.deco?.paused}), so devices are shown under the Home Hub. Save the settings in {admin} to resume.</p>;
+  }
+  if (state === 'waiting') return <p role="status" className="text-xs text-slate-400">Waiting for the first Deco reading…</p>;
+  return (
+    <p className="text-xs text-slate-500">
+      Decos and which device is on which Deco come from the Deco API: connect it under {admin}.
+    </p>
+  );
+}
+

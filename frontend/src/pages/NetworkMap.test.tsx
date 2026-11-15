@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { MapNode, NetworkMapResponse } from '../lib/api';
@@ -89,6 +89,26 @@ describe('NetworkMap', () => {
     expect(panel).toHaveTextContent('Pixel');
     expect(panel).toHaveTextContent('Echo');
     expect(calls.some((c) => c.url === '/api/map')).toBe(true);
+  });
+
+  it('says why every device is under the Hub when Deco polling is off', async () => {
+    mockApi([], { ...graph, deco_api: false, deco: { state: 'not_polling', paused: null } });
+    render(<MemoryRouter initialEntries={['/map']}><NetworkMap /></MemoryRouter>);
+    const note = await screen.findByRole('status');
+    expect(note).toHaveTextContent('Deco polling is off, so every device is shown under the Home Hub');
+    expect(within(note).getByRole('link', { name: 'Admin → Deco mesh' })).toHaveAttribute('href', '/admin');
+  });
+
+  it('shows why Deco polling paused, and nothing when it is reading', async () => {
+    mockApi([], { ...graph, deco: { state: 'paused', paused: '3 failed sign-ins' } });
+    const { unmount } = render(<MemoryRouter initialEntries={['/map']}><NetworkMap /></MemoryRouter>);
+    expect(await screen.findByRole('status')).toHaveTextContent('Deco polling stopped (3 failed sign-ins)');
+    unmount();
+    vi.restoreAllMocks();
+    mockApi([], { ...graph, deco: { state: 'ok', paused: null } });
+    render(<MemoryRouter initialEntries={['/map']}><NetworkMap /></MemoryRouter>);
+    expect(await screen.findByText('Deco Office')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
   it('replays an incident and marks the likely cause', async () => {
