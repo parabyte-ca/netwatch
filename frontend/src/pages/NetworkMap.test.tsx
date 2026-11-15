@@ -111,6 +111,30 @@ describe('NetworkMap', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
+  it('goes full screen with the button, F and ?full=1, and leaves with Esc', async () => {
+    mockApi([]);
+    const { unmount } = render(<MemoryRouter initialEntries={['/map']}><NetworkMap /></MemoryRouter>);
+    expect(await screen.findByText('Deco Office')).toBeInTheDocument();
+    const page = screen.getByTestId('map-page');
+    fireEvent.click(screen.getByRole('button', { name: 'Full screen' }));
+    expect(page.className).toContain('fixed inset-0');
+    expect(screen.getByRole('button', { name: 'Exit full screen' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(page.className).not.toContain('fixed');
+    fireEvent.keyDown(window, { key: 'f' });
+    expect(page.className).toContain('fixed inset-0');
+    fireEvent.keyDown(window, { key: 'F' });
+    expect(page.className).not.toContain('fixed');
+    // Typing an f in a field does not toggle it.
+    const name = screen.getByLabelText('View name');
+    fireEvent.keyDown(name, { key: 'f' });
+    expect(page.className).not.toContain('fixed');
+    unmount();
+    render(<MemoryRouter initialEntries={['/map?full=1']}><NetworkMap /></MemoryRouter>);
+    expect(await screen.findByText('Deco Office')).toBeInTheDocument();
+    expect(screen.getByTestId('map-page').className).toContain('fixed inset-0');
+  });
+
   it('replays an incident and marks the likely cause', async () => {
     const calls: { url: string; method: string; body?: unknown }[] = [];
     const start = Date.now() - 3600_000;
