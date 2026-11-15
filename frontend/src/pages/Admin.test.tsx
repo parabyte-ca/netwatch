@@ -123,7 +123,7 @@ describe('Admin', () => {
     fireEvent.change(screen.getByLabelText('Owner password'), { target: { value: 'pw' } });
     fireEvent.click(within(screen.getByRole('region', { name: 'Deco mesh' })).getByRole('button', { name: 'Test connection' }));
     expect(await screen.findByText(/Test failed: wrong owner password/)).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('Poll every 30 s'));
+    expect(screen.getByLabelText('Poll every 30 s')).toBeChecked(); // new set-ups poll by default
     fireEvent.click(within(screen.getByRole('region', { name: 'Deco mesh' })).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(calls.some((c) => c.url === '/api/admin/deco' && c.method === 'PUT')).toBe(true));
     const put = calls.find((c) => c.url === '/api/admin/deco' && c.method === 'PUT')!;
@@ -144,6 +144,14 @@ describe('Admin', () => {
     expect(put).toMatchObject({ host: '192.168.2.127', enabled: true });
     expect(put.password).toBeUndefined();
     await waitFor(() => expect(screen.queryByText(/Saved, but not polling\. The map/)).not.toBeInTheDocument());
+  });
+
+  it('keeps a saved set-up unticked: only new set-ups poll by default', async () => {
+    decoSaved = { host: '192.168.2.127', enabled: false, password_set: true };
+    mockApi([]);
+    render(<MemoryRouter><Admin /></MemoryRouter>);
+    // A saved set-up keeps its unticked box: only new set-ups default to polling.
+    expect(await screen.findByLabelText('Poll every 30 s')).not.toBeChecked();
   });
 
   it('tests the Home Hub with the suggested gateway address', async () => {

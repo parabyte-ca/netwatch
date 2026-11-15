@@ -1472,3 +1472,33 @@ async def test_v017_profiles_are_read_as_filtering(prof):
     )
     assert prof.profiles()["groups"][str(kids)] == {"filtering": "strict", "youtube": "default",
                                                     "services": []}  # fmt: skip
+
+
+def test_integrations_state_and_turning_polling_on(client):
+    from netwatch.services.events import SECURITY
+
+    st = client.app.state
+    fake = FakeAdGuard()
+    st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
+    st.adguard.save(HOST, PORT, False, USER, False, PASSWORD)  # saved with polling unticked
+    s = client.get("/api/admin/integrations").json()
+    assert s["adguard"] == {"label": "AdGuard Home", "state": "not_polling", "paused": None}
+    assert s["deco"]["state"] == "off" and s["hub"]["state"] == "off"
+    assert (
+        client.post("/api/admin/integrations/deco/polling", json={"enabled": True}).status_code
+        == 422
+    )
+    assert (
+        client.post("/api/admin/integrations/nas/polling", json={"enabled": True}).status_code
+        == 422
+    )
+    r = client.post("/api/admin/integrations/adguard/polling", json={"enabled": True})
+    assert r.status_code == 200 and r.json()["enabled"] and PASSWORD not in r.text
+    cfg = st.adguard.config()
+    assert (
+        cfg["enabled"] and cfg["host"] == HOST and cfg["username"] == USER
+    )  # nothing else changed
+    assert st.adguard.configured  # the password is kept
+    assert client.get("/api/admin/integrations").json()["adguard"]["state"] in ("waiting", "ok")
+    titles = [e["title"] for e in st.events.list(0, 10**13, kinds=[SECURITY])]
+    assert "AdGuard Home polling turned on" in titles

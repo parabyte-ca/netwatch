@@ -115,6 +115,7 @@ export function Overview() {
   const status = usePolling(api.status, 3_000);
   const active = usePolling(api.activeEvents, 5_000);
   const score = usePolling(() => api.score(7), 300_000);
+  const integrations = usePolling(api.integrations, 120_000);
   const recent = usePolling(() => api.events({ start: Math.floor(Date.now() / 1000) - 86_400, limit: 6, kind: ['outage', 'degraded', 'nic_link', 'nic_speed', 'nic_errors'] }), 30_000);
 
   if (targets.error) return <p className="text-rose-400">Could not load targets: {targets.error}</p>;
@@ -162,6 +163,8 @@ export function Overview() {
         {status.error && <div className="mt-1 text-sm text-rose-400">Live status unavailable: {status.error}</div>}
       </section>
 
+      <NotPollingHint states={integrations.data} />
+
       {(active.data?.length ?? 0) > 0 && (
         <section aria-label="Active incidents" className="rounded-lg bg-slate-900 p-2 ring-1 ring-rose-900/60">
           <h2 className="px-2 pb-1 text-xs font-semibold uppercase tracking-wide text-rose-300">Active incidents</h2>
@@ -196,3 +199,16 @@ export function Overview() {
     </div>
   );
 }
+
+/** Integrations that are set up but not polling: the map, DNS page and diagnosis miss their data. */
+function NotPollingHint({ states }: { states: Record<string, { label: string; state: string }> | null }) {
+  const off = Object.values(states ?? {}).filter((x) => x && x.state === 'not_polling').map((x) => x.label);
+  if (!off.length) return null;
+  return (
+    <p role="status" className="rounded-md bg-amber-950/40 p-2 text-sm text-amber-200 ring-1 ring-amber-900">
+      {off.join(' and ')} {off.length > 1 ? 'are' : 'is'} set up but not polling, so {off.length > 1 ? 'their' : 'its'} data is missing.{' '}
+      <Link to="/admin" className="text-sky-300 hover:underline">Turn on polling in Admin</Link>
+    </p>
+  );
+}
+

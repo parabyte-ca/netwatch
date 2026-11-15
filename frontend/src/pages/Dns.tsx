@@ -6,6 +6,7 @@ import { api, type AdGuardSummary, type DomainCount } from '../lib/api';
 import { fmtAgo } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
 import { AdGuardControls, useRuleAction } from '../components/AdGuardControls';
+import { NotPolling } from '../components/NotPolling';
 import { ReservationList } from '../components/DhcpReservations';
 import { ProfileList } from '../components/AdGuardProfile';
 
@@ -126,6 +127,7 @@ function Charts({ data }: { data: AdGuardSummary }) {
 export function Dns() {
   const [hours, setHours] = useState(24);
   const { data, error, refresh } = usePolling(() => api.adguardSummary(hours), 60_000, [hours]);
+  const [turningOn, setTurningOn] = useState(false);
   const [reload, setReload] = useState(0);
   const rules = useRuleAction(() => {
     void refresh();
@@ -184,6 +186,8 @@ export function Dns() {
               {data.paused && <p className="text-amber-300">Polling stopped ({data.paused}). Fix the password under Admin.</p>}
             </div>
           )}
+          <NotPolling state={data.state} needs="This page, DNS health and diagnosis" busy={turningOn}
+            onEnable={() => { setTurningOn(true); void api.setPolling('adguard', true).then(() => refresh()).finally(() => setTurningOn(false)); }} />
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Stat label="Queries" value={data.queries.toLocaleString()} />
             <Stat label="Blocked" value={pct(data.blocked_pct)} />
