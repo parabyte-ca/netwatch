@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.19.1-blue)
+![Version](https://img.shields.io/badge/version-0.20.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -188,6 +188,10 @@ per group or device (internet off at night, YouTube off during homework). See th
   press **Install**. A small host-side agent runs `update.sh`, which backs up the database,
   health-checks the new version and rolls back automatically if it fails. Live log, update
   history and a **Roll back** button are on the System page.
+- **Install as an app** on a phone, tablet or computer: **Install app** in the menu (Chrome, Edge,
+  Android), or Share, then **Add to Home Screen** in Safari on iPhone and iPad. It opens full screen
+  with its own icon; with no connection it says so and reconnects by itself. Only the page itself
+  is kept on the device, never your network data. Needs HTTPS (or `localhost`).
 - **Automatic updates:** bug-fix (patch) releases install automatically in a nightly
   maintenance window (03:30 by default); feature and major releases wait for you to press
   Install. Configurable: off, notify only, patch, or patch + minor.
@@ -255,6 +259,12 @@ reports `unhealthy` with a writer error, make sure `owner@` has full control of 
 `sudo ./setup.sh`. Login is required for everything, but NetWatch is still meant for the LAN;
 don't expose it through Cloudflare Tunnel without HTTPS (and then set
 `NETWATCH_COOKIE_SECURE=true`).
+
+**Installing as an app:** browsers only install sites served over HTTPS (or `localhost`). Behind a
+reverse proxy or Cloudflare Tunnel with a certificate (for example `https://netwatch.example.com`)
+the **Install app** button appears in the menu; at a plain `http://192.168.x.x:8090` address
+NetWatch works in the browser as before but can't be installed. On iPhone and iPad use Safari:
+Share, then Add to Home Screen. A new NetWatch version is picked up the next time the app opens.
 
 **First-run account:** until the admin account exists, anyone who can reach the page can
 create it, so do the first visit right after `setup.sh` finishes.
@@ -675,6 +685,7 @@ Planned, in order (suggestions welcome):
 | Done in 0.18 | **YouTube and app controls per device or group:** YouTube Restricted Mode, blocked or allowed, and apps to block from AdGuard Home's list. Allowing only chosen channels or videos is not possible with DNS. Schedules come with per-group schedules |
 | Next | **Who's home:** pick the phones (or other devices) that belong to each person; NetWatch shows who is home from whether those devices are on the Wi-Fi, with arrival and departure times on the timeline and a "home now" list on the Overview. Phones that sleep their Wi-Fi are smoothed over (away only after a set time without being seen). Stays on the LAN: nothing is sent anywhere |
 | Done in 0.19 | **Per-group schedules:** internet off, YouTube off, apps or strict filtering on days and times for a group or device, with +15 min, +1 hour, off until it next starts, skip today and "internet off now"; confirmed and written to the security log |
+| Done in 0.20 | **Install as an app:** a home screen icon, full screen, and a clear "no connection" notice that recovers by itself; the page is kept on the device, network data never is |
 | Later | **Wi-Fi coverage view:** a floor plan with the Decos placed and each device's signal and roaming per room |
 | Later | **Speed tests against your plan:** nightly tests reported as a share of the plan's speed, with a 90-day trend |
 

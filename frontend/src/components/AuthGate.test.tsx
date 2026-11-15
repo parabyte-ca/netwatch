@@ -71,3 +71,20 @@ describe('AuthGate', () => {
     expect(alert).toHaveTextContent(window.location.hostname);
   });
 });
+
+describe('AuthGate offline', () => {
+  it('says there is no connection and retries by itself', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let up = false;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      if (!up) throw new TypeError('Failed to fetch');
+      return json({ setup_required: false, authenticated: true, username: 'admin' });
+    });
+    render(<AuthGate><p>secret app</p></AuthGate>);
+    expect(await screen.findByText(/No connection to NetWatch/)).toBeInTheDocument();
+    up = true;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await screen.findByText('secret app')).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+});

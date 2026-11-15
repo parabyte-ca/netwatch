@@ -1130,8 +1130,40 @@ function describe(detail: unknown): string {
 /** Fired when the API answers 401, so the app can show the login screen. */
 export const UNAUTHORIZED_EVENT = 'netwatch:unauthorized';
 
+/** Fired when NetWatch cannot be reached at all (no answer), and again once it answers. */
+export const OFFLINE_EVENT = 'netwatch:offline';
+export const ONLINE_EVENT = 'netwatch:online';
+let unreachable = false;
+
+/** A request that got no answer: the network or NetWatch is down (not an HTTP error). */
+export class OfflineError extends Error {
+  constructor() {
+    super('No connection to NetWatch');
+    this.name = 'OfflineError';
+  }
+}
+
+function reachable(ok: boolean) {
+  if (ok === !unreachable) return;
+  unreachable = !ok;
+  window.dispatchEvent(new Event(ok ? ONLINE_EVENT : OFFLINE_EVENT));
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  let res: Response;
+  try {
+    res = await send(path, init);
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    reachable(false);
+    throw new OfflineError();
+  }
+  reachable(true);
+  return handle<T>(path, res);
+}
+
+function send(path: string, init?: RequestInit): Promise<Response> {
+  return fetch(path, {
     ...init,
     credentials: 'same-origin',
     headers: {
@@ -1141,6 +1173,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
+}
+
+async function handle<T>(path: string, res: Response): Promise<T> {
   if (res.status === 401 && !path.startsWith('/api/auth/')) {
     window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
   }
