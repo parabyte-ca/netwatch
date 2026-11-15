@@ -28,7 +28,8 @@ function Chart({ view }: { view: SpeedPlanView }) {
       {
         width: el.clientWidth || 600,
         height: 200,
-        scales: { x: { time: true, range: () => [end - 90 * 86_400, end] }, y: { range: (_u, _min, max) => [0, Math.max(110, (max ?? 0) * 1.05)] } },
+        // From the first result (a day early), at most 90 days back: no empty months at the start.
+        scales: { x: { time: true, range: () => [Math.max(end - 90 * 86_400, (pts[0]?.ts_ms ?? end * 1000) / 1000 - 86_400), end] }, y: { range: (_u, _min, max) => [0, Math.max(110, (max ?? 0) * 1.05)] } },
         axes: [axis, { ...axis, size: 48, values: (_u, vals) => vals.map((v) => `${v} %`) }],
         series: [
           {},
