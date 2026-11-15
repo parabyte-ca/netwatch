@@ -3,6 +3,9 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Health } from './Health';
 
+// uPlot needs a real browser (matchMedia, canvas); the speed chart is tested on its own.
+vi.mock('uplot', () => ({ default: class { setSize() {} destroy() {} } }));
+
 afterEach(() => vi.restoreAllMocks());
 
 const comps = [

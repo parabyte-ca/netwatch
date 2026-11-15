@@ -194,7 +194,8 @@ export type EventKind =
   | 'hub'
   | 'exposure'
   | 'dns'
-  | 'presence';
+  | 'presence'
+  | 'speed';
 
 export interface TimelineEvent {
   id: number;
@@ -385,6 +386,28 @@ export interface DeviceRow {
   label: string;
   online: boolean;
   macs: string[];
+}
+
+export interface SpeedPoint {
+  ts_ms: number;
+  trigger: string | null;
+  down_mbps: number | null;
+  up_mbps: number | null;
+  down_pct: number | null;
+  up_pct: number | null;
+  plan_down_mbps: number | null;
+  plan_up_mbps: number | null;
+  link_mbps: number | null;
+  link_capped: boolean;
+}
+
+export interface SpeedPlanView {
+  plan: { plan_down_mbps: number; plan_up_mbps: number; plan_slow_pct: number };
+  set: boolean;
+  points: SpeedPoint[];
+  last: SpeedPoint | null;
+  median_30d: { down_mbps: number | null; up_mbps: number | null; down_pct: number | null; up_pct: number | null; tests: number };
+  open_event_id: number | null;
 }
 
 export interface Person {
@@ -701,7 +724,11 @@ export interface BufferbloatTest {
   down_bps: number | null;
   up_bps: number | null;
   error: string | null;
-  details: { anchor?: string; added_ms?: number | null; idle?: BufferbloatPhase; download?: BufferbloatPhase; upload?: BufferbloatPhase };
+  details: {
+    anchor?: string; added_ms?: number | null; idle?: BufferbloatPhase; download?: BufferbloatPhase; upload?: BufferbloatPhase;
+    /** plan speeds and NetWatch's port speed when the test ran (from 0.22) */
+    context?: { plan_down_mbps?: number; plan_up_mbps?: number; link_mbps?: number | null };
+  };
 }
 
 export interface AdGuardRow {
@@ -1281,6 +1308,7 @@ export const api = {
   groupsExportUrl: '/api/device-groups/export',
   importGroups: (data: unknown) =>
     request<{ groups_created: number; devices: number; unknown_macs: string[] }>('/api/device-groups/import', post(data)),
+  speedPlan: (days = 90) => request<SpeedPlanView>(`/api/speed-plan?days=${days}`),
   people: () => request<PeopleList>('/api/people'),
   createPerson: (body: { name: string; colour: string; device_ids: number[] }) => request<Person>('/api/people', post(body)),
   editPerson: (id: number, body: Partial<{ name: string; colour: string; device_ids: number[] }>) =>
