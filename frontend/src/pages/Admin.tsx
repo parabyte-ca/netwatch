@@ -416,7 +416,7 @@ function AdGuardCard() {
     }
   }
   const portNum = Number(port) || 80;
-  const save = (extra: { forget_password?: boolean } = {}) =>
+  const save = (extra: { forget_password?: boolean; enabled?: boolean } = {}) =>
     run(async () => {
       apply(await api.saveAdGuard({ host, port: portNum, https, username, enabled, password: password || undefined, ...extra }));
       setPassword('');
@@ -489,6 +489,7 @@ function AdGuardCard() {
         {st.password_set && !sameTarget && !password && (
           <p className="text-xs text-amber-300">The address, port, protocol or username changed: enter the password to test or save.</p>
         )}
+        <NotPolling state={st.state} needs="The DNS page, DNS health and diagnosis" busy={busy} onEnable={() => { setEnabled(true); void save({ enabled: true }); }} />
         {error && <p className="text-rose-400">{error}</p>}
         {test && <p className={test.startsWith('Test failed') ? 'text-rose-300' : 'text-emerald-300'}>{test}</p>}
         <p className="text-xs text-slate-400">
@@ -536,7 +537,7 @@ function HubCard() {
       setBusy(false);
     }
   }
-  const save = (extra: { forget_password?: boolean } = {}) =>
+  const save = (extra: { forget_password?: boolean; enabled?: boolean } = {}) =>
     run(async () => {
       apply(await api.saveHub({ host, enabled, password: password || undefined, ...extra }));
       setPassword('');
@@ -596,6 +597,7 @@ function HubCard() {
             </button>
           )}
         </div>
+        <NotPolling state={st.state} needs="The internet line status, Hub events and diagnosis" busy={busy} onEnable={() => { setEnabled(true); void save({ enabled: true }); }} />
         {error && <p className="text-rose-400">{error}</p>}
         {test && <p className={test.startsWith('Test failed') ? 'text-rose-300' : 'text-emerald-300'}>{test}</p>}
         <p className="text-xs text-slate-400">
@@ -652,7 +654,7 @@ function DecoCard() {
       setBusy(false);
     }
   }
-  const save = (extra: { forget_password?: boolean } = {}) =>
+  const save = (extra: { forget_password?: boolean; enabled?: boolean } = {}) =>
     run(async () => {
       apply(await api.saveDeco({ host, enabled, password: password || undefined, ...extra }));
       setPassword('');
@@ -713,6 +715,7 @@ function DecoCard() {
             </button>
           )}
         </div>
+        <NotPolling state={st.state} needs="The map (devices under their Deco), Wi-Fi events and diagnosis" busy={busy} onEnable={() => { setEnabled(true); void save({ enabled: true }); }} />
         {error && <p className="text-rose-400">{error}</p>}
         {test && (test.ok ? (
           <p className="text-emerald-300">
@@ -732,6 +735,17 @@ function DecoCard() {
         </p>
       </div>
     </Card>
+  );
+}
+
+/** Saved but polling unticked: say what that costs, with a one-click fix. */
+function NotPolling({ state, needs, busy, onEnable }: { state?: string; needs: string; busy: boolean; onEnable: () => void }) {
+  if (state !== 'not_polling') return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-md bg-amber-950/40 p-2 text-xs text-amber-200 ring-1 ring-amber-900">
+      <span className="flex-1">Saved, but not polling. {needs} need polling on.</span>
+      <button className={`${btn} bg-amber-600 text-white hover:bg-amber-500`} disabled={busy} onClick={onEnable}>Turn on polling and save</button>
+    </div>
   );
 }
 

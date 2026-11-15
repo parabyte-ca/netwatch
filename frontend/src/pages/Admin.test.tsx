@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SettingField } from '../lib/api';
 import { Admin } from './Admin';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  decoSaved = { host: '', enabled: false, password_set: false };
+});
 
 const f = (over: Partial<SettingField>): SettingField => ({
   name: 'down_after', group: 'detection', group_label: 'Outage detection', label: 'Failures before down', help: '',
@@ -16,6 +19,8 @@ const fields = [
   f({ name: 'path_test_interval_min', group: 'path_tests', group_label: 'Path tests', label: 'Scheduled path tests', live: false, value: 15, default: 15, unit: 'min' }),
   f({ name: 'raw_retention_days', group: 'retention', group_label: 'Data retention', label: 'Raw samples', value: 10, default: 7, overridden: true, unit: 'days' }),
 ];
+
+let decoSaved: { host: string; enabled: boolean; password_set: boolean } = { host: '', enabled: false, password_set: false };
 
 function mockApi(calls: { url: string; method: string; body?: unknown }[]) {
   vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -60,9 +65,10 @@ function mockApi(calls: { url: string; method: string; body?: unknown }[]) {
     }
     if (url === '/api/admin/deco/test') return json({ ok: false, error: 'wrong owner password (9 attempts left before lockout)' });
     if (url === '/api/admin/deco') {
-      const saved = method === 'PUT' ? JSON.parse(String(init?.body)) : { host: '', enabled: false };
-      return json({ host: saved.host, enabled: saved.enabled, password_set: method === 'PUT', last_poll_ms: null, last_ok_ms: null,
-        error: null, paused: null, decos: [], clients: 0, suggestions: [{ ip: '192.168.2.10', label: 'Deco Living Room' }] });
+      const saved = method === 'PUT' ? { ...JSON.parse(String(init?.body)), password_set: true } : decoSaved;
+      const state = !saved.password_set ? 'off' : saved.enabled ? 'waiting' : 'not_polling';
+      return json({ host: saved.host, enabled: saved.enabled, password_set: saved.password_set, last_poll_ms: null, last_ok_ms: null,
+        error: null, paused: null, state, decos: [], clients: 0, suggestions: [{ ip: '192.168.2.10', label: 'Deco Living Room' }] });
     }
     if (url === '/api/admin/restart') return json({ restarting: true }, 202);
     return json({});
@@ -124,6 +130,20 @@ describe('Admin', () => {
     expect(JSON.parse(String(put.body))).toEqual({ host: '192.168.2.10', enabled: true, password: 'pw' });
     expect(await screen.findByText(/Owner password \(saved\)/)).toBeInTheDocument();
     expect(screen.getByLabelText('Owner password')).toHaveValue('');
+  });
+
+  it('warns when the Deco is saved but not polling, and turns polling on in one click', async () => {
+    decoSaved = { host: '192.168.2.127', enabled: false, password_set: true };
+    const calls: { url: string; method: string; body?: unknown }[] = [];
+    mockApi(calls);
+    render(<MemoryRouter><Admin /></MemoryRouter>);
+    expect(await screen.findByText(/Saved, but not polling\. The map \(devices under their Deco\)/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Turn on polling and save' }));
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/admin/deco' && c.method === 'PUT')).toBe(true));
+    const put = JSON.parse(String(calls.find((c) => c.url === '/api/admin/deco' && c.method === 'PUT')!.body));
+    expect(put).toMatchObject({ host: '192.168.2.127', enabled: true });
+    expect(put.password).toBeUndefined();
+    await waitFor(() => expect(screen.queryByText(/Saved, but not polling\. The map/)).not.toBeInTheDocument());
   });
 
   it('tests the Home Hub with the suggested gateway address', async () => {

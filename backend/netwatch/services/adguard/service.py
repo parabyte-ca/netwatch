@@ -24,6 +24,7 @@ from ..discovery.anomalies import HINTS
 from ..discovery.inventory import device_label
 from ..discovery.packets import Observation
 from ..events import ANOMALY, DNS, EventLog
+from ..poll_state import poll_state
 from ..secrets import SecretBox
 from ..storage import Store
 from .client import AdGuardClient, AdGuardError, AdGuardLoginError, parse_time
@@ -772,6 +773,14 @@ class AdGuardService:
             "querylog": querylog,
         }
 
+    def state(self) -> str:
+        return poll_state(
+            configured=self.configured,
+            enabled=self.config()["enabled"],
+            paused=self.paused,
+            last_ok_ms=self.last_ok_ms,
+        )
+
     def status(self) -> dict:
         return {
             **self.config(),
@@ -780,6 +789,7 @@ class AdGuardService:
             "last_ok_ms": self.last_ok_ms,
             "error": self.error,
             "paused": self.paused,
+            "state": self.state(),
             "status": self.last,
             "latest": self.adguard_store.latest(),
             "dhcp": None

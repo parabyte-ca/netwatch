@@ -217,6 +217,10 @@ async def test_write_methods_touch_only_their_endpoints():
     assert await c.user_rules() == ["||doubleclick.net^", "# my own rule"]
     await c.set_user_rules(["||x.com^"])
     assert fake.user_rules == ["||x.com^"]
+    fake.user_rules = None  # a fresh AdGuard Home with no custom rules answers null
+    assert await c.user_rules() == []
+    await c.set_user_rules(["@@||example.org^"])
+    assert fake.user_rules == ["@@||example.org^"]
     assert (await c.upstreams())["upstream_dns"] == ["tls://1.1.1.1", "tls://1.0.0.1"]
     fake.bad_upstreams = {"udp://10.9.9.9"}
     r = await c.test_upstreams(["tls://9.9.9.9", "udp://10.9.9.9"], ["9.9.9.10"])
@@ -563,6 +567,7 @@ def test_admin_api(client):
     fake = FakeAdGuard()
     st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
     assert client.get("/api/admin/adguard").json()["password_set"] is False
+    assert client.get("/api/admin/adguard").json()["state"] == "off"
     assert client.put("/api/admin/adguard", json=body(host="8.8.8.8")).status_code == 422
     assert client.put("/api/admin/adguard", json=body(username="")).status_code == 422
     assert client.put("/api/admin/adguard", json=body(port=0)).status_code == 422
@@ -869,6 +874,13 @@ async def test_pause_limits_and_resume(acts, svc):
     await acts.pause(5, "admin")
     await acts.resume("admin")
     assert svc.fake.protection is True and acts.pause_state() is None
+
+
+async def test_first_rule_on_an_adguard_with_no_custom_rules(acts, svc):
+    svc.fake.user_rules = None  # AdGuard Home answers "user_rules": null until a rule exists
+    entry = await acts.add_rule("buynowthinklater.us.to", "allow", "admin")
+    assert entry["rule"] == "@@||buynowthinklater.us.to^"
+    assert svc.fake.user_rules == ["@@||buynowthinklater.us.to^"]
 
 
 async def test_rules_touch_only_netwatch_lines(acts, svc):

@@ -331,6 +331,11 @@ class NetMap:
             "show_offline": show_offline,
             "groups": sorted(group_nodes.values(), key=lambda g: g["name"].lower()),
             "deco_api": bool(deco_state),
+            # Why devices may all sit under the Hub: the Deco link's state, and why it paused.
+            "deco": {
+                "state": st.deco.state() if st.deco else "off",
+                "paused": st.deco.paused if st.deco else None,
+            },
             "nodes": list(nodes.values()),
             "edges": edges,
         }
