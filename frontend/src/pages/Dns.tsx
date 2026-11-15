@@ -9,6 +9,7 @@ import { AdGuardControls, useRuleAction } from '../components/AdGuardControls';
 import { NotPolling } from '../components/NotPolling';
 import { ReservationList } from '../components/DhcpReservations';
 import { ProfileList } from '../components/AdGuardProfile';
+import { ScheduleList } from '../components/Schedules';
 
 const SPANS = [
   { label: '6 h', hours: 6 },
@@ -207,6 +208,8 @@ export function Dns() {
           <ReservationList />
 
           <ProfileList />
+
+          <ScheduleList />
 
           <Section title="Upstream resolvers">
             {data.upstreams.length ? (

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { api, type AdGuardProfileName, type AdGuardProfiles, type AdGuardSettings, type YouTubeSetting } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { ConfirmDialog, type Confirm } from './ConfirmDialog';
+import { TargetSchedules } from './Schedules';
 
 const select = 'rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 focus:border-sky-500 focus:outline-none';
 const btn = 'rounded-md px-2.5 py-1 text-xs font-medium disabled:opacity-50';
@@ -145,6 +146,9 @@ export function DeviceProfile({ d }: { d: { id: number; label: string; group: { 
           Not applied: this device is already in your AdGuard Home client "{conflict.client}". Remove it there to let NetWatch manage it.
         </p>
       )}
+      <div className="border-t border-slate-800 pt-3">
+        <TargetSchedules target={{ kind: 'device', id: d.id }} label={d.label} services={profiles.services_all ?? []} />
+      </div>
       {ask && <ConfirmDialog confirm={ask} onClose={() => setAsk(null)} />}
     </section>
   );
@@ -176,6 +180,9 @@ export function GroupProfileButton({ group, profiles, onChanged, ask }: {
                 onClick={() => { setOpen(false); ask(settingsConfirm(`the ${group.name} group`, draft, names, null, async () => { await api.setGroupProfile(group.id, draft); await onChanged(); })); }}>
                 Save
               </button>
+            </div>
+            <div className="border-t border-slate-800 pt-3">
+              <TargetSchedules target={{ kind: 'group', id: group.id }} label={group.name} services={profiles.services_all ?? []} />
             </div>
           </div>
         </div>

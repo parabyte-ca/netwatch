@@ -772,6 +772,29 @@ export interface AdGuardProfiles {
   services_all: { id: string; name: string }[];
 }
 
+export type Day = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+export interface ScheduleEffects { internet_off: boolean; youtube_off: boolean; strict: boolean; services: string[] }
+export interface ScheduleTarget { kind: 'group' | 'device'; id: number }
+export interface ScheduleInput {
+  name: string; target: ScheduleTarget; days: Day[]; start: string; end: string; effects: ScheduleEffects; enabled: boolean;
+}
+export interface Schedule extends ScheduleInput {
+  id: string;
+  next: { start_ms: number; end_ms: number } | null;
+  off_until_ms: number | null;
+  summary: string;
+  target_label: string;
+}
+export interface ActiveSchedule {
+  id: string; name: string; target: ScheduleTarget; effects: ScheduleEffects; start_ms: number; end_ms: number; manual: boolean; target_label: string;
+}
+export interface SchedulesState {
+  schedules: Schedule[];
+  active: ActiveSchedule[];
+  presets: { name: string; days: Day[]; start: string; end: string; effects: Partial<ScheduleEffects> }[];
+  tz: string;
+}
+
 export interface AdGuardActionsState {
   enabled: boolean;
   pause: { until_ms: number; started_ms: number; minutes: number; by: string } | null;
@@ -1237,6 +1260,17 @@ export const api = {
   adguardResume: () => request<unknown>('/api/adguard/actions/resume', post()),
   adguardDhcp: () => request<AdGuardDhcp>('/api/adguard/actions/dhcp'),
   adguardProfiles: () => request<AdGuardProfiles>('/api/adguard/actions/profiles'),
+  schedules: () => request<SchedulesState>('/api/adguard/actions/schedules'),
+  addSchedule: (body: ScheduleInput) => request<{ state: SchedulesState }>('/api/adguard/actions/schedules', post(body)),
+  updateSchedule: (id: string, body: ScheduleInput) =>
+    request<{ state: SchedulesState }>(`/api/adguard/actions/schedules/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteSchedule: (id: string) => request<{ state: SchedulesState }>(`/api/adguard/actions/schedules/${id}`, { method: 'DELETE' }),
+  extendSchedule: (id: string, how: '15' | '60' | 'until_next' | 'skip') =>
+    request<{ off_until_ms: number; state: SchedulesState }>(`/api/adguard/actions/schedules/${id}/extend`, post({ how })),
+  resumeSchedule: (id: string) => request<{ state: SchedulesState }>(`/api/adguard/actions/schedules/${id}/exception`, { method: 'DELETE' }),
+  internetOffNow: (target: ScheduleTarget, minutes: 30 | 60 | 120) =>
+    request<{ state: SchedulesState }>('/api/adguard/actions/schedules/now', post({ target, minutes })),
+  internetBackOn: (id: string) => request<{ state: SchedulesState }>(`/api/adguard/actions/schedules/now/${id}`, { method: 'DELETE' }),
   setDeviceProfile: (id: number, settings: AdGuardSettings) =>
     request<unknown>(`/api/adguard/actions/profiles/device/${id}`, { method: 'PUT', body: JSON.stringify(settings) }),
   setGroupProfile: (id: number, settings: AdGuardSettings) =>
