@@ -10,12 +10,7 @@ log="$data/server.log"
 base="http://127.0.0.1:$port"
 password="ci-layout-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
-# shellcheck disable=SC2329 # invoked by the EXIT trap
-cleanup() {
-  if [[ -n "${pid:-}" ]]; then kill "$pid" 2>/dev/null || true; fi
-  rm -rf "$data"
-}
-trap cleanup EXIT
+trap 'if [[ -n "${pid:-}" ]]; then kill "$pid" 2>/dev/null || true; fi; rm -rf "$data"' EXIT
 
 paths="$(cd backend && python scripts/ci_seed.py "$data/nw")"
 
