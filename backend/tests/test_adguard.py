@@ -563,6 +563,7 @@ def test_admin_api(client):
     fake = FakeAdGuard()
     st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
     assert client.get("/api/admin/adguard").json()["password_set"] is False
+    assert client.get("/api/admin/adguard").json()["state"] == "off"
     assert client.put("/api/admin/adguard", json=body(host="8.8.8.8")).status_code == 422
     assert client.put("/api/admin/adguard", json=body(username="")).status_code == 422
     assert client.put("/api/admin/adguard", json=body(port=0)).status_code == 422

@@ -294,6 +294,9 @@ def test_admin_api(client):
         "/api/admin/hub", json={"host": "192.168.2.1", "enabled": True, "password": PASSWORD}
     )
     assert r.json()["password_set"] and PASSWORD not in r.text
+    assert r.json()["state"] in ("waiting", "ok")
+    r = client.put("/api/admin/hub", json={"host": "192.168.2.1", "enabled": False})
+    assert r.json()["state"] == "not_polling"
     assert client.post("/api/admin/hub/test", json={"host": "192.168.2.9"}).status_code == 422
     r = client.post("/api/admin/hub/explore", json={"xpath": "Device/WiFi/AccessPoints"})
     assert r.json()["value"][0]["Security"]["KeyPassphrase"] == "••••"

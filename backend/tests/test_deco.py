@@ -454,12 +454,19 @@ def test_map_api_and_layout(client, fake):
     g = client.get("/api/map").json()
     ids = {n["id"] for n in g["nodes"]}
     assert {"internet", "isp", "hub", "switch", "truenas"} <= ids and not g["deco_api"]
+    assert g["deco"] == {"state": "off", "paused": None}
+    # Saved but polling unticked: the map says why every device is under the Hub.
+    st.deco.save("192.168.2.10", False, PASSWORD)
+    assert client.get("/api/map").json()["deco"]["state"] == "not_polling"
+    assert client.get("/api/admin/deco").json()["state"] == "not_polling"
     assert {(e["source"], e["target"]) for e in g["edges"]} >= {("hub", "isp"), ("hub", "switch")}
 
     # with Deco data
     st.deco.client_factory = lambda host, pw: client_for(fake, pw)
     st.deco.save("192.168.2.10", True, PASSWORD)
+    assert client.get("/api/map").json()["deco"]["state"] == "waiting"
     client.portal.call(st.deco.poll)
+    assert client.get("/api/map").json()["deco"]["state"] == "ok"
     tv = st.deco.devices.get_by_mac(TV.lower())
     st.deco.devices.update(tv["id"], {"name": "Living TV"})
     st.discovery.inventory.forget()
@@ -536,3 +543,23 @@ def test_highlight_marks_the_named_deco_only():
     assert NetMap(None).highlight(inc, {"nodes": nodes})["cause_nodes"] == ["deco:b"]
     nodes[1]["state"] = "up"
     assert len(NetMap(None).highlight(inc, {"nodes": nodes})["cause_nodes"]) == 2
+
+
+def test_poll_state_wording():
+    from netwatch.services.poll_state import poll_state
+
+    def ps(**kw):
+        base = {"configured": True, "enabled": True, "paused": None, "last_ok_ms": 1}
+        return poll_state(**{**base, **kw})
+
+    assert ps(configured=False, enabled=False) == "off"
+    assert ps(enabled=False) == "not_polling"
+    assert ps(paused="3 failed sign-ins") == "paused"
+    assert ps(last_ok_ms=None) == "waiting"
+    assert ps() == "ok"
+
+
+async def test_paused_state_is_reported(svc):
+    svc.paused = "the Deco's sign-in key changed"
+    st = svc.status()
+    assert st["state"] == "paused" and st["paused"] == "the Deco's sign-in key changed"
