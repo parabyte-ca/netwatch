@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -157,3 +158,159 @@ async def _log_switch(request: Request, r: dict) -> None:
         f"{', '.join(r['current'])}",
         {"action": "adguard_upstreams", "previous": r["previous"], "current": r["current"]},
     )  # fmt: skip
+
+
+# ── DHCP reservations ────────────────────────────────────────────────────────
+
+
+class ReservationIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mac: str = Field(min_length=12, max_length=17)
+    ip: str = Field(min_length=7, max_length=15)
+    hostname: str | None = Field(default=None, max_length=63)
+
+
+class ReservationOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mac: str = Field(min_length=12, max_length=17)
+
+
+class BulkReserveIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    device_ids: list[int] = Field(min_length=1, max_length=100)
+
+
+def _devices_by_mac(request: Request) -> dict[str, dict]:
+    now = int(time.time() * 1000)
+    rows = request.app.state.discovery.inventory.listing(now)
+    return {m: d for d in rows for m in d["macs"]}
+
+
+def _who_is(by_mac: dict[str, dict], mac: str) -> str:
+    d = by_mac.get(mac)
+    return f"{d['label']} ({mac})" if d else mac
+
+
+@router.get("/dhcp")
+async def dhcp(request: Request) -> dict:
+    d = await _run(request, "read DHCP", _acts(request).dhcp())
+    by_mac = await asyncio.to_thread(_devices_by_mac, request)
+    ours = set(d["ours"])
+
+    def row(lease: dict) -> dict:
+        dev = by_mac.get(lease["mac"])
+        return {
+            **lease,
+            "by_netwatch": lease["mac"] in ours,
+            "device": {"id": dev["id"], "label": dev["label"]} if dev else None,
+        }
+
+    return {
+        "available": d["available"],
+        "enabled": d["enabled"],
+        "v4": d.get("v4"),
+        "reservations": sorted(
+            (row(x) for x in d["leases"] if x["static"]),
+            key=lambda r: tuple(int(p) for p in r["ip"].split(".")),
+        ),
+        "leases": [row(x) for x in d["leases"] if not x["static"]],
+    }
+
+
+@router.post("/dhcp/reservations")
+async def reserve(body: ReservationIn, request: Request) -> dict:
+    r = await _run(
+        request,
+        f"reserve {body.ip[:15]}",
+        _acts(request).reserve(body.mac, body.ip, body.hostname, _who(request)),
+    )
+    by_mac = await asyncio.to_thread(_devices_by_mac, request)
+    what = (
+        f"changed {r['changed_from']} to {r['ip']}" if r["changed_from"] else f"reserved {r['ip']}"
+    )
+    await security_event(
+        request,
+        "info",
+        f"AdGuard Home: {what} for {_who_is(by_mac, r['mac'])}",
+        {"action": "adguard_reservation", "mac": r["mac"], "ip": r["ip"]},
+    )
+    return {"reservation": r}
+
+
+@router.delete("/dhcp/reservations")
+async def unreserve(body: ReservationOut, request: Request) -> dict:
+    r = await _run(
+        request, "remove a reservation", _acts(request).unreserve(body.mac, _who(request))
+    )
+    by_mac = await asyncio.to_thread(_devices_by_mac, request)
+    await security_event(
+        request,
+        "info",
+        f"AdGuard Home: removed the reservation of {r['ip']} for {_who_is(by_mac, r['mac'])}",
+        {"action": "adguard_reservation_removed", "mac": r["mac"], "ip": r["ip"]},
+    )
+    return {"removed": r}
+
+
+@router.post("/dhcp/reservations/bulk")
+async def reserve_current(body: BulkReserveIn, request: Request) -> dict:
+    """Reserve each device's current address (from its DHCP lease) under its current MAC."""
+    acts = _acts(request)
+    d = await _run(request, "read DHCP", acts.dhcp())
+    leases = {x["mac"]: x for x in d["leases"]}
+    by_id = {
+        dev["id"]: dev
+        for dev in await asyncio.to_thread(
+            request.app.state.discovery.inventory.listing, int(time.time() * 1000)
+        )
+    }
+    results = []
+    for device_id in dict.fromkeys(body.device_ids):
+        dev = by_id.get(device_id)
+        if dev is None:
+            results.append({"id": device_id, "ok": False, "error": "unknown device"})
+            continue
+        lease = next(
+            (
+                leases[m]
+                for m in dev["macs"]
+                if m in leases and leases[m]["ip"] == dev.get("last_ip")
+            ),
+            None,
+        )
+        if lease is None:
+            results.append(
+                {
+                    "id": device_id,
+                    "label": dev["label"],
+                    "ok": False,
+                    "error": "no current DHCP lease from AdGuard Home",
+                }
+            )
+            continue
+        if lease["static"]:
+            results.append(
+                {
+                    "id": device_id,
+                    "label": dev["label"],
+                    "ok": True,
+                    "ip": lease["ip"],
+                    "already": True,
+                }
+            )
+            continue
+        try:
+            r = await acts.reserve(lease["mac"], lease["ip"], dev["label"], _who(request))
+        except ActionsDisabled as exc:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from None
+        except ActionError as exc:
+            results.append({"id": device_id, "label": dev["label"], "ok": False, "error": str(exc)})
+            continue
+        await security_event(
+            request,
+            "info",
+            f"AdGuard Home: reserved {r['ip']} for {dev['label']} ({r['mac']})",
+            {"action": "adguard_reservation", "mac": r["mac"], "ip": r["ip"]},
+        )
+        results.append({"id": device_id, "label": dev["label"], "ok": True, "ip": r["ip"]})
+    return {"results": results}
