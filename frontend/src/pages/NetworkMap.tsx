@@ -164,7 +164,7 @@ function Details({ n, onClose }: { n: MapNode; onClose: () => void }) {
         <button className="text-slate-500 hover:text-slate-300" onClick={onClose} aria-label="Close details">✕</button>
       </div>
       {n.inferred && <p className="text-xs text-slate-500">Not monitored directly: its state is inferred from what sits behind it.</p>}
-      <dl className="grid grid-cols-[6.5rem_1fr] gap-y-1">
+      <dl className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-y-1">
         {rows.filter(([, v]) => v != null && v !== '').map(([k, v]) => (
           <div key={k} className="contents">
             <dt className="text-slate-500">{k}</dt>
@@ -428,7 +428,7 @@ export function NetworkMap() {
           <input type="checkbox" checked={showOffline} onChange={(e) => setShowOffline(e.target.checked)} />
           Show offline (24 h)
         </label>
-        <span className="flex items-center gap-1.5">
+        <span className="flex min-w-0 flex-wrap items-center gap-1.5">
           <select aria-label="Saved views" className={input} value="" onChange={(e) => { const v = views.find((x) => x.name === e.target.value); if (v) applyView(v); }}>
             <option value="">Views…</option>
             {views.map((v) => <option key={v.name} value={v.name}>{v.name}</option>)}
@@ -505,7 +505,7 @@ export function NetworkMap() {
       {error && <p className="text-rose-400">{error}</p>}
       {graph && !graph.at_ms && !full && <DecoNote graph={graph} />}
 
-      <div className={full ? 'relative min-h-0 flex-1' : 'grid gap-4 lg:grid-cols-[1fr_20rem]'}>
+      <div className={full ? 'relative min-h-0 flex-1' : 'grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]'}>
         <div className={`overflow-hidden rounded-lg bg-slate-950 ring-1 ring-slate-800 ${full ? 'h-full' : 'h-[65vh] min-h-[420px]'}`} data-testid="map-canvas">
           {graph && layoutReady && (
             <ReactFlow
