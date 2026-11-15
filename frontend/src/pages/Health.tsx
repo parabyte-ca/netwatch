@@ -145,7 +145,7 @@ export function Health() {
       >
         {score.error && <p className="text-sm text-rose-400">{score.error}</p>}
         {!h ? <p className="text-sm text-slate-500">Loading…</p> : (
-          <div className="grid gap-6 md:grid-cols-[auto_1fr]">
+          <div className="grid gap-6 md:grid-cols-[auto_minmax(0,1fr)]">
             <div className="flex flex-col items-center gap-1">
               <ScoreRing score={h.score} size={128} />
               <span className="text-sm font-medium" style={{ color: scoreColour(h.score) }}>{h.label}</span>
@@ -172,11 +172,11 @@ export function Health() {
             {rows.map((r) => (
               <li key={r.week_start}>
                 <button onClick={() => void show(r.week_start)} aria-expanded={open?.week_start === r.week_start} className="flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm hover:bg-slate-800/60">
-                  <span className="shrink-0 whitespace-nowrap text-slate-300">Week of {r.week_start}</span>
-                  <span className="h-2 flex-1 overflow-hidden rounded bg-slate-800" aria-hidden>
+                  <span className="min-w-0 text-slate-300">Week of <span className="whitespace-nowrap">{r.week_start}</span></span>
+                  <span className="h-2 min-w-4 flex-1 overflow-hidden rounded bg-slate-800" aria-hidden>
                     <span className="block h-full rounded" style={{ width: `${(100 * (r.score ?? 0)) / max}%`, background: scoreColour(r.score) }} />
                   </span>
-                  <span className="w-20 shrink-0 text-right tabular-nums text-slate-200">{r.score ?? '—'} <span className="text-xs text-slate-500">{r.label}</span></span>
+                  <span className="min-w-20 shrink-0 whitespace-nowrap text-right tabular-nums text-slate-200">{r.score ?? '—'} <span className="text-xs text-slate-500">{r.label}</span></span>
                 </button>
                 {open?.week_start === r.week_start && <div className="mt-2"><ReportView r={open} /></div>}
               </li>

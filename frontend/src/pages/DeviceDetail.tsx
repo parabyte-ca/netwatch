@@ -103,7 +103,7 @@ export function DeviceDetail() {
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Section title="Identity">
-          <dl className="grid grid-cols-[9rem_1fr] gap-y-1 text-sm">
+          <dl className="grid grid-cols-[9rem_minmax(0,1fr)] gap-y-1 text-sm">
             <Row k="MAC" v={<span className="font-mono">{d.macs.join(', ')}</span>} />
             <Row k="Vendor" v={d.vendor ?? (d.randomised ? 'Private (randomised) address: no vendor' : 'Not in the IEEE registry')} />
             <Row k="DHCP hostname" v={d.hostname} />
@@ -260,7 +260,7 @@ export function DeviceDetail() {
           ))}
         </ul>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <select aria-label="Merge into" className={input} value={mergeInto} onChange={(e) => setMergeInto(e.target.value)}>
+          <select aria-label="Merge into" className={`${input} w-full min-w-0 sm:w-auto`} value={mergeInto} onChange={(e) => setMergeInto(e.target.value)}>
             <option value="">Same device as…</option>
             {candidates.map((o) => <option key={o.id} value={o.id}>{o.label} ({o.last_ip ?? o.macs[0]})</option>)}
           </select>

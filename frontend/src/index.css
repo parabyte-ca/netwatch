@@ -2,6 +2,37 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Nothing may be wider than a phone screen: form controls never outgrow their container, and long
+   unbroken text (MAC and IPv6 addresses, URLs, setting names) wraps instead of pushing the page. */
+@layer base {
+  select,
+  input,
+  textarea,
+  label {
+    max-width: 100%;
+  }
+  /* A label wrapping a select or input is a flex item: let it shrink below the control's width. */
+  label {
+    min-width: 0;
+  }
+  main {
+    overflow-wrap: break-word;
+  }
+  /* Tables scroll sideways in their own box instead of breaking words and addresses. */
+  table {
+    overflow-wrap: normal;
+  }
+}
+
+/* A grid with columns only from sm:/lg: up gets one implicit column sized to its content on a
+   phone, so one wide child widens the page. Default to a column that can shrink; the grid-cols-*
+   utilities (a later layer) still override it. */
+@layer components {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .uplot {
   font-family: inherit;
 }

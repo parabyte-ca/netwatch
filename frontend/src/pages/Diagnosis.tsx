@@ -88,7 +88,7 @@ export function Diagnosis() {
           <Link to="/report" className="rounded-md bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-500">
             Incident report for Bell
           </Link>
-          <div className="flex gap-1" role="tablist" aria-label="Time span">
+          <div className="flex flex-wrap gap-1" role="tablist" aria-label="Time span">
             {SPANS.map((s) => (
               <button key={s.key} role="tab" aria-selected={s.key === span.key} onClick={() => setSpan(s)}
                 className={`rounded-md px-3 py-1 text-xs ${s.key === span.key ? 'bg-sky-600 text-white' : 'bg-slate-900 text-slate-400 hover:text-white'}`}>

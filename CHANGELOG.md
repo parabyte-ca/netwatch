@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.18.3] - 2026-11-15
+### Fixed
+- Pages no longer get wider than a phone screen. The device page's "Same device as…" list took the
+  width of its longest device name; grids that only had columns on wider screens sized themselves
+  to their content; and long words, form fields and button rows could not wrap. Form controls and
+  labels now never outgrow their container, grids default to a column that can shrink, and long
+  text wraps (tables keep whole words and scroll inside their own box). Checked on every page at
+  390 px, also with a larger phone text size.
+- Device names with an apostrophe or accent from mDNS showed escaped bytes ("Theresa\226\128\153s
+  iPhone"). They are decoded now, and names already stored are repaired when NetWatch starts.
+
+### Added
+- `frontend/scripts/check-layout.mjs`: visits every page at 390 px and fails if one is wider than
+  the screen (see Local development in the README).
+
 ## [0.18.2] - 2026-11-15
 ### Fixed
 - The DNS page charts were spiky and broken up: each minute was its own point, and a quiet minute

@@ -392,11 +392,11 @@ function AccountCard() {
     <Card title="Account" actions={<button onClick={() => void logout()} className={`${btn} bg-slate-800 text-slate-200 hover:bg-slate-700`}>Sign out</button>}>
       <form onSubmit={submit} className="flex flex-wrap items-end gap-3" aria-label="Change password">
         <p className="w-full text-sm text-slate-400">Signed in as <span className="text-slate-200">{username}</span>.</p>
-        <div>
+        <div className="min-w-0 max-w-full">
           <label htmlFor="pw-current" className="mb-1 block text-xs text-slate-400">Current password</label>
           <input id="pw-current" type="password" autoComplete="current-password" className={input} value={current} onChange={(e) => setCurrent(e.target.value)} required />
         </div>
-        <div>
+        <div className="min-w-0 max-w-full">
           <label htmlFor="pw-new" className="mb-1 block text-xs text-slate-400">New password (10+ characters)</label>
           <input id="pw-new" type="password" autoComplete="new-password" minLength={10} className={input} value={next} onChange={(e) => setNext(e.target.value)} required />
         </div>

@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.18.2-blue)
+![Version](https://img.shields.io/badge/version-0.18.3-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -432,6 +432,11 @@ cd frontend && npm ci && npm run dev    # http://localhost:5173, proxies /api to
 Checks (the same ones CI runs): `ruff check . && ruff format --check . && pytest` in
 `backend/`, `npm run typecheck && npm test && npm run build` in `frontend/`, and
 `shellcheck -x setup.sh update.sh scripts/common.sh`.
+
+Phone layout check: with NetWatch running (for example the demo data), `NODE_PATH=$(npm root -g)
+node frontend/scripts/check-layout.mjs http://127.0.0.1:8090 admin '<password>'` visits every page
+at 390 px wide and fails if any page is wider than the screen, naming the element that sticks
+out. `TEXT_SCALE=1.3` repeats it with a larger phone text size. It needs Playwright installed.
 
 Unprivileged ICMP needs `net.ipv4.ping_group_range` to include your group on the dev
 machine. The container uses privileged raw sockets instead.

@@ -34,6 +34,9 @@ describe('DeviceDetail: group and tags', () => {
     });
     render(<MemoryRouter initialEntries={['/devices/7']}><Routes><Route path="/devices/:id" element={<DeviceDetail />} /></Routes></MemoryRouter>);
     const box = await screen.findByLabelText('Group and tags');
+    // The merge list can hold long names: it must not be wider than a phone screen.
+    expect(screen.getByLabelText('Merge into').className).toContain('w-full');
+    expect(screen.getByLabelText('Merge into').className).toContain('min-w-0');
     await waitFor(() => expect(within(box).getByRole('option', { name: 'Kids' })).toBeInTheDocument());
     fireEvent.change(within(box).getByLabelText('Group'), { target: { value: '3' } });
     await waitFor(() => expect(calls).toContainEqual({ url: '/api/devices/7', method: 'PATCH', body: { group_id: 3 } }));

@@ -119,7 +119,7 @@ function SettingsCard({ data, onSaved }: { data: SettingsResponse; onSaved: (d: 
               {data.fields.filter((f) => f.group === group).map((f) => {
                 const value = f.name in draft ? draft[f.name] : f.secret ? '' : f.value;
                 return (
-                  <div key={f.name} className="grid gap-2 py-2 sm:grid-cols-[16rem_1fr] sm:items-center">
+                  <div key={f.name} className="grid gap-2 py-2 sm:grid-cols-[16rem_minmax(0,1fr)] sm:items-center">
                     <label htmlFor={`set-${f.name}`} className="text-sm text-slate-300">
                       {f.label}
                       {!f.live && <span className="ml-2 rounded bg-amber-900/50 px-1.5 text-[10px] text-amber-200">restart</span>}
