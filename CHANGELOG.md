@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.15.0] - 2026-11-14
+### Added
+- Quiet groups. Tick Quiet on a group and alerts about its devices (address changes, rejoining,
+  unusual DNS) are recorded as information with a "quiet" label instead of warnings. The
+  timeline hides them unless Show quiet events is ticked. Outages, packet loss and security
+  events are never quieted.
+- Groups at a glance on the Devices page: one card per group (and Ungrouped) with devices online,
+  traffic down and up, DNS queries and blocked share, outages and alerts, for 24 hours or 7 days.
+  Click a card to filter the table to that group.
+- The weekly health report has a Groups section (in the app and in the Markdown download):
+  devices, traffic, DNS, outages, alerts and quiet events per group.
+- `GET /api/device-groups/stats?hours=24|168`, and `include_quiet` on `GET /api/events`.
+
+### Database
+- Migration 0011 adds a `quiet` column to `device_groups`.
+
 ## [0.14.0] - 2026-11-14
 ### Added
 - Device groups and tags. Groups have a name, a colour and an icon (for example Smart home,

@@ -36,6 +36,7 @@ async def list_events(
     limit: int = Query(default=200, ge=1, le=2000),
     group_id: int | None = Query(default=None, ge=0),
     tag: str | None = Query(default=None, max_length=24),
+    include_quiet: bool = True,
 ) -> list[dict]:
     end_ms = (end or int(time.time()) + 1) * 1000
     start_ms = (start or int(time.time()) - 7 * 86400) * 1000
@@ -43,7 +44,7 @@ async def list_events(
     if bad:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"unknown kind: {', '.join(bad)}")
     if group_id is None and not tag:
-        return await asyncio.to_thread(
+        rows = await asyncio.to_thread(
             request.app.state.events.list,
             start_ms,
             end_ms,
@@ -52,6 +53,7 @@ async def list_events(
             open_only=open_only,
             limit=limit,
         )
+        return rows if include_quiet else [e for e in rows if not e["details"].get("quiet")]
     # Events about the group's devices: by target, device id or MAC in the details.
     who = await asyncio.to_thread(request.app.state.groups.members_of, group_id, tag)
     rows = await asyncio.to_thread(
@@ -71,7 +73,9 @@ async def list_events(
         text = json.dumps(det)
         return any(m in text for m in who["macs"])
 
-    return [e for e in rows if about(e)][:limit]
+    return [e for e in rows if about(e) and (include_quiet or not e["details"].get("quiet"))][
+        :limit
+    ]
 
 
 @router.get("/events/active")

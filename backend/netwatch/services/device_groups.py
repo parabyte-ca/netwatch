@@ -93,7 +93,7 @@ class GroupStore:
             raise GroupError(f"there is already a group called {other['name']}")
         return name
 
-    def create(self, name: str, colour: str, icon: str) -> dict:
+    def create(self, name: str, colour: str, icon: str, quiet: bool = False) -> dict:
         name = self._check(name, colour, icon)
         with self.engine.begin() as conn:
             if conn.execute(select(func.count()).select_from(device_groups)).scalar() >= MAX_GROUPS:
@@ -106,8 +106,10 @@ class GroupStore:
                     icon=icon,
                     sort=sort + 1,
                     created_ms=int(time.time() * 1000),
+                    quiet=bool(quiet),
                 )
             ).inserted_primary_key[0]
+        self._quiet_cache = None
         return self.get(gid)
 
     def update(self, group_id: int, **values) -> dict:
@@ -121,13 +123,19 @@ class GroupStore:
                 update(device_groups)
                 .where(device_groups.c.id == group_id)
                 .values(
-                    name=name, colour=merged["colour"], icon=merged["icon"], sort=merged["sort"]
+                    name=name,
+                    colour=merged["colour"],
+                    icon=merged["icon"],
+                    sort=merged["sort"],
+                    quiet=bool(merged.get("quiet", False)),
                 )
             )
+        self._quiet_cache = None
         return self.get(group_id)
 
     def delete(self, group_id: int) -> int:
         """Delete a group; its devices become ungrouped. Returns how many devices were in it."""
+        self._quiet_cache = None
         with self.engine.begin() as conn:
             n = conn.execute(
                 update(devices).where(devices.c.group_id == group_id).values(group_id=None)
@@ -152,7 +160,45 @@ class GroupStore:
             raise GroupError(f"no such device: {sorted(missing)[:5]}")
         return sorted({m or i for i, m in rows})
 
+    # ── quiet groups ─────────────────────────────────────────────────────────
+
+    QUIET_TTL_S = 60
+
+    def quiet_index(self) -> tuple[set[int], set[str]]:
+        """Device ids and MACs (merged rows included) of every quiet group, cached briefly."""
+        now = time.monotonic()
+        cache = getattr(self, "_quiet_cache", None)
+        if cache is not None and now - cache[0] < self.QUIET_TTL_S:
+            return cache[1], cache[2]
+        with self.engine.connect() as conn:
+            quiet_groups = select(device_groups.c.id).where(device_groups.c.quiet.is_(True))
+            stmt = select(devices.c.id).where(
+                devices.c.group_id.in_(quiet_groups), devices.c.merged_into.is_(None)
+            )
+            prim = [r[0] for r in conn.execute(stmt)]
+            rows = conn.execute(
+                select(devices.c.id, devices.c.mac).where(
+                    devices.c.id.in_(prim) | devices.c.merged_into.in_(prim))
+            ).all() if prim else []  # fmt: skip
+        ids, macs = {r[0] for r in rows}, {r[1] for r in rows}
+        self._quiet_cache = (now, ids, macs)
+        return ids, macs
+
+    def is_quiet_event(self, details: dict) -> bool:
+        """Whether an event (by its details) is about a device in a quiet group."""
+        ids, macs = self.quiet_index()
+        if not ids:
+            return False
+        if details.get("device_id") in ids or str(details.get("mac", "")).lower() in macs:
+            return True
+        for key in ("macs", "devices"):
+            for v in details.get(key) or []:
+                if (v.get("mac") if isinstance(v, dict) else v) in macs:
+                    return True
+        return False
+
     def assign(self, device_ids: list[int], group_id: int | None) -> int:
+        self._quiet_cache = None
         if group_id is not None and self.get(group_id) is None:
             raise GroupError("no such group")
         ids = self.primaries(device_ids)

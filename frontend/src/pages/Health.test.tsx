@@ -16,6 +16,12 @@ const week = {
   summary: { incidents: 1, isp_incidents: 1, isp_downtime_ms: 600000, isp_downtime: '10 min', isp_availability_pct: 99.9, longest: '10 min' },
   speeds: [], incidents: [{ id: 3, start: '2026-10-06 02:00', duration: '10 min', cause: 'Bell network outage', severity: 'critical', start_ms: 1 }],
   incident_count: 1, markdown: '# x',
+  groups: [
+    { id: 3, name: 'Smart home', colour: 'emerald', icon: 'plug', quiet: true, devices: 9, online: 9, down_bytes: 2e9, up_bytes: 1e9,
+      top_talker: 'Kasa plug', outages: 0, alerts: 0, quiet_events: 14, dns: { queries: 12000, blocked_pct: 41.5, failed_pct: 0 } },
+    { id: 0, name: 'Ungrouped', colour: 'slate', icon: 'circle', quiet: false, devices: 4, online: 2, down_bytes: 0, up_bytes: 0,
+      top_talker: null, outages: 1, alerts: 2, quiet_events: 0, dns: null },
+  ],
 };
 
 describe('Health', () => {
@@ -34,6 +40,10 @@ describe('Health', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Week of 2026-10-05/ }));
     expect(await screen.findByText(/\+6 vs the week before/)).toBeInTheDocument();
     expect(screen.getByText(/Bell network outage/)).toBeInTheDocument();
+    const table = screen.getByRole('table', { name: 'Groups this week' });
+    expect(table).toHaveTextContent('Smart home (quiet)');
+    expect(table).toHaveTextContent('12,000 · 41.5% blocked');
+    expect(table).toHaveTextContent('n/a');
     expect(screen.getByRole('link', { name: 'Download (.md)' })).toHaveAttribute('href', '/api/weekly-reports/2026-10-05?format=md');
   });
 });

@@ -49,8 +49,13 @@ def _row(r) -> dict:
 class EventLog:
     """Synchronous event storage (call from worker threads)."""
 
+    # Kinds a quiet device group can turn into information (never outages, loss or security).
+    QUIETABLE = frozenset({"anomaly", "device", "dns"})
+
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
+        # Set in main.py from GroupStore.is_quiet_event: (details) -> bool.
+        self.quiet: Callable[[dict], bool] | None = None
 
     def open(
         self,
@@ -64,6 +69,16 @@ class EventLog:
         details: dict | None = None,
         end_ms: int | None = None,
     ) -> int:
+        details = dict(details or {})
+        if self.quiet is not None and kind in self.QUIETABLE and severity != "info":
+            try:
+                quiet = self.quiet(details)
+            except Exception:  # a broken hook must never lose an event
+                quiet = False
+            if quiet:
+                details["quiet"] = True
+                details["severity_was"] = severity
+                severity = "info"
         with self.engine.begin() as conn:
             return conn.execute(
                 insert(events).values(

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { GroupManager } from '../components/GroupManager';
+import { GroupStrip } from '../components/GroupStrip';
 import { api, type DeviceGroup, type DeviceRow, type DiscoveryStatus, type GroupSuggestion } from '../lib/api';
 import { GroupBadge, GroupIcon, TagChip, colourOf } from '../lib/groups';
 import { DEVICE_TYPE_LABEL, fmtAgo, fmtTime } from '../lib/format';
@@ -296,6 +297,7 @@ export function Devices() {
       </div>
       {status.data && <DiscoveryPanel status={status.data} refresh={status.refresh} />}
       {suggestQ.data && suggestQ.data.length > 0 && <Suggestions items={suggestQ.data} onDone={reloadAll} />}
+      {groups.length > 0 && <GroupStrip selected={groupFilter} onSelect={(id) => setFilter('group', id)} />}
       {status.error && <p className="text-rose-400">{status.error}</p>}
 
       <div className="flex flex-wrap items-center gap-3">

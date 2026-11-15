@@ -51,4 +51,25 @@ describe('Timeline', () => {
     fireEvent.change(await screen.findByLabelText('Group filter'), { target: { value: '3' } });
     await waitFor(() => expect(urls.at(-1)).toContain('group_id=3'));
   });
+
+  it('hides quiet events unless asked, and marks them', async () => {
+    const urls: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === '/api/device-groups') {
+        return new Response(JSON.stringify({ groups: [{ id: 5, name: 'Smart home', colour: 'emerald', icon: 'plug', quiet: true, sort: 1, created_ms: 1, devices: 9 }], colours: [], icons: [] }), { status: 200 });
+      }
+      if (url === '/api/device-tags') return new Response('[]', { status: 200 });
+      urls.push(url);
+      const quiet = { ...ev(7, 'device', 'Kasa plug changed address', Date.now() - 60_000, Date.now() - 60_000), severity: 'info' as const, details: { quiet: true } };
+      return new Response(JSON.stringify(url.includes('include_quiet=false') ? [] : [quiet]), { status: 200 });
+    });
+    render(<MemoryRouter><Timeline /></MemoryRouter>);
+    const box = await screen.findByLabelText(/Show quiet events/);
+    await waitFor(() => expect(urls.at(-1)).toContain('include_quiet=false'));
+    fireEvent.click(box);
+    await waitFor(() => expect(urls.at(-1)).not.toContain('include_quiet'));
+    expect(await screen.findByText('Kasa plug changed address')).toBeInTheDocument();
+    expect(screen.getByText('quiet')).toBeInTheDocument();
+  });
 });
