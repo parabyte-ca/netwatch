@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.21.0] - 2026-11-15
+### Added
+- Who's home: **Devices → People…** to add a person with a name, a colour and up to 8 devices
+  (private-MAC siblings count too). Someone is home while one of their devices was seen within
+  **away after** minutes (15 by default, 5 to 240); a departure is dated by the last sighting and
+  an arrival is noted at once. State survives restarts without inventing arrivals.
+- A "Who's home" strip on the Overview, a page per person (today's arrivals and departures and a
+  7-day home/away bar), arrivals and departures on the timeline as information (new "Who's home"
+  filter, never quieted or alerted), and arrivals per person in the weekly report.
+- `GET/POST /api/people`, `PATCH/DELETE /api/people/{id}`, `GET /api/people/{id}/history`,
+  `PUT /api/people-settings`. Migration 0012 (`people`, `people_devices`).
+
+### Changed
+- A person's devices are kept by the old-device clean-up, like named or grouped devices.
+- Removing a person deletes their arrivals and departures; adding or removing someone is written
+  to the security log.
+
 ## [0.20.0] - 2026-11-15
 ### Added
 - Install NetWatch as an app: a web app manifest and icons, and **Install app** in the menu when

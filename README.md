@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.20.0-blue)
+![Version](https://img.shields.io/badge/version-0.21.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -188,6 +188,12 @@ per group or device (internet off at night, YouTube off during homework). See th
   press **Install**. A small host-side agent runs `update.sh`, which backs up the database,
   health-checks the new version and rolls back automatically if it fails. Live log, update
   history and a **Roll back** button are on the System page.
+- **Who's home:** under **Devices → People…** add a person and pick their phone (and a watch or
+  laptop if they carry it). The Overview shows who is home, each person has a page with today's
+  arrivals and departures and the last 7 days, and the timeline notes "Sam arrived home at 17:42"
+  as information. Someone counts as away only after their devices have not been seen for 15
+  minutes (adjustable), so a phone sleeping its Wi-Fi is not a departure. Off until you add
+  someone; nothing leaves your network; removing a person deletes their history.
 - **Install as an app** on a phone, tablet or computer: **Install app** in the menu (Chrome, Edge,
   Android), or Share, then **Add to Home Screen** in Safari on iPhone and iPad. It opens full screen
   with its own icon; with no connection it says so and reconnects by itself. Only the page itself
@@ -683,11 +689,11 @@ Planned, in order (suggestions welcome):
 | Done in 0.14 | **Device groups and tags**, defined once and used everywhere: groups you name (for example "Smart home", "Family", "Kids", or one child's phone, tablet and laptop), each with a colour and an icon, plus free tags (a device can have several, e.g. `upstairs`, `guest`, `work`). Assign one device or many at once from the Devices page; groups are suggested from the device type (smart plugs and switches → "Smart home"). Stored in the database, kept when a device changes address or uses a private MAC (merged devices), included in backups, exportable as JSON. Used by: Devices page filters and a group column, timeline and alert filters (e.g. mute new-device alerts for "Smart home"), bandwidth and DNS per group, the weekly report per group ("Smart home: 3 short outages"), and AdGuard Home settings per group (one persistent client per group) |
 | Done in 0.14 | **Every device on the map:** each device as its own node under the Deco, switch or Home Hub it connects through, coloured by group (or by status or bandwidth), with tags as badges. Groups can be collapsed into one node and expanded again; filter by group or tag; drag devices to arrange them, with positions saved in NetWatch (the same on every browser and phone); saved views (e.g. "Kids only", "Smart home") |
 | Done in 0.18 | **YouTube and app controls per device or group:** YouTube Restricted Mode, blocked or allowed, and apps to block from AdGuard Home's list. Allowing only chosen channels or videos is not possible with DNS. Schedules come with per-group schedules |
-| Next | **Who's home:** pick the phones (or other devices) that belong to each person; NetWatch shows who is home from whether those devices are on the Wi-Fi, with arrival and departure times on the timeline and a "home now" list on the Overview. Phones that sleep their Wi-Fi are smoothed over (away only after a set time without being seen). Stays on the LAN: nothing is sent anywhere |
+| Done in 0.21 | **Who's home:** pick the phones (or other devices) that belong to each person; NetWatch shows who is home from whether those devices are on the Wi-Fi, with arrival and departure times on the timeline and a "home now" list on the Overview. Phones that sleep their Wi-Fi are smoothed over (away only after a set time without being seen). Stays on the LAN: nothing is sent anywhere |
 | Done in 0.19 | **Per-group schedules:** internet off, YouTube off, apps or strict filtering on days and times for a group or device, with +15 min, +1 hour, off until it next starts, skip today and "internet off now"; confirmed and written to the security log |
 | Done in 0.20 | **Install as an app:** a home screen icon, full screen, and a clear "no connection" notice that recovers by itself; the page is kept on the device, network data never is |
 | Later | **Wi-Fi coverage view:** a floor plan with the Decos placed and each device's signal and roaming per room |
-| Later | **Speed tests against your plan:** nightly tests reported as a share of the plan's speed, with a 90-day trend |
+| Next | **Speed tests against your plan:** nightly tests reported as a share of the plan's speed, with a 90-day trend |
 
 ## Changelog
 See [CHANGELOG.md](CHANGELOG.md).
