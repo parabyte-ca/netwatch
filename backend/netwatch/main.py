@@ -37,6 +37,7 @@ from .api import (
     updates,
 )
 from .api import auth as auth_api
+from .api import people as people_api
 from .auth import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, AuthStore, LoginThrottle, issue_setup_token
 from .config import Settings, get_settings
 from .db import make_engine, run_migrations
@@ -63,6 +64,7 @@ from .services.netinfo import default_route
 from .services.netmap import NetMap
 from .services.nic import NicMonitor, NicStore, interfaces_to_watch
 from .services.pathtest import PATH_TEST_KINDS, PathStore, PathTester
+from .services.people import PeopleStore, PresenceService
 from .services.report import build_report
 from .services.restore import apply_pending_restore
 from .services.runtime_settings import OVERRIDES_KEY, apply_values, load_overrides
@@ -380,12 +382,16 @@ def create_app(
                 adguard_store=app.state.adguard_store,
             )
 
+        app.state.presence = PresenceService(
+            PeopleStore(engine), events, store.kv_get, store.kv_set, tz=lambda: settings.tz
+        )
         app.state.health = HealthService(
             engine,
             health_report,
             app.state.exposure.summary,
             tz=lambda: settings.tz,
             groups=app.state.group_stats,
+            people=app.state.presence.week_summary,
         )
         app.state.assistant = Assistant(
             store, SecretBox(settings.data_dir), app, tz=lambda: settings.tz
@@ -414,6 +420,7 @@ def create_app(
         app.state.hub.start()
         app.state.adguard.start()
         app.state.adguard_profiles.start()
+        app.state.presence.start()
         app.state.bufferbloat.start_schedule(
             enabled=lambda: settings.bufferbloat_nightly,
             window=lambda: app.state.updates.policy().get("window", settings.auto_update_window),
@@ -439,6 +446,7 @@ def create_app(
             await app.state.hub.stop()
             await app.state.adguard.stop()
             await app.state.adguard_profiles.stop()
+            await app.state.presence.stop()
             await app.state.bufferbloat.stop()
             await app.state.exposure.stop()
             await app.state.health.stop()
@@ -536,6 +544,7 @@ def create_app(
     app.include_router(admin.router)
     app.include_router(adguard_actions.router)
     app.include_router(device_groups.router)
+    app.include_router(people_api.router)
     app.include_router(netmap.router)
     app.include_router(traffic.router)
     app.include_router(score.router)

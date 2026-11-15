@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { ActiveNow } from '../components/Schedules';
+import { HomeNow } from '../components/People';
 import { Link } from 'react-router-dom';
 import { EventRow } from '../components/EventRow';
 import { StatusBadge } from '../components/StatusBadge';
@@ -165,6 +166,7 @@ export function Overview() {
       </section>
 
       <NotPollingHint states={integrations.data} />
+      <HomeNow />
       <ActiveNow />
 
       {(active.data?.length ?? 0) > 0 && (

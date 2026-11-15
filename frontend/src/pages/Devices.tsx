@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { GroupManager } from '../components/GroupManager';
+import { PeopleManager } from '../components/People';
 import { GroupStrip } from '../components/GroupStrip';
 import { ReserveCurrentButton } from '../components/DhcpReservations';
 import { api, type DeviceGroup, type DeviceRow, type DiscoveryStatus, type GroupSuggestion } from '../lib/api';
@@ -256,6 +257,7 @@ export function Devices() {
   };
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [managing, setManaging] = useState(false);
+  const [people, setPeople] = useState(false);
   const groupsQ = usePolling(api.deviceGroups, 60_000);
   const suggestQ = usePolling(api.groupSuggestions, 120_000);
   const [sort, setSort] = useState<Sort | null>(loadSort);
@@ -325,11 +327,13 @@ export function Devices() {
           Online only
         </label>
         <button className={`${btn} ml-auto bg-slate-800 text-slate-200 hover:bg-slate-700`} onClick={() => setManaging(true)}>Groups…</button>
+        <button className={`${btn} bg-slate-800 text-slate-200 hover:bg-slate-700`} onClick={() => setPeople(true)}>People…</button>
       </div>
       {selected.size > 0 && (
         <BulkBar ids={[...selected]} groups={groups} onDone={reloadAll} onClear={() => setSelected(new Set())} />
       )}
       {managing && <GroupManager groups={groups} onChanged={reloadAll} onClose={() => setManaging(false)} />}
+      {people && <PeopleManager onClose={() => setPeople(false)} />}
       {error && <p className="text-rose-400">{error}</p>}
 
       <div className="overflow-x-auto rounded-lg ring-1 ring-slate-800">

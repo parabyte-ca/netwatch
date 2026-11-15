@@ -17,6 +17,7 @@ from netwatch.db import make_engine, run_migrations
 from netwatch.services.device_groups import GroupStore
 from netwatch.services.discovery.inventory import DeviceStore
 from netwatch.services.events import EventLog
+from netwatch.services.people import PeopleStore
 
 LONG = (
     "Living-Room-Samsung-QN90B-Neo-QLED-Television",
@@ -58,7 +59,9 @@ def main(data_dir: Path) -> None:
         f"{LONG[3]}-3 rejoined the network 5 times in an hour (it may be losing Wi-Fi)",
         details={"type": "dhcp_churn", "mac": "02:00:00:00:00:03"},
     )  # fmt: skip
-    print(" ".join(f"/devices/{i}" for i in (ids[0], ids[1], ids[3])))
+    person = PeopleStore(engine).create("Alexandra-Catherine Longname", "rose", [ids[1], ids[2]])
+    paths = [f"/devices/{i}" for i in (ids[0], ids[1], ids[3])] + [f"/people/{person['id']}"]
+    print(" ".join(paths))
 
 
 if __name__ == "__main__":
