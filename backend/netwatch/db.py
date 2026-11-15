@@ -244,6 +244,25 @@ devices = Table(
     Column("group_id", Integer),
 )
 
+# Who's home (v0.21): people and the devices (primary rows) that are theirs.
+people = Table(
+    "people",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("name", String(40), nullable=False, unique=True),
+    Column("colour", String(16), nullable=False),  # device_groups palette key
+    Column("sort", Integer, nullable=False, default=0),
+    Column("created_ms", Integer, nullable=False),
+)
+
+people_devices = Table(
+    "people_devices",
+    metadata,
+    Column("person_id", Integer, ForeignKey("people.id", ondelete="CASCADE"), primary_key=True),
+    Column("device_id", Integer, ForeignKey("devices.id", ondelete="CASCADE"), primary_key=True),
+    sqlite_with_rowid=False,
+)
+
 device_ips = Table(
     "device_ips",
     metadata,
@@ -340,6 +359,7 @@ device_tags = Table(
     sqlite_with_rowid=False,
 )
 Index("ix_device_tags_tag", device_tags.c.tag)
+Index("ix_people_devices_device", people_devices.c.device_id)
 
 # AdGuard Home queries per client and hour. Domain lists are cleared after the raw retention
 # (they are a browsing history); the counts are kept as long as the rollups.

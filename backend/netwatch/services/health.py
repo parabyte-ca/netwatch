@@ -182,7 +182,9 @@ class HealthService:
         *,
         tz: Callable[[], str] = lambda: "America/Toronto",
         groups: Callable[[int, int], list[dict]] | None = None,
+        people: Callable[[int, int], list[dict]] | None = None,
     ) -> None:
+        self.people = people  # (start_ms, end_ms) -> arrivals per person
         self.engine = engine
         self.groups = groups  # (start_ms, end_ms) -> per-group totals
         self.build = build  # (start_ms, end_ms) -> incident report
@@ -220,9 +222,16 @@ class HealthService:
                 groups = self.groups(start, end)
             except Exception:  # a report without the groups section beats no report
                 log.exception("weekly report: group totals failed")
+        persons = []
+        if self.people is not None:
+            try:
+                persons = self.people(start, end)
+            except Exception:
+                log.exception("weekly report: who's home failed")
         details = {
             **health,
             "groups": groups,
+            "people": persons,
             "period": report["period"],
             "summary": report["summary"],
             "speeds": report["speeds"],
@@ -234,7 +243,7 @@ class HealthService:
             ],
             "incident_count": len(report["incidents"]),
             "previous_score": prev["score"] if prev else None,
-            "markdown": render_week(week_start, health, report, prev, groups),
+            "markdown": render_week(week_start, health, report, prev, groups, persons),
         }
         now = now_ms or int(time.time() * 1000)
         with self.engine.begin() as conn:
@@ -328,7 +337,12 @@ class HealthService:
 
 
 def render_week(
-    week_start: str, health: dict, report: dict, prev: dict | None, groups: list[dict] | None = None
+    week_start: str,
+    health: dict,
+    report: dict,
+    prev: dict | None,
+    groups: list[dict] | None = None,
+    persons: list[dict] | None = None,
 ) -> str:
     s = report["summary"]
     score = health["score"]
@@ -385,4 +399,9 @@ def render_week(
                 f"{f'{blocked} %' if blocked is not None else 'n/a'} | "
                 f"{g['outages']} | {g['alerts']} | {g['quiet_events']} |"
             )
+    if persons:
+        lines += ["", "## Who's home", ""]
+        for p in persons:
+            n = p["arrivals"]
+            lines.append(f"- {p['name']}: arrived home {n} time{'s' if n != 1 else ''}")
     return "\n".join(lines) + "\n"
