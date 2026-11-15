@@ -5,6 +5,7 @@ import { colourOf } from '../lib/groups';
 import { api, type HealthScore, type WeeklyReport } from '../lib/api';
 import { fmtTime, fmtBytes } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
+import { SpeedPlanCard } from '../components/SpeedPlan';
 
 const btn = 'rounded-md px-3 py-1.5 text-sm font-medium disabled:opacity-50';
 const SPANS = [1, 7, 30];
@@ -159,6 +160,10 @@ export function Health() {
             </div>
           </div>
         )}
+      </Section>
+
+      <Section title="Speed vs plan">
+        <SpeedPlanCard />
       </Section>
 
       <Section

@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.22.0] - 2026-11-15
+### Added
+- Speed against your plan: plan download and upload speeds and a "slower than" threshold under
+  **Admin → Internet plan** (not set by default). The nightly bufferbloat test's throughput is
+  shown on the Health page as a share of the plan: last result, 30-day medians and a 90-day chart
+  with the plan and threshold lines. Diagnostics shows Mb/s with "% of plan".
+- Three scheduled tests in a row under the threshold (70 % by default) open an information event
+  "Internet slower than your plan" (new timeline filter "Speed"); the next good night closes it.
+  Manual tests don't count.
+- A "Speed vs plan" part in the health score (weight 10, only when plan speeds are set) and a
+  speed line in the weekly report. `GET /api/speed-plan`.
+- Each test stores the plan speeds and NetWatch's network port speed at the time, so a later
+  plan change reads correctly and a result capped by a 1 Gb/s port is called out.
+
+### Changed
+- The load test's throughput leaves out the first second (TCP ramp-up), which read about 10 %
+  low on fast lines.
+
 ## [0.21.0] - 2026-11-15
 ### Added
 - Who's home: **Devices → People…** to add a person with a name, a colour and up to 8 devices

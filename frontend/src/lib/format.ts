@@ -109,6 +109,7 @@ export const EVENT_LABEL: Record<string, string> = {
   exposure: 'Exposure',
   dns: 'DNS',
   presence: "Who's home",
+  speed: 'Speed',
 };
 
 export const DEVICE_TYPE_LABEL: Record<string, string> = {

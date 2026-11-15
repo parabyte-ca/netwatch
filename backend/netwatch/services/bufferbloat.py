@@ -77,12 +77,14 @@ class HttpLoad:
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
         self.client = client
 
-    async def __call__(self, direction: str, seconds: float) -> int:
+    async def __call__(
+        self, direction: str, seconds: float, counter: list[int] | None = None
+    ) -> int:
         own = self.client is None
         client = self.client or httpx.AsyncClient(
             timeout=httpx.Timeout(15.0, read=15.0), headers=HEADERS
         )
-        moved = [0]
+        moved = counter if counter is not None else [0]  # read live by the tester
         deadline = time.monotonic() + seconds
 
         async def down() -> None:
@@ -181,7 +183,11 @@ class BufferbloatTester:
         quiet: Callable[[int], None] | None = None,
         idle_s: float = IDLE_S,
         load_s: float = LOAD_S,
+        context: Callable[[], dict] | None = None,
+        on_result: Callable[[dict], None] | None = None,
     ) -> None:
+        self.context = context  # plan speeds and host link speed, stored with each result
+        self.on_result = on_result  # e.g. the speed-plan check after a scheduled test
         self.store = store
         self.pinger = pinger
         self.loader = loader or HttpLoad()
@@ -203,8 +209,14 @@ class BufferbloatTester:
 
     async def _loaded(self, direction: str) -> tuple[list[float | None], float]:
         started = time.monotonic()
-        load = asyncio.create_task(self.loader(direction, self.load_s))
+        counter = [0]
+        live = isinstance(self.loader, HttpLoad)
+        if live:
+            load = asyncio.create_task(self.loader(direction, self.load_s, counter))
+        else:
+            load = asyncio.create_task(self.loader(direction, self.load_s))
         await asyncio.sleep(1.0)  # let TCP ramp up before measuring
+        ramp_bytes, ramp_end = counter[0], time.monotonic()
         samples = await self._sample(self.load_s - 1.0)
         moved = await load
         if moved < MIN_LOAD_BYTES:
@@ -213,6 +225,9 @@ class BufferbloatTester:
                 f"almost no data moved during the {direction} test "
                 f"({moved // 1000} kB); is speed.cloudflare.com reachable from TrueNAS?"
             )
+        if live and moved > ramp_bytes:
+            # Throughput after the ramp-up: counting the slow first second reads low.
+            return samples, (moved - ramp_bytes) * 8 / max(time.monotonic() - ramp_end, 0.001)
         return samples, moved * 8 / max(time.monotonic() - started, 0.001)
 
     async def run(self, trigger: str = "manual") -> dict:
@@ -276,8 +291,19 @@ class BufferbloatTester:
                     "added_ms": round(worst, 1) if worst is not None else None,
                 },
             }
+            if self.context is not None:
+                try:
+                    row["details"]["context"] = self.context()
+                except Exception:
+                    log.exception("bufferbloat: test context unavailable")
             log.info("bufferbloat test", extra={"grade": row["grade"], "added_ms": worst})
-            return await asyncio.to_thread(self.store.add, row)
+            saved = await asyncio.to_thread(self.store.add, row)
+            if self.on_result is not None:
+                try:
+                    await asyncio.to_thread(self.on_result, saved)
+                except Exception:
+                    log.exception("bufferbloat: result hook failed")
+            return saved
 
     # ── nightly schedule ─────────────────────────────────────────────────────
 

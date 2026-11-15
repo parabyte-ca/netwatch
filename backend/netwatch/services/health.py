@@ -50,7 +50,7 @@ def _component(key: str, name: str, weight: int, score: float, detail: str) -> d
     return {"key": key, "label": name, "weight": weight, "score": _clamp(score), "detail": detail}
 
 
-def compute(report: dict, exposure: dict | None = None) -> dict:
+def compute(report: dict, exposure: dict | None = None, speed: dict | None = None) -> dict:
     """Score a period from its incident report (``build_report``) and the exposure summary."""
     s = report["summary"]
     comps: list[dict] = []
@@ -143,6 +143,22 @@ def compute(report: dict, exposure: dict | None = None) -> dict:
             )
         )
 
+    if speed:  # only when plan speeds are set and the period has a nightly test
+        cap = " (NetWatch's network port was the limit)" if speed.get("link_capped") else ""
+        pcts = [min(100.0, p) for p in (speed.get("down_pct"), speed.get("up_pct")) if p]
+        if pcts:
+            bits = [f"{speed[k]:.0f} % of plan {d}" for k, d in
+                    (("down_pct", "down"), ("up_pct", "up")) if speed.get(k)]  # fmt: skip
+            comps.append(
+                _component(
+                    "speed",
+                    "Speed vs plan",
+                    10,
+                    sum(pcts) / len(pcts),
+                    "median " + ", ".join(bits) + cap,
+                )
+            )
+
     total_w = sum(c["weight"] for c in comps)
     score = _clamp(sum(c["score"] * c["weight"] for c in comps) / total_w) if total_w else None
     return {
@@ -183,7 +199,9 @@ class HealthService:
         tz: Callable[[], str] = lambda: "America/Toronto",
         groups: Callable[[int, int], list[dict]] | None = None,
         people: Callable[[int, int], list[dict]] | None = None,
+        speed: Callable[[int, int], dict | None] | None = None,
     ) -> None:
+        self.speed = speed  # (start_ms, end_ms) -> medians against the plan, or None
         self.people = people  # (start_ms, end_ms) -> arrivals per person
         self.engine = engine
         self.groups = groups  # (start_ms, end_ms) -> per-group totals
@@ -195,10 +213,19 @@ class HealthService:
     def score(self, days: int = 7, now_ms: int | None = None) -> dict:
         now = now_ms or int(time.time() * 1000)
         start = now - days * 86_400_000
-        out = compute(self.build(start, now), self.exposure())
+        out = compute(self.build(start, now), self.exposure(), self._speed(start, now))
         return {**out, "start_ms": start, "end_ms": now, "days": days}
 
     # ── weekly reports ───────────────────────────────────────────────────────
+
+    def _speed(self, start: int, end: int) -> dict | None:
+        if self.speed is None:
+            return None
+        try:
+            return self.speed(start, end)
+        except Exception:  # a score without the speed part beats no score
+            log.exception("health: speed against plan failed")
+            return None
 
     def week_bounds(self, week_start: str) -> tuple[int, int]:
         zone = ZoneInfo(self.tz())
@@ -214,7 +241,8 @@ class HealthService:
     def generate(self, week_start: str, now_ms: int | None = None) -> dict:
         start, end = self.week_bounds(week_start)
         report = self.build(start, end)
-        health = compute(report, self.exposure())
+        speed = self._speed(start, end)
+        health = compute(report, self.exposure(), speed)
         prev = self.get((datetime.fromisoformat(week_start) - timedelta(days=7)).date().isoformat())
         groups = []
         if self.groups is not None:
@@ -232,6 +260,7 @@ class HealthService:
             **health,
             "groups": groups,
             "people": persons,
+            "speed": speed,
             "period": report["period"],
             "summary": report["summary"],
             "speeds": report["speeds"],
@@ -243,7 +272,7 @@ class HealthService:
             ],
             "incident_count": len(report["incidents"]),
             "previous_score": prev["score"] if prev else None,
-            "markdown": render_week(week_start, health, report, prev, groups, persons),
+            "markdown": render_week(week_start, health, report, prev, groups, persons, speed),
         }
         now = now_ms or int(time.time() * 1000)
         with self.engine.begin() as conn:
@@ -343,6 +372,7 @@ def render_week(
     prev: dict | None,
     groups: list[dict] | None = None,
     persons: list[dict] | None = None,
+    speed: dict | None = None,
 ) -> str:
     s = report["summary"]
     score = health["score"]
@@ -381,6 +411,11 @@ def render_week(
             f"- Speed ({sp['kind']} {sp['direction']}): average {sp['avg_bps'] / 1e6:.0f} Mb/s "
             f"over {sp['tests']} tests"
         )
+    if speed:
+        bits = [f"{speed[k]:.0f} % of plan {d}" for k, d in
+                (("down_pct", "down"), ("up_pct", "up")) if speed.get(k)]  # fmt: skip
+        n = speed["tests"]
+        lines.append(f"- Speed: median {', '.join(bits)} ({n} test{'s' if n != 1 else ''})")
     if report["incidents"]:
         lines += ["", "## Incidents", ""]
         lines += [

@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.21.0-blue)
+![Version](https://img.shields.io/badge/version-0.22.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -188,6 +188,14 @@ per group or device (internet off at night, YouTube off during homework). See th
   press **Install**. A small host-side agent runs `update.sh`, which backs up the database,
   health-checks the new version and rolls back automatically if it fails. Live log, update
   history and a **Roll back** button are on the System page.
+- **Speed against your plan:** enter your plan's speeds under **Admin → Internet plan** (for
+  example 1500 down and 940 up). The nightly load test is then shown on the Health page as a share
+  of the plan, with the last result, 30-day medians and a 90-day chart; the health score gains a
+  "Speed vs plan" part and the weekly report a speed line. Three nights in a row under 70 %
+  (adjustable) open an information event "Internet slower than your plan", handy when calling
+  your provider. The test runs from the NetWatch host, so a busy network or a slower host port
+  caps the result; NetWatch says when its own port was the limit (a 1 Gb/s port cannot show a
+  1.5 Gb/s plan).
 - **Who's home:** under **Devices → People…** add a person and pick their phone (and a watch or
   laptop if they carry it). The Overview shows who is home, each person has a page with today's
   arrivals and departures and the last 7 days, and the timeline notes "Sam arrived home at 17:42"
@@ -692,8 +700,8 @@ Planned, in order (suggestions welcome):
 | Done in 0.21 | **Who's home:** pick the phones (or other devices) that belong to each person; NetWatch shows who is home from whether those devices are on the Wi-Fi, with arrival and departure times on the timeline and a "home now" list on the Overview. Phones that sleep their Wi-Fi are smoothed over (away only after a set time without being seen). Stays on the LAN: nothing is sent anywhere |
 | Done in 0.19 | **Per-group schedules:** internet off, YouTube off, apps or strict filtering on days and times for a group or device, with +15 min, +1 hour, off until it next starts, skip today and "internet off now"; confirmed and written to the security log |
 | Done in 0.20 | **Install as an app:** a home screen icon, full screen, and a clear "no connection" notice that recovers by itself; the page is kept on the device, network data never is |
-| Later | **Wi-Fi coverage view:** a floor plan with the Decos placed and each device's signal and roaming per room |
-| Next | **Speed tests against your plan:** nightly tests reported as a share of the plan's speed, with a 90-day trend |
+| Next | **Wi-Fi coverage view:** a floor plan with the Decos placed and each device's signal and roaming per room |
+| Done in 0.22 | **Speed tests against your plan:** nightly tests reported as a share of the plan's speed, with a 90-day trend |
 
 ## Changelog
 See [CHANGELOG.md](CHANGELOG.md).

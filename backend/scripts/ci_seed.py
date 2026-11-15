@@ -14,10 +14,12 @@ import time
 from pathlib import Path
 
 from netwatch.db import make_engine, run_migrations
+from netwatch.services.bufferbloat import BufferbloatStore
 from netwatch.services.device_groups import GroupStore
 from netwatch.services.discovery.inventory import DeviceStore
 from netwatch.services.events import EventLog
 from netwatch.services.people import PeopleStore
+from netwatch.services.storage import Store
 
 LONG = (
     "Living-Room-Samsung-QN90B-Neo-QLED-Television",
@@ -59,6 +61,15 @@ def main(data_dir: Path) -> None:
         f"{LONG[3]}-3 rejoined the network 5 times in an hour (it may be losing Wi-Fi)",
         details={"type": "dhcp_churn", "mac": "02:00:00:00:00:03"},
     )  # fmt: skip
+    # Speed against the plan: plan speeds and a few weeks of nightly results.
+    Store(engine).kv_set("settings_overrides", {"plan_down_mbps": 1500, "plan_up_mbps": 940})
+    bb = BufferbloatStore(engine)
+    for d in range(21):
+        bb.add({"ts_ms": now - d * 86_400_000, "trigger": "scheduled", "status": "ok",
+                "grade": "B", "idle_ms": 4.0, "down_ms": 30.0, "up_ms": 45.0,
+                "down_bps": int((1200 - 15 * d) * 1e6), "up_bps": int((880 - 5 * d) * 1e6),
+                "details": {"context": {"plan_down_mbps": 1500, "plan_up_mbps": 940,
+                                        "link_mbps": 2500}}})  # fmt: skip
     person = PeopleStore(engine).create("Alexandra-Catherine Longname", "rose", [ids[1], ids[2]])
     paths = [f"/devices/{i}" for i in (ids[0], ids[1], ids[3])] + [f"/people/{person['id']}"]
     print(" ".join(paths))

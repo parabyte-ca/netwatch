@@ -71,6 +71,15 @@ FIELDS: tuple[Editable, ...] = (
     Editable("bufferbloat_nightly", "path_tests", "Nightly bufferbloat test",
              "Saturates the internet line for about 30 s each night (20 min after the update "
              "window opens) to grade latency under load.", True),
+    # Internet plan
+    Editable("plan_down_mbps", "internet_plan", "Plan download speed",
+             "What your internet plan promises (e.g. 1500 for Bell Gigabit 1.5). 0 = not set. "
+             "The nightly test is then shown as a share of it.", True, "Mb/s"),
+    Editable("plan_up_mbps", "internet_plan", "Plan upload speed",
+             "What your plan promises for upload (e.g. 940). 0 = not set.", True, "Mb/s"),
+    Editable("plan_slow_pct", "internet_plan", "Slower than the plan below",
+             "Three nights in a row under this share of the plan open an information event "
+             "(useful when calling your provider).", True, "%"),
     Editable("exposure_scan_nightly", "path_tests", "Nightly exposure scan",
              "Checks LAN devices for open services and reads the Home Hub's port forwards "
              "(40 min after the update window opens).", True),
@@ -117,6 +126,7 @@ BY_NAME = {f.name: f for f in FIELDS}
 GROUPS = {
     "detection": "Outage detection",
     "path_tests": "Path and load tests",
+    "internet_plan": "Internet plan",
     "discovery": "Discovery",
     "nic": "TrueNAS network interface",
     "retention": "Data retention",

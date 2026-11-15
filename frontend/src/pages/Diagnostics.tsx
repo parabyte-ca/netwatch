@@ -218,6 +218,12 @@ const GRADE_HINT: Record<string, string> = {
   F: 'Bad: heavy use makes everything else nearly unusable.',
 };
 
+/** "940 Mb/s (63 % of plan)" when the plan was set at the time of the test. */
+export function withPlan(bps: number | null, planMbps: number | null | undefined): string {
+  if (bps == null) return '—';
+  return planMbps ? `${fmtBps(bps)} (${Math.round((bps / 1e6 / planMbps) * 100)} % of plan)` : fmtBps(bps);
+}
+
 function BufferbloatSection() {
   const { data, error, refresh } = usePolling(api.bufferbloat, 5_000);
   const [err, setErr] = useState<string | null>(null);
@@ -258,7 +264,7 @@ function BufferbloatSection() {
               <>
                 <p className="text-slate-200">{GRADE_HINT[latest.grade ?? ''] ?? ''}</p>
                 <p className="text-xs text-slate-500">
-                  {fmtTime(latest.ts_ms)} · ↓ {fmtBps(latest.down_bps)} · ↑ {fmtBps(latest.up_bps)} · {latest.trigger}
+                  {fmtTime(latest.ts_ms)} · ↓ {withPlan(latest.down_bps, latest.details.context?.plan_down_mbps)} · ↑ {withPlan(latest.up_bps, latest.details.context?.plan_up_mbps)} · {latest.trigger}
                 </p>
               </>
             ) : (
