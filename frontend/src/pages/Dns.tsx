@@ -7,6 +7,7 @@ import { fmtAgo } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
 import { AdGuardControls, useRuleAction } from '../components/AdGuardControls';
 import { ReservationList } from '../components/DhcpReservations';
+import { ProfileList } from '../components/AdGuardProfile';
 
 const SPANS = [
   { label: '6 h', hours: 6 },
@@ -199,6 +200,8 @@ export function Dns() {
           </Section>
 
           <ReservationList />
+
+          <ProfileList />
 
           <Section title="Upstream resolvers">
             {data.upstreams.length ? (

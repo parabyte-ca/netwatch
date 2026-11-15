@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.16.0-blue)
+![Version](https://img.shields.io/badge/version-0.17.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -22,8 +22,9 @@ admin panel; **v0.7** the network map with incident replay and the Deco mesh int
 **v0.10** a sortable Devices page and in-place renaming; **v0.11** the AdGuard Home integration
 and the DNS page; **v0.12** AdGuard Home in the device inventory; **v0.13** optional AdGuard Home actions;
 **v0.14** device groups and tags, and every device on the map; **v0.15** quiet groups, groups
-at a glance and groups in the weekly report; **v0.16 (this release)** the full screen map and
-DHCP reservations through AdGuard Home. See the [Roadmap](#roadmap) for what's next.
+at a glance and groups in the weekly report; **v0.16** the full screen map and DHCP
+reservations through AdGuard Home; **v0.17 (this release)** AdGuard Home settings per device and
+per group. See the [Roadmap](#roadmap) for what's next.
 
 ## Features
 - **Probes:** ICMP (from every 1 s), DNS query latency/failures, TCP connect, and HTTP checks,
@@ -366,6 +367,14 @@ AdGuard Home actions** to get a **Controls** section on the DNS page:
 - **Switch the upstream DNS** to a preset (Cloudflare, Quad9 or Google, encrypted or plain) or
   your own servers. AdGuard Home tests them first and NetWatch only switches if every one passes;
   **Switch back** returns to the previous list.
+- **Settings per device and per group:** choose **No blocking** (an exception: nothing is blocked)
+  or **Strict** (blocklists, safe browsing, parental control and safe search, which includes
+  YouTube Restricted Mode) for a group (Devices → Groups…) or one device (its page). NetWatch keeps
+  a persistent client in AdGuard Home for each, named `NetWatch: Kids` or `NetWatch: Sam's iPad`,
+  holding every MAC it knows for those devices. A device's own setting beats its group's. When a
+  device joins or leaves a group, the client follows within about 15 seconds. NetWatch only changes
+  the clients it made: a device already in one of your own AdGuard Home clients is left out and
+  shown on the DNS page.
 - **DHCP reservations** (when AdGuard Home is the DHCP server): keep an address for a device.
   On a device's page, **Reserve this address** fills in its current IP, MAC and name; the DNS page
   lists every reservation (with change and remove); on the Devices page, tick devices and choose
@@ -626,7 +635,7 @@ Planned, in order (suggestions welcome):
 | Done in 0.15.1 | **Why devices sit under the Home Hub:** the cause was Deco polling left off after a successful test. The map now says when the Deco link is off, not polling, paused or not read yet, and the Deco, Home Hub and AdGuard Home cards warn when settings are saved but polling is off, with a one-click fix |
 | Done in 0.16 | **Full screen map:** a button (and the F key) to show the map on the whole screen, with the controls kept in a slim bar and Esc to leave; `/map?full=1` for a wall tablet |
 | Done in 0.16 | **Static DHCP reservations through AdGuard Home:** reserve a device's address from its page, the DNS page or the Devices selection bar, with checks that the address is in the DHCP network and not taken; change and remove them. Off unless AdGuard Home actions are on; confirmed and written to the security log |
-| Next | **AdGuard Home per device and per group:** give a device (or several) its own AdGuard Home settings from NetWatch, such as an exception so nothing is blocked for it, using AdGuard Home's persistent clients |
+| Done in 0.17 | **AdGuard Home per device and per group:** No blocking or Strict (with YouTube Restricted Mode) for a group or a device, kept as AdGuard Home persistent clients that follow group changes |
 | Done in 0.15 | **More from groups:** quiet groups (alerts for, say, "Smart home" recorded as information and hidden from the timeline; outages still alert), traffic and DNS totals per group on the Devices page, and a Groups section in the weekly report |
 | Done in 0.14 | **Device groups and tags**, defined once and used everywhere: groups you name (for example "Smart home", "Family", "Kids", or one child's phone, tablet and laptop), each with a colour and an icon, plus free tags (a device can have several, e.g. `upstairs`, `guest`, `work`). Assign one device or many at once from the Devices page; groups are suggested from the device type (smart plugs and switches → "Smart home"). Stored in the database, kept when a device changes address or uses a private MAC (merged devices), included in backups, exportable as JSON. Used by: Devices page filters and a group column, timeline and alert filters (e.g. mute new-device alerts for "Smart home"), bandwidth and DNS per group, the weekly report per group ("Smart home: 3 short outages"), and AdGuard Home settings per group (one persistent client per group) |
 | Done in 0.14 | **Every device on the map:** each device as its own node under the Deco, switch or Home Hub it connects through, coloured by group (or by status or bandwidth), with tags as badges. Groups can be collapsed into one node and expanded again; filter by group or tag; drag devices to arrange them, with positions saved in NetWatch (the same on every browser and phone); saved views (e.g. "Kids only", "Smart home") |

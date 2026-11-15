@@ -130,12 +130,19 @@ class GroupStore:
                     quiet=bool(merged.get("quiet", False)),
                 )
             )
-        self._quiet_cache = None
+        self._changed()
         return self.get(group_id)
+
+    on_change = None  # called after membership or group changes (AdGuard Home profiles)
+
+    def _changed(self) -> None:
+        self._quiet_cache = None
+        if self.on_change:
+            self.on_change()
 
     def delete(self, group_id: int) -> int:
         """Delete a group; its devices become ungrouped. Returns how many devices were in it."""
-        self._quiet_cache = None
+        self._changed()
         with self.engine.begin() as conn:
             n = conn.execute(
                 update(devices).where(devices.c.group_id == group_id).values(group_id=None)
@@ -198,7 +205,7 @@ class GroupStore:
         return False
 
     def assign(self, device_ids: list[int], group_id: int | None) -> int:
-        self._quiet_cache = None
+        self._changed()
         if group_id is not None and self.get(group_id) is None:
             raise GroupError("no such group")
         ids = self.primaries(device_ids)

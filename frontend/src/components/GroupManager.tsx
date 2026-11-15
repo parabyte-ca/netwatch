@@ -2,6 +2,8 @@ import { useRef, useState } from 'react';
 import { api, type DeviceGroup } from '../lib/api';
 import { GROUP_COLOURS, GroupIcon, ICON_NAMES, colourOf } from '../lib/groups';
 import { ConfirmDialog, type Confirm } from './ConfirmDialog';
+import { GroupProfileSelect, useProfiles } from './AdGuardProfile';
+import type { AdGuardProfiles } from '../lib/api';
 
 const input = 'rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 focus:border-sky-500 focus:outline-none';
 const btn = 'rounded-md px-2.5 py-1 text-xs font-medium disabled:opacity-50';
@@ -38,7 +40,7 @@ function QuietBox({ value, onChange }: { value: boolean; onChange: (v: boolean) 
   );
 }
 
-function Row({ g, onChanged, ask }: { g: DeviceGroup; onChanged: () => Promise<void>; ask: (c: Confirm) => void }) {
+function Row({ g, onChanged, ask, profiles, onProfiles }: { g: DeviceGroup; onChanged: () => Promise<void>; ask: (c: Confirm) => void; profiles: AdGuardProfiles | null; onProfiles: () => Promise<void> }) {
   const [edit, setEdit] = useState(false);
   const [quiet, setQuiet] = useState(g.quiet);
   const [name, setName] = useState(g.name);
@@ -66,6 +68,7 @@ function Row({ g, onChanged, ask }: { g: DeviceGroup; onChanged: () => Promise<v
             {g.quiet && <span className="ml-2 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400" title={QUIET_HELP}>quiet</span>}
           </span>
           <span className="text-xs text-slate-500">{g.devices} device{g.devices === 1 ? '' : 's'}</span>
+          {profiles && <GroupProfileSelect group={g} profiles={profiles} onChanged={onProfiles} ask={ask} />}
           <button className="text-xs text-sky-400 hover:underline" onClick={() => setEdit(true)}>Edit</button>
           <button className="text-xs text-rose-300 hover:underline" onClick={() => ask({
             title: `Delete the group ${g.name}?`,
@@ -96,6 +99,7 @@ function Row({ g, onChanged, ask }: { g: DeviceGroup; onChanged: () => Promise<v
 
 /** Create, edit and delete groups; export and import the whole set-up. */
 export function GroupManager({ groups, onChanged, onClose }: { groups: DeviceGroup[]; onChanged: () => Promise<void>; onClose: () => void }) {
+  const { profiles, refresh: refreshProfiles } = useProfiles();
   const [name, setName] = useState('');
   const [colour, setColour] = useState('sky');
   const [icon, setIcon] = useState('star');
@@ -134,7 +138,7 @@ export function GroupManager({ groups, onChanged, onClose }: { groups: DeviceGro
           <button onClick={onClose} className="text-sm text-slate-400 hover:text-white" aria-label="Close">✕</button>
         </div>
         {groups.length ? (
-          <ul className="divide-y divide-slate-800">{groups.map((g) => <Row key={g.id} g={g} onChanged={onChanged} ask={setAsk} />)}</ul>
+          <ul className="divide-y divide-slate-800">{groups.map((g) => <Row key={g.id} g={g} onChanged={onChanged} ask={setAsk} profiles={profiles} onProfiles={refreshProfiles} />)}</ul>
         ) : (
           <p className="text-sm text-slate-400">No groups yet. Create one below, or accept a suggestion on the Devices page.</p>
         )}

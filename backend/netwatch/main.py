@@ -43,6 +43,7 @@ from .db import make_engine, run_migrations
 from .probes import Prober
 from .services.adguard.actions import AdGuardActions
 from .services.adguard.clients import ClientStore as AdGuardClientStore
+from .services.adguard.profiles import ProfileSync
 from .services.adguard.service import AdGuardService, AdGuardStore
 from .services.assistant import Assistant
 from .services.bufferbloat import BufferbloatStore, BufferbloatTester
@@ -347,6 +348,10 @@ def create_app(
             app.state.adguard, settings, gateway_ip=lambda: discovery.gateway_ip()
         )
         app.state.adguard.actions = app.state.adguard_actions
+        app.state.adguard_profiles = ProfileSync(
+            app.state.adguard_actions, discovery.inventory, app.state.groups
+        )
+        app.state.groups.on_change = app.state.adguard_profiles.mark_dirty
         app.state.deco = DecoService(
             store,
             events,
@@ -403,6 +408,7 @@ def create_app(
         app.state.deco.start()
         app.state.hub.start()
         app.state.adguard.start()
+        app.state.adguard_profiles.start()
         app.state.bufferbloat.start_schedule(
             enabled=lambda: settings.bufferbloat_nightly,
             window=lambda: app.state.updates.policy().get("window", settings.auto_update_window),
@@ -427,6 +433,7 @@ def create_app(
             await app.state.deco.stop()
             await app.state.hub.stop()
             await app.state.adguard.stop()
+            await app.state.adguard_profiles.stop()
             await app.state.bufferbloat.stop()
             await app.state.exposure.stop()
             await app.state.health.stop()

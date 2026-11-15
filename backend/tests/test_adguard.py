@@ -118,7 +118,8 @@ class FakeAdGuard:
 
 WRITE_PATHS = {"/control/protection", "/control/filtering/set_rules", "/control/dns_config",
                "/control/test_upstream_dns", "/control/dhcp/add_static_lease",
-               "/control/dhcp/remove_static_lease"}  # fmt: skip
+               "/control/dhcp/remove_static_lease", "/control/clients/add",
+               "/control/clients/update", "/control/clients/delete"}  # fmt: skip
 
 
 def _write(self, path: str, body: dict) -> httpx.Response:
@@ -132,6 +133,23 @@ def _write(self, path: str, body: dict) -> httpx.Response:
         return httpx.Response(200, text="OK")
     if path == "/control/filtering/set_rules":
         self.user_rules = list(body["rules"])
+        return httpx.Response(200)
+    if path in ("/control/clients/add", "/control/clients/update", "/control/clients/delete"):
+        items = self.clients.setdefault("clients", [])
+        if path.endswith("/delete"):
+            before = len(items)
+            items[:] = [c for c in items if c["name"] != body["name"]]
+            return httpx.Response(200 if len(items) < before else 400, text="client not found\n")
+        data, old = (body["data"], body["name"]) if path.endswith("/update") else (body, None)
+        if old is not None and not any(c["name"] == old for c in items):
+            return httpx.Response(400, text="client not found\n")
+        others = [c for c in items if c["name"] != old]
+        if any(c["name"] == data["name"] for c in others):
+            return httpx.Response(400, text=f"client {data['name']!r} already exists\n")
+        used = {i for c in others for i in c.get("ids") or []}
+        if any(i in used for i in data["ids"]):
+            return httpx.Response(400, text="another client uses the same id\n")
+        items[:] = [*others, dict(data)]
         return httpx.Response(200)
     if path == "/control/dhcp/add_static_lease":
         statics = self.dhcp.setdefault("static_leases", [])
@@ -1188,4 +1206,167 @@ def test_reservations_api_and_security_log(client):
                  "changed 192.168.2.150 to 192.168.2.51 for Sam's Pixel (aa:bb:cc:00:00:50)",
                  "removed the reservation of 192.168.2.51 for Sam's Pixel"):  # fmt: skip
         assert want in joined, want
+    assert PASSWORD not in joined and PASSWORD not in json.dumps(client.get(base).json())
+
+
+# ── settings per device and per group (persistent clients) ──────────────────
+
+
+@pytest.fixture
+def prof(acts, svc, store):
+    from netwatch.services.adguard.profiles import ProfileSync
+    from netwatch.services.device_groups import GroupStore
+    from netwatch.services.discovery.inventory import DeviceStore, Inventory
+
+    devs = DeviceStore(store.engine)
+    inv = Inventory(devs)
+    gs = GroupStore(store.engine)
+    inv.groups = gs
+    p = ProfileSync(acts, inv, gs)
+    p.devs, p.gs, p.fake = devs, gs, svc.fake
+    svc.fake.clients = {"clients": [{"name": "Office PC", "ids": ["192.168.2.20"]},
+                                    {"name": "My TV", "ids": ["00:11:22:00:00:99"]}],
+                        "auto_clients": []}  # fmt: skip
+    return p
+
+
+def _dev(p, mac, name, **kw):
+    now = int(time.time() * 1000)
+    return p.devs.insert({"mac": mac, "first_seen_ms": 0, "last_seen_ms": now, "name": name, **kw})
+
+
+def _clients(p):
+    return {c["name"]: c for c in p.fake.clients["clients"]}
+
+
+async def test_profiles_build_netwatch_clients_and_device_beats_group(prof):
+    kids = prof.gs.create("Kids", "rose", "child")["id"]
+    ipad = _dev(prof, "00:11:22:00:00:01", "Sam's iPad")
+    phone = _dev(prof, "00:11:22:00:00:02", "Sam's phone")
+    _dev(prof, "da:11:22:00:00:12", None, merged_into=phone)  # its private address
+    laptop = _dev(prof, "00:11:22:00:00:03", "School laptop")
+    prof.gs.assign([ipad, phone, laptop], kids)
+    r = await prof.set_group(kids, "strict")
+    assert r["changes"] == [{"action": "added", "client": "NetWatch: Kids"}]
+    c = _clients(prof)["NetWatch: Kids"]
+    assert sorted(c["ids"]) == ["00:11:22:00:00:01", "00:11:22:00:00:02", "00:11:22:00:00:03",
+                                "da:11:22:00:00:12"]  # fmt: skip
+    assert c["filtering_enabled"] and c["parental_enabled"] and c["safebrowsing_enabled"]
+    assert c["safesearch"]["youtube"] and not c["use_global_settings"]
+    # The laptop gets its own profile: it leaves the Kids client.
+    r = await prof.set_device(laptop, "no_blocking")
+    assert {"action": "added", "client": "NetWatch: School laptop"} in r["changes"]
+    cs = _clients(prof)
+    assert "00:11:22:00:00:03" not in cs["NetWatch: Kids"]["ids"]
+    own = cs["NetWatch: School laptop"]
+    assert own["ids"] == ["00:11:22:00:00:03"] and not own["filtering_enabled"]
+    assert own["use_global_blocked_services"] is False and own["blocked_services"] == []
+    # Nothing to do the second time.
+    assert (await prof.reconcile())["changes"] == []
+    # Your own clients are untouched.
+    assert cs["Office PC"] == {"name": "Office PC", "ids": ["192.168.2.20"]}
+
+
+async def test_group_changes_follow_and_default_removes(prof):
+    kids = prof.gs.create("Kids", "rose", "child")["id"]
+    teens = prof.gs.create("Teens", "sky", "star")["id"]
+    a = _dev(prof, "00:11:22:00:00:01", "Tablet")
+    prof.gs.assign([a], kids)
+    await prof.set_group(kids, "strict")
+    await prof.set_group(teens, "no_blocking")
+    assert "NetWatch: Teens" not in _clients(prof)  # no members yet: no client
+    b = _dev(prof, "00:11:22:00:00:02", "Phone")
+    prof.gs.assign([b], kids)
+    await prof.reconcile()
+    prof.gs.assign([b], None)  # leaving the group shrinks the client, and says so
+    assert (await prof.reconcile())["changes"] == [
+        {"action": "updated", "client": "NetWatch: Kids"}
+    ]
+    prof.gs.assign([a], teens)  # moving a device frees its MAC before it is added elsewhere
+    r = await prof.reconcile()
+    cs = _clients(prof)
+    assert "NetWatch: Kids" not in cs and cs["NetWatch: Teens"]["ids"] == ["00:11:22:00:00:01"]
+    assert {"action": "added", "client": "NetWatch: Teens"} in r["changes"]
+    prof.gs.update(teens, name="Big kids")
+    await prof.reconcile()
+    assert "NetWatch: Big kids" in _clients(prof) and "NetWatch: Teens" not in _clients(prof)
+    await prof.set_group(teens, "default")
+    assert not any(n.startswith("NetWatch:") for n in _clients(prof)) and prof.tracked() == {}
+    await prof.set_group(teens, "strict")
+    prof.gs.delete(teens)
+    await prof.reconcile()
+    assert not any(n.startswith("NetWatch:") for n in _clients(prof))
+    assert prof.profiles()["groups"] == {str(kids): "strict"}  # the deleted group is dropped
+
+
+async def test_a_mac_in_your_own_client_is_a_conflict(prof):
+    from netwatch.services.adguard.actions import ActionError
+
+    kids = prof.gs.create("Kids", "rose", "child")["id"]
+    tv = _dev(prof, "00:11:22:00:00:99", "Living room TV")
+    ipad = _dev(prof, "00:11:22:00:00:01", "iPad")
+    prof.gs.assign([tv, ipad], kids)
+    r = await prof.set_group(kids, "strict")
+    assert r["conflicts"] == [{"device_id": tv, "label": "Living room TV",
+                               "mac": "00:11:22:00:00:99", "client": "My TV",
+                               "profile": "strict"}]  # fmt: skip
+    assert _clients(prof)["NetWatch: Kids"]["ids"] == ["00:11:22:00:00:01"]
+    assert _clients(prof)["My TV"]["ids"] == ["00:11:22:00:00:99"]
+    with pytest.raises(ActionError, match="profile must be"):
+        await prof.set_group(kids, "loose")
+
+
+async def test_profiles_refuse_when_actions_are_off(prof):
+    from netwatch.services.adguard.actions import ActionsDisabled
+
+    kids = prof.gs.create("Kids", "rose", "child")["id"]
+    prof.actions.settings_ns.adguard_actions = False
+    with pytest.raises(ActionsDisabled):
+        await prof.set_group(kids, "strict")
+    assert prof.fake.posts == []
+
+
+def test_profiles_api_and_security_log(client):
+    from netwatch.services.events import SECURITY
+
+    st = client.app.state
+    fake = FakeAdGuard()
+    fake.clients = {
+        "clients": [{"name": "My TV", "ids": ["00:11:22:00:00:99"]}],
+        "auto_clients": [],
+    }
+    st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
+    st.adguard.save(HOST, PORT, False, USER, True, PASSWORD)
+    base = "/api/adguard/actions/profiles"
+    assert client.get(base).status_code == 403
+    client.put("/api/admin/settings", json={"changes": {"adguard_actions": True}})
+    now = int(time.time() * 1000)
+    ipad = st.device_store.insert({"mac": "00:11:22:00:00:01", "first_seen_ms": 0,
+                                   "last_seen_ms": now, "name": "Sam's iPad"})  # fmt: skip
+    tv = st.device_store.insert({"mac": "00:11:22:00:00:99", "first_seen_ms": 0,
+                                 "last_seen_ms": now, "name": "Living room TV"})  # fmt: skip
+    kids = client.post("/api/device-groups", json={"name": "Kids", "colour": "rose",
+                                                   "icon": "child"}).json()["id"]  # fmt: skip
+    st.adguard_profiles.dirty = False
+    client.post("/api/devices/bulk", json={"ids": [ipad, tv], "group_id": kids})
+    assert st.adguard_profiles.dirty  # a group change asks for a sync
+    st.discovery.inventory.forget()
+
+    assert client.put(f"{base}/group/{kids}", json={"profile": "loose"}).status_code == 422
+    assert client.put(f"{base}/group/99999", json={"profile": "strict"}).status_code == 404
+    r = client.put(f"{base}/group/{kids}", json={"profile": "strict"}).json()
+    assert r["changes"] == [{"action": "added", "client": "NetWatch: Kids"}]
+    assert r["conflicts"][0]["client"] == "My TV"
+    g = client.get(base).json()
+    assert g["profiles"]["groups"] == {str(kids): "strict"}
+    kids_client = next(c for c in g["managed"] if c["key"] == f"group:{kids}")
+    assert kids_client["devices"] == [{"id": ipad, "label": "Sam's iPad"}]
+    r = client.put(f"{base}/device/{ipad}", json={"profile": "no_blocking"}).json()
+    assert {"action": "added", "client": "NetWatch: Sam's iPad"} in r["changes"]
+    assert {"action": "removed", "client": "NetWatch: Kids"} in r["changes"]
+    assert client.put(f"{base}/device/99999", json={"profile": "strict"}).status_code == 404
+
+    joined = "\n".join(e["title"] for e in st.events.list(0, 10**13, kinds=[SECURITY]))
+    assert "AdGuard Home: the group Kids set to Strict (added NetWatch: Kids)" in joined
+    assert "AdGuard Home: Sam's iPad set to No blocking (" in joined
     assert PASSWORD not in joined and PASSWORD not in json.dumps(client.get(base).json())
