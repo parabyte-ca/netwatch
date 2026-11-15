@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { DeviceDns } from '../components/DeviceDns';
+import { DeviceReservation } from '../components/DhcpReservations';
 import { DeviceTraffic } from '../components/DeviceTraffic';
 import { EventRow } from '../components/EventRow';
 import { api, type DeviceType } from '../lib/api';
@@ -196,6 +197,8 @@ export function DeviceDetail() {
       </Section>
 
       <DeviceDns id={d.id} />
+
+      <DeviceReservation d={d} />
 
       {!!data.services?.length && (
         <Section title="Open services">

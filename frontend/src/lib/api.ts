@@ -728,6 +728,31 @@ export interface AdGuardRule {
   by: string;
 }
 
+export interface DhcpLease {
+  mac: string;
+  ip: string;
+  hostname: string | null;
+  static: boolean;
+  by_netwatch: boolean;
+  device: { id: number; label: string } | null;
+}
+
+export interface AdGuardDhcp {
+  available: boolean;
+  enabled: boolean;
+  v4: { gateway_ip: string; subnet_mask: string; range_start: string; range_end: string } | null;
+  reservations: DhcpLease[];
+  leases: DhcpLease[];
+}
+
+export interface Reservation {
+  mac: string;
+  ip: string;
+  hostname: string | null;
+  changed_from: string | null;
+  private_mac: boolean;
+}
+
 export interface AdGuardActionsState {
   enabled: boolean;
   pause: { until_ms: number; started_ms: number; minutes: number; by: string } | null;
@@ -1186,6 +1211,14 @@ export const api = {
   adguardActions: () => request<AdGuardActionsState>('/api/adguard/actions'),
   adguardPause: (minutes: number) => request<unknown>('/api/adguard/actions/pause', post({ minutes })),
   adguardResume: () => request<unknown>('/api/adguard/actions/resume', post()),
+  adguardDhcp: () => request<AdGuardDhcp>('/api/adguard/actions/dhcp'),
+  adguardReserve: (mac: string, ip: string, hostname?: string) =>
+    request<{ reservation: Reservation }>('/api/adguard/actions/dhcp/reservations', post({ mac, ip, hostname: hostname || undefined })),
+  adguardUnreserve: (mac: string) =>
+    request<{ removed: DhcpLease }>('/api/adguard/actions/dhcp/reservations', { method: 'DELETE', body: JSON.stringify({ mac }) }),
+  adguardReserveCurrent: (device_ids: number[]) =>
+    request<{ results: { id: number; label?: string; ok: boolean; ip?: string; already?: boolean; error?: string }[] }>(
+      '/api/adguard/actions/dhcp/reservations/bulk', post({ device_ids })),
   adguardAddRule: (domain: string, kind: 'allow' | 'block') =>
     request<{ rule: AdGuardRule; rules: AdGuardRule[] }>('/api/adguard/actions/rules', post({ domain, kind })),
   adguardRemoveRule: (rule: string) =>
