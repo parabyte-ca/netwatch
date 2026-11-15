@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..services.adguard.actions import ActionError, ActionsDisabled
-from ..services.adguard.profiles import PROFILE_LABEL
+from ..services.adguard.profiles import describe
 from ..services.discovery.inventory import device_label
 from .auth import security_event
 
@@ -321,9 +321,11 @@ async def reserve_current(body: BulkReserveIn, request: Request) -> dict:
 # ── settings per device and per group ───────────────────────────────────────
 
 
-class ProfileIn(BaseModel):
+class SettingsIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    profile: Literal["default", "no_blocking", "strict"]
+    filtering: Literal["default", "no_blocking", "strict"] = "default"
+    youtube: Literal["default", "restricted", "blocked", "allowed"] = "default"
+    services: list[str] = Field(default_factory=list, max_length=30)
 
 
 def _profiles(request: Request):
@@ -352,10 +354,13 @@ async def profiles(request: Request) -> dict:
         }
         for key, d in sorted(desired.items(), key=lambda kv: kv[1]["name"].lower())
     ]
-    return {**p.state(), "managed": clients}
+    services: list[dict] = []
+    with contextlib.suppress(ActionError, ActionsDisabled):
+        services = await p.services_all()
+    return {**p.state(), "managed": clients, "services_all": services}
 
 
-async def _set(request: Request, kind: str, target_id: int, body: ProfileIn) -> dict:
+async def _set(request: Request, kind: str, target_id: int, body: SettingsIn) -> dict:
     p = _profiles(request)
     setter = p.set_device if kind == "device" else p.set_group
     if kind == "device":
@@ -368,23 +373,25 @@ async def _set(request: Request, kind: str, target_id: int, body: ProfileIn) -> 
         if g is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "no such group")
         what = f"the group {g['name']}"
-    label = PROFILE_LABEL[body.profile]
-    r = await _run(request, f"set {what} to {label}", setter(target_id, body.profile))
+    settings = body.model_dump()
+    names = {x["id"]: x["name"] for x in (p._services[1] if p._services else [])}
+    label = describe(settings, names)
+    r = await _run(request, f"set {what} to {label}", setter(target_id, settings))
     changes = ", ".join(f"{c['action']} {c['client']}" for c in r["changes"]) or "no change needed"
     await security_event(
         request,
         "info",
         f"AdGuard Home: {what} set to {label} ({changes})",
-        {"action": "adguard_profile", "kind": kind, "id": target_id, "profile": body.profile},
+        {"action": "adguard_profile", "kind": kind, "id": target_id, "settings": settings},
     )
     return {**r, "state": p.state()}
 
 
 @router.put("/profiles/device/{device_id}")
-async def set_device_profile(device_id: int, body: ProfileIn, request: Request) -> dict:
+async def set_device_profile(device_id: int, body: SettingsIn, request: Request) -> dict:
     return await _set(request, "device", device_id, body)
 
 
 @router.put("/profiles/group/{group_id}")
-async def set_group_profile(group_id: int, body: ProfileIn, request: Request) -> dict:
+async def set_group_profile(group_id: int, body: SettingsIn, request: Request) -> dict:
     return await _set(request, "group", group_id, body)

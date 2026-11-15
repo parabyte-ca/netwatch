@@ -279,6 +279,40 @@ class AdGuardClient:
             raise AdGuardError("unexpected clients answer (is this AdGuard Home?)")
         return [x for x in items if isinstance(x, dict) and x.get("name")]
 
+    async def blocked_services_all(self) -> list[dict]:
+        """The apps AdGuard Home can block, [{id, name}] (older versions: ids only)."""
+        try:
+            d = await self._get("/control/blocked_services/all")
+            items = d.get("blocked_services") if isinstance(d, dict) else None
+            if isinstance(items, list):
+                return [{"id": str(x["id"]), "name": _name(x.get("name")) or str(x["id"])}
+                        for x in items if isinstance(x, dict) and x.get("id")]  # fmt: skip
+        except AdGuardLoginError:
+            raise
+        except AdGuardError:
+            pass
+        d = await self._get("/control/blocked_services/services")
+        return [{"id": str(x), "name": str(x)} for x in d or [] if isinstance(x, str)]
+
+    async def global_protection(self) -> dict:
+        """AdGuard Home's global settings a NetWatch client copies when filtering is default."""
+
+        async def enabled(path: str) -> bool:
+            d = await self._get(path)
+            return bool(d.get("enabled")) if isinstance(d, dict) else False
+
+        f = await self._get("/control/filtering/status")
+        ss = await self._get("/control/safesearch/status")
+        bs = await self._get("/control/blocked_services/get")
+        blocked = bs.get("ids") if isinstance(bs, dict) else bs
+        return {
+            "filtering": bool(f.get("enabled", True)) if isinstance(f, dict) else True,
+            "safebrowsing": await enabled("/control/safebrowsing/status"),
+            "parental": await enabled("/control/parental/status"),
+            "safesearch": ss if isinstance(ss, dict) else {"enabled": False},
+            "blocked": sorted(str(x) for x in blocked or [] if isinstance(x, str)),
+        }
+
     async def add_client(self, data: dict) -> None:
         await self._post("/control/clients/add", data)
 

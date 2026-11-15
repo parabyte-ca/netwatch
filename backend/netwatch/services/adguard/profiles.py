@@ -1,7 +1,8 @@
 """AdGuard Home settings per device and per group, kept as persistent clients NetWatch owns.
 
-A device or a group gets a profile (default, no_blocking or strict). For each one that is not
-default, NetWatch keeps a persistent client named "NetWatch: <name>" holding the devices' MACs.
+A device or a group gets settings: filtering (default, no_blocking or strict), YouTube (default,
+restricted, blocked or allowed) and extra apps to block. For each one that is not all default,
+NetWatch keeps a persistent client named "NetWatch: <name>" holding the devices' MACs.
 A device's own profile beats its group's. NetWatch only adds, changes or deletes the clients whose
 names it tracks; a MAC that is already in one of your own clients is left out and reported.
 Runs through AdGuardActions, so nothing happens unless "AdGuard Home actions" is on.
@@ -20,30 +21,96 @@ from .client import norm_mac
 
 log = logging.getLogger(__name__)
 
-PROFILES_KEY = "adguard_profiles"  # {"devices": {id: profile}, "groups": {id: profile}}
+PROFILES_KEY = "adguard_profiles"  # {"devices": {id: settings}, "groups": {id: settings}}
 TRACKED_KEY = "adguard_profile_clients"  # {"device:5" | "group:3": client name}
 PROFILES = ("default", "no_blocking", "strict")
 PROFILE_LABEL = {"default": "Default", "no_blocking": "No blocking", "strict": "Strict"}
+YOUTUBE = ("default", "restricted", "blocked", "allowed")
+YOUTUBE_LABEL = {"restricted": "YouTube Restricted Mode", "blocked": "YouTube blocked",
+                 "allowed": "YouTube allowed"}  # fmt: skip
+DEFAULT_SETTINGS = {"filtering": "default", "youtube": "default", "services": []}
+MAX_SERVICES = 30
+SERVICES_TTL_S = 3600
+_SERVICE_ID = re.compile(r"^[a-z0-9_]{1,64}$")
 PREFIX = "NetWatch: "
 SYNC_S = 15  # how soon a group change reaches AdGuard Home
 FULL_SYNC_S = 300  # also re-check everything this often (drift)
 _ENGINES = ("bing", "duckduckgo", "ecosia", "google", "pixabay", "yandex", "youtube")
 
 
-def client_body(name: str, profile: str, macs: list[str]) -> dict:
-    """The persistent client AdGuard Home should have for this profile."""
-    strict = profile == "strict"
+def normalize_settings(v) -> dict:
+    """Stored or sent settings as a full dict; a v0.17 profile string is its filtering."""
+    if isinstance(v, str):
+        v = {"filtering": v}
+    if not isinstance(v, dict):
+        return dict(DEFAULT_SETTINGS)
+    f = v.get("filtering") if v.get("filtering") in PROFILES else "default"
+    y = v.get("youtube") if v.get("youtube") in YOUTUBE else "default"
+    svc = sorted({str(s) for s in v.get("services") or [] if _SERVICE_ID.match(str(s))})
+    return {"filtering": f, "youtube": y, "services": svc[:MAX_SERVICES]}
+
+
+def is_default(s: dict) -> bool:
+    return normalize_settings(s) == DEFAULT_SETTINGS
+
+
+def describe(s: dict, names: dict[str, str] | None = None) -> str:
+    """ "Strict, YouTube blocked, also blocks TikTok" for the security log and the UI."""
+    s = normalize_settings(s)
+    parts = [PROFILE_LABEL[s["filtering"]]] if s["filtering"] != "default" else []
+    if s["youtube"] != "default":
+        parts.append(YOUTUBE_LABEL[s["youtube"]])
+    if s["services"]:
+        parts.append("also blocks " + ", ".join((names or {}).get(x, x) for x in s["services"]))
+    if s["filtering"] == "default" and s["services"] and s["youtube"] == "default":
+        parts.insert(0, "Default filtering")
+    return ", ".join(parts) or "Default"
+
+
+GLOBAL_OFF = {"filtering": True, "safebrowsing": False, "parental": False,
+              "safesearch": {"enabled": False}, "blocked": []}  # fmt: skip
+
+
+def client_body(name: str, settings: dict, macs: list[str], g: dict | None = None) -> dict:
+    """The persistent client AdGuard Home should have for these settings.
+
+    ``g`` is AdGuard Home's global protection (filtering, safe browsing, parental control, safe
+    search and blocked apps): "default" filtering copies it, so only YouTube or apps change.
+    """
+    s = normalize_settings(settings)
+    g = g or GLOBAL_OFF
+    f = s["filtering"]
+    if f in ("strict", "no_blocking"):
+        on = f == "strict"
+        filt = par = sb = on
+        ss = {"enabled": on, **{e: on for e in _ENGINES}}
+    else:
+        filt, par, sb = bool(g["filtering"]), bool(g["parental"]), bool(g["safebrowsing"])
+        gss = g.get("safesearch") or {}
+        on = bool(gss.get("enabled"))
+        ss = {"enabled": on, **{e: on and bool(gss.get(e, True)) for e in _ENGINES}}
+    if s["youtube"] == "restricted":
+        if not ss["enabled"]:
+            ss = {"enabled": True, **{e: False for e in _ENGINES}}
+        ss["youtube"] = True
+    base = [] if f == "no_blocking" else list(g.get("blocked") or [])
+    blocked = set(base) | set(s["services"])
+    if s["youtube"] == "blocked":
+        blocked.add("youtube")
+    elif s["youtube"] == "allowed":
+        blocked.discard("youtube")
+    use_global = f != "no_blocking" and blocked == set(base)
     return {
         "name": name,
         "ids": sorted(macs),
         "use_global_settings": False,
-        "filtering_enabled": strict,
-        "parental_enabled": strict,
-        "safebrowsing_enabled": strict,
-        "safesearch": {"enabled": strict, **{e: strict for e in _ENGINES}},
-        "safesearch_enabled": strict,  # AdGuard Home before v0.107.28
-        "use_global_blocked_services": strict,
-        "blocked_services": [],
+        "filtering_enabled": filt,
+        "parental_enabled": par,
+        "safebrowsing_enabled": sb,
+        "safesearch": ss,
+        "safesearch_enabled": ss["enabled"],  # AdGuard Home before v0.107.28
+        "use_global_blocked_services": use_global,
+        "blocked_services": sorted(blocked),
         "upstreams": [],
         "tags": [],
         "ignore_querylog": False,
@@ -68,7 +135,15 @@ def _differs(cur: dict, want: dict) -> bool:
             return True
     ss = cur.get("safesearch")
     on = ss.get("enabled") if isinstance(ss, dict) else cur.get("safesearch_enabled")
-    return bool(on) != want["safesearch"]["enabled"]
+    if bool(on) != want["safesearch"]["enabled"]:
+        return True
+    if isinstance(ss, dict) and bool(ss.get("youtube")) != want["safesearch"]["youtube"]:
+        return True
+    if not want["use_global_blocked_services"]:
+        bs = cur.get("blocked_services")
+        bs = bs.get("ids") if isinstance(bs, dict) else bs
+        return sorted(bs or []) != want["blocked_services"]
+    return False
 
 
 def client_name(label: str) -> str:
@@ -88,29 +163,57 @@ class ProfileSync:
         self.dirty = False
         self._lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
+        self._services: tuple[float, list[dict]] | None = None
 
     # ── stored choices ───────────────────────────────────────────────────────
 
     def profiles(self) -> dict:
+        """Every stored choice as full settings (v0.17 profile strings are read too)."""
         p = self.store.kv_get(PROFILES_KEY, None) or {}
-        return {
-            "devices": {str(k): v for k, v in (p.get("devices") or {}).items() if v in PROFILES},
-            "groups": {str(k): v for k, v in (p.get("groups") or {}).items() if v in PROFILES},
-        }
+        out: dict[str, dict] = {"devices": {}, "groups": {}}
+        for kind in out:
+            for k, v in (p.get(kind) or {}).items():
+                s = normalize_settings(v)
+                if not is_default(s):
+                    out[kind][str(k)] = s
+        return out
 
     def tracked(self) -> dict[str, str]:
         t = self.store.kv_get(TRACKED_KEY, None) or {}
         return {str(k): str(v) for k, v in t.items()} if isinstance(t, dict) else {}
 
-    def _save(self, kind: str, key: int, profile: str) -> None:
-        if profile not in PROFILES:
-            raise ActionError("profile must be default, no_blocking or strict")
+    def _save(self, kind: str, key: int, settings: dict) -> None:
         p = self.profiles()
-        if profile == "default":
+        if is_default(settings):
             p[kind].pop(str(key), None)
         else:
-            p[kind][str(key)] = profile
+            p[kind][str(key)] = normalize_settings(settings)
         self.store.kv_set(PROFILES_KEY, p)
+
+    def check_settings(self, raw) -> dict:
+        """Settings sent by the UI: known values only, at most 30 apps."""
+        if isinstance(raw, str):
+            raw = {"filtering": raw}
+        if not isinstance(raw, dict):
+            raise ActionError("settings are missing")
+        if raw.get("filtering", "default") not in PROFILES:
+            raise ActionError("profile must be default, no_blocking or strict")
+        if raw.get("youtube", "default") not in YOUTUBE:
+            raise ActionError("YouTube must be default, restricted, blocked or allowed")
+        svc = list(raw.get("services") or [])
+        if len(svc) > MAX_SERVICES or any(not _SERVICE_ID.match(str(x)) for x in svc):
+            raise ActionError(f"choose at most {MAX_SERVICES} apps from AdGuard Home's list")
+        return normalize_settings(raw)
+
+    async def services_all(self, client=None) -> list[dict]:
+        """AdGuard Home's list of apps it can block ([{id, name}]), cached for an hour."""
+        now = time.monotonic()
+        if self._services and now - self._services[0] < SERVICES_TTL_S:
+            return self._services[1]
+        client = client or await self.actions._client()
+        items = await self.actions._call(client.blocked_services_all())
+        self._services = (now, items)
+        return items
 
     def has_work(self) -> bool:
         p = self.profiles()
@@ -119,13 +222,13 @@ class ProfileSync:
     # ── what AdGuard Home should hold ────────────────────────────────────────
 
     def desired(self) -> dict[str, dict]:
-        """key → {name, profile, label, devices: [{id, label, macs}]}; prunes stale choices."""
+        """key → {name, profile (settings), label, devices: [{id, label, macs}]}; prunes."""
         p = self.profiles()
         rows = self.inventory.listing(int(time.time() * 1000))
         ids = {d["id"] for d in rows}
         groups = {g["id"]: g for g in self.groups.list()}
-        dev = {int(k): v for k, v in p["devices"].items() if int(k) in ids and v != "default"}
-        grp = {int(k): v for k, v in p["groups"].items() if int(k) in groups and v != "default"}
+        dev = {int(k): v for k, v in p["devices"].items() if int(k) in ids}
+        grp = {int(k): v for k, v in p["groups"].items() if int(k) in groups}
         pruned = {"devices": {str(k): v for k, v in dev.items()},
                   "groups": {str(k): v for k, v in grp.items()}}  # fmt: skip
         if pruned != p:
@@ -170,6 +273,7 @@ class ProfileSync:
                 self.last_sync_ms = int(time.time() * 1000)
                 return {"changes": [], "conflicts": []}
             raw = await self.actions._call(client.persistent_clients())
+            g = await self.actions._call(client.global_protection()) if desired else None
             by_name = {c["name"]: c for c in raw}
             ours = set(tracked.values())
             foreign: dict[str, str] = {}  # mac → the user's own client holding it
@@ -195,7 +299,7 @@ class ProfileSync:
                                       "client": d["name"], "profile": d["profile"]})  # fmt: skip
                     continue
                 if macs:
-                    want[key] = client_body(d["name"], d["profile"], macs)
+                    want[key] = client_body(d["name"], d["profile"], macs, g)
 
             changes: list[dict] = []
 
@@ -242,15 +346,27 @@ class ProfileSync:
             self.last_sync_ms = int(time.time() * 1000)
             return {"changes": changes, "conflicts": conflicts}
 
-    async def set_device(self, device_id: int, profile: str) -> dict:
+    async def _check_apps(self, s: dict) -> None:
+        if not s["services"]:
+            return
+        known = {x["id"] for x in await self.services_all()}
+        unknown = [x for x in s["services"] if known and x not in known]
+        if unknown:
+            raise ActionError(f"AdGuard Home does not know the app {unknown[0]}")
+
+    async def set_device(self, device_id: int, settings) -> dict:
+        s = self.check_settings(settings)
+        await self._check_apps(s)
         prim = (await asyncio.to_thread(self.groups.primaries, [device_id]))[0]
-        await asyncio.to_thread(self._save, "devices", prim, profile)
+        await asyncio.to_thread(self._save, "devices", prim, s)
         return await self.reconcile()
 
-    async def set_group(self, group_id: int, profile: str) -> dict:
+    async def set_group(self, group_id: int, settings) -> dict:
+        s = self.check_settings(settings)
         if await asyncio.to_thread(self.groups.get, group_id) is None:
             raise ActionError("no such group")
-        await asyncio.to_thread(self._save, "groups", group_id, profile)
+        await self._check_apps(s)
+        await asyncio.to_thread(self._save, "groups", group_id, s)
         return await self.reconcile()
 
     def state(self) -> dict:

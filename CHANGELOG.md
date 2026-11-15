@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.18.0] - 2026-11-15
+### Added
+- YouTube and app controls per device and per group, next to filtering: YouTube Restricted Mode,
+  YouTube blocked, or YouTube allowed (even when it is blocked for everyone else), and apps to
+  block chosen from AdGuard Home's own list. With filtering left at Default, the devices keep
+  AdGuard Home's global filtering, safe browsing, parental control and safe search (copied and
+  refreshed every 5 minutes), and apps blocked for everyone stay blocked. Set them in the group
+  manager (AdGuard Home button) or on a device's page; the DNS page shows each client's settings in
+  words, as does the security log.
+
+### Changed
+- `PUT /api/adguard/actions/profiles/device/{id}` and `/profiles/group/{id}` take `filtering`,
+  `youtube` and `services` instead of `profile`; `GET /profiles` adds `services_all`. Settings
+  saved by 0.17 are read as their filtering.
+
 ## [0.17.0] - 2026-11-15
 ### Added
 - AdGuard Home settings per device and per group (with AdGuard Home actions on): No blocking (an

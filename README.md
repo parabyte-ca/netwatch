@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.17.0-blue)
+![Version](https://img.shields.io/badge/version-0.18.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -23,8 +23,8 @@ admin panel; **v0.7** the network map with incident replay and the Deco mesh int
 and the DNS page; **v0.12** AdGuard Home in the device inventory; **v0.13** optional AdGuard Home actions;
 **v0.14** device groups and tags, and every device on the map; **v0.15** quiet groups, groups
 at a glance and groups in the weekly report; **v0.16** the full screen map and DHCP
-reservations through AdGuard Home; **v0.17 (this release)** AdGuard Home settings per device and
-per group. See the [Roadmap](#roadmap) for what's next.
+reservations through AdGuard Home; **v0.17** AdGuard Home settings per device and per group;
+**v0.18 (this release)** YouTube and app controls per device and per group. See the [Roadmap](#roadmap) for what's next.
 
 ## Features
 - **Probes:** ICMP (from every 1 s), DNS query latency/failures, TCP connect, and HTTP checks,
@@ -375,6 +375,14 @@ AdGuard Home actions** to get a **Controls** section on the DNS page:
   device joins or leaves a group, the client follows within about 15 seconds. NetWatch only changes
   the clients it made: a device already in one of your own AdGuard Home clients is left out and
   shown on the DNS page.
+- **YouTube and apps per device and per group:** next to filtering, set **YouTube** to
+  **Restricted Mode** (hides mature videos and comments), **Blocked**, or **Allowed** (even when
+  YouTube is blocked for everyone else), and pick **apps to block** from AdGuard Home's own list
+  (TikTok, Roblox, Fortnite, Discord and so on). With filtering left at Default, the devices keep
+  AdGuard Home's global filtering, safe browsing and parental control (NetWatch copies them and
+  refreshes them every 5 minutes), and apps you block for everyone stay blocked. Allowing only
+  some YouTube channels or videos is not possible with DNS. Time limits come with per-group
+  schedules (see the roadmap).
 - **DHCP reservations** (when AdGuard Home is the DHCP server): keep an address for a device.
   On a device's page, **Reserve this address** fills in its current IP, MAC and name; the DNS page
   lists every reservation (with change and remove); on the Devices page, tick devices and choose
@@ -639,7 +647,7 @@ Planned, in order (suggestions welcome):
 | Done in 0.15 | **More from groups:** quiet groups (alerts for, say, "Smart home" recorded as information and hidden from the timeline; outages still alert), traffic and DNS totals per group on the Devices page, and a Groups section in the weekly report |
 | Done in 0.14 | **Device groups and tags**, defined once and used everywhere: groups you name (for example "Smart home", "Family", "Kids", or one child's phone, tablet and laptop), each with a colour and an icon, plus free tags (a device can have several, e.g. `upstairs`, `guest`, `work`). Assign one device or many at once from the Devices page; groups are suggested from the device type (smart plugs and switches → "Smart home"). Stored in the database, kept when a device changes address or uses a private MAC (merged devices), included in backups, exportable as JSON. Used by: Devices page filters and a group column, timeline and alert filters (e.g. mute new-device alerts for "Smart home"), bandwidth and DNS per group, the weekly report per group ("Smart home: 3 short outages"), and AdGuard Home settings per group (one persistent client per group) |
 | Done in 0.14 | **Every device on the map:** each device as its own node under the Deco, switch or Home Hub it connects through, coloured by group (or by status or bandwidth), with tags as badges. Groups can be collapsed into one node and expanded again; filter by group or tag; drag devices to arrange them, with positions saved in NetWatch (the same on every browser and phone); saved views (e.g. "Kids only", "Smart home") |
-| Next | **YouTube controls per device or group:** force YouTube Restricted Mode, block or allow YouTube as a whole, optionally on a schedule. Allowing only chosen channels or videos is not possible with DNS: every video comes from the same YouTube domains |
+| Done in 0.18 | **YouTube and app controls per device or group:** YouTube Restricted Mode, blocked or allowed, and apps to block from AdGuard Home's list. Allowing only chosen channels or videos is not possible with DNS. Schedules come with per-group schedules |
 | Next | **Who's home:** pick the phones (or other devices) that belong to each person; NetWatch shows who is home from whether those devices are on the Wi-Fi, with arrival and departure times on the timeline and a "home now" list on the Overview. Phones that sleep their Wi-Fi are smoothed over (away only after a set time without being seen). Stays on the LAN: nothing is sent anywhere |
 | Next | **Per-group schedules:** time rules for a group or device through AdGuard Home, for example Kids' internet off from 21:00 to 07:00 on school nights, or YouTube and games blocked during homework hours, with exceptions you can grant from NetWatch ("15 more minutes"). Changes are confirmed and written to the security log like the other AdGuard Home actions |
 | Later | **Wi-Fi coverage view:** a floor plan with the Decos placed and each device's signal and roaming per room |

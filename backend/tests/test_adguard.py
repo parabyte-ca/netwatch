@@ -45,6 +45,15 @@ class FakeAdGuard:
         }  # fmt: skip
         self.dhcp: dict | None = None  # None: no DHCP support (404)
         self.refuse_lease = 0  # refuse this many add_static_lease calls
+        self.blocked_global: list[str] = []  # apps blocked for everyone
+        self.services = [{"id": "youtube", "name": "YouTube"},
+                         {"id": "tiktok", "name": "TikTok"},
+                         {"id": "roblox", "name": "Roblox"},
+                         {"id": "discord", "name": "Discord"}]  # fmt: skip
+        self.safebrowsing = False
+        self.parental = False
+        self.safesearch = {"enabled": False, "bing": True, "duckduckgo": True, "google": True,
+                           "pixabay": True, "yandex": True, "youtube": True}  # fmt: skip
         self.user_rules = ["||doubleclick.net^", "# my own rule"]
         self.upstream_dns = ["tls://1.1.1.1", "tls://1.0.0.1"]
         self.bad_upstreams: set[str] = set()  # fail AdGuard's upstream test
@@ -108,6 +117,17 @@ class FakeAdGuard:
             return httpx.Response(200, json={**self.clients, "supported_tags": []})
         if path == "/control/filtering/status":
             return httpx.Response(200, json={"enabled": True, "user_rules": self.user_rules})
+        if path == "/control/blocked_services/all":
+            return httpx.Response(200, json={"blocked_services": [
+                {**x, "icon_svg": "", "rules": []} for x in self.services]})  # fmt: skip
+        if path == "/control/blocked_services/get":
+            return httpx.Response(200, json={"ids": self.blocked_global, "schedule": {}})
+        if path == "/control/safebrowsing/status":
+            return httpx.Response(200, json={"enabled": self.safebrowsing})
+        if path == "/control/parental/status":
+            return httpx.Response(200, json={"enabled": self.parental, "sensitivity": 13})
+        if path == "/control/safesearch/status":
+            return httpx.Response(200, json=self.safesearch)
         if path == "/control/dns_info":
             return httpx.Response(200, json={"upstream_dns": self.upstream_dns,
                                              "bootstrap_dns": ["9.9.9.10"]})  # fmt: skip
@@ -1296,7 +1316,9 @@ async def test_group_changes_follow_and_default_removes(prof):
     prof.gs.delete(teens)
     await prof.reconcile()
     assert not any(n.startswith("NetWatch:") for n in _clients(prof))
-    assert prof.profiles()["groups"] == {str(kids): "strict"}  # the deleted group is dropped
+    assert prof.profiles()["groups"] == {
+        str(kids): {"filtering": "strict", "youtube": "default", "services": []}
+    }  # the deleted group is dropped
 
 
 async def test_a_mac_in_your_own_client_is_a_conflict(prof):
@@ -1309,7 +1331,8 @@ async def test_a_mac_in_your_own_client_is_a_conflict(prof):
     r = await prof.set_group(kids, "strict")
     assert r["conflicts"] == [{"device_id": tv, "label": "Living room TV",
                                "mac": "00:11:22:00:00:99", "client": "My TV",
-                               "profile": "strict"}]  # fmt: skip
+                               "profile": {"filtering": "strict", "youtube": "default",
+                                           "services": []}}]  # fmt: skip
     assert _clients(prof)["NetWatch: Kids"]["ids"] == ["00:11:22:00:00:01"]
     assert _clients(prof)["My TV"]["ids"] == ["00:11:22:00:00:99"]
     with pytest.raises(ActionError, match="profile must be"):
@@ -1352,21 +1375,100 @@ def test_profiles_api_and_security_log(client):
     assert st.adguard_profiles.dirty  # a group change asks for a sync
     st.discovery.inventory.forget()
 
-    assert client.put(f"{base}/group/{kids}", json={"profile": "loose"}).status_code == 422
-    assert client.put(f"{base}/group/99999", json={"profile": "strict"}).status_code == 404
-    r = client.put(f"{base}/group/{kids}", json={"profile": "strict"}).json()
+    assert client.put(f"{base}/group/{kids}", json={"filtering": "loose"}).status_code == 422
+    assert client.put(f"{base}/group/99999", json={"filtering": "strict"}).status_code == 404
+    r = client.put(f"{base}/group/{kids}", json={"filtering": "strict"}).json()
     assert r["changes"] == [{"action": "added", "client": "NetWatch: Kids"}]
     assert r["conflicts"][0]["client"] == "My TV"
     g = client.get(base).json()
-    assert g["profiles"]["groups"] == {str(kids): "strict"}
+    assert g["profiles"]["groups"] == {
+        str(kids): {"filtering": "strict", "youtube": "default", "services": []}
+    }
     kids_client = next(c for c in g["managed"] if c["key"] == f"group:{kids}")
     assert kids_client["devices"] == [{"id": ipad, "label": "Sam's iPad"}]
-    r = client.put(f"{base}/device/{ipad}", json={"profile": "no_blocking"}).json()
+    r = client.put(f"{base}/device/{ipad}", json={"filtering": "no_blocking"}).json()
     assert {"action": "added", "client": "NetWatch: Sam's iPad"} in r["changes"]
     assert {"action": "removed", "client": "NetWatch: Kids"} in r["changes"]
-    assert client.put(f"{base}/device/99999", json={"profile": "strict"}).status_code == 404
+    assert client.put(f"{base}/device/99999", json={"filtering": "strict"}).status_code == 404
+    assert [x["id"] for x in client.get(base).json()["services_all"]][:2] == ["youtube", "tiktok"]
+    r = client.put(
+        f"{base}/group/{kids}",
+        json={"filtering": "strict", "youtube": "blocked", "services": ["roblox"]},
+    )
+    assert r.status_code == 200
+    bad = client.put(f"{base}/group/{kids}", json={"services": ["myspace"]})
+    assert bad.status_code == 422 and "does not know the app" in bad.json()["detail"]
+    assert client.put(f"{base}/group/{kids}", json={"youtube": "never"}).status_code == 422
 
     joined = "\n".join(e["title"] for e in st.events.list(0, 10**13, kinds=[SECURITY]))
     assert "AdGuard Home: the group Kids set to Strict (added NetWatch: Kids)" in joined
     assert "AdGuard Home: Sam's iPad set to No blocking (" in joined
+    assert "the group Kids set to Strict, YouTube blocked, also blocks Roblox" in joined
+    assert "could not set the group Kids to Default filtering, also blocks myspace" in joined
     assert PASSWORD not in joined and PASSWORD not in json.dumps(client.get(base).json())
+
+
+async def test_youtube_and_app_settings_build_the_right_client(prof):
+    from netwatch.services.adguard.actions import ActionError
+    from netwatch.services.adguard.profiles import describe
+
+    f = prof.fake
+    f.blocked_global = ["tiktok"]  # blocked for everyone
+    f.safebrowsing = True  # global settings a "default" client copies
+    kids = prof.gs.create("Kids", "rose", "child")["id"]
+    a = _dev(prof, "00:11:22:00:00:01", "Tablet")
+    prof.gs.assign([a], kids)
+    # YouTube Restricted Mode only: everything else follows the global settings.
+    await prof.set_group(kids, {"youtube": "restricted"})
+    c = _clients(prof)["NetWatch: Kids"]
+    assert c["filtering_enabled"] and c["safebrowsing_enabled"] and not c["parental_enabled"]
+    assert (
+        c["safesearch"]["enabled"] and c["safesearch"]["youtube"] and not c["safesearch"]["google"]
+    )
+    assert c["use_global_blocked_services"] and c["blocked_services"] == ["tiktok"]
+    # Block YouTube and Roblox: added to what everyone has blocked.
+    await prof.set_group(
+        kids, {"filtering": "strict", "youtube": "blocked", "services": ["roblox"]}
+    )
+    c = _clients(prof)["NetWatch: Kids"]
+    assert not c["use_global_blocked_services"]
+    assert c["blocked_services"] == ["roblox", "tiktok", "youtube"]
+    assert prof.profiles()["groups"][str(kids)] == {"filtering": "strict", "youtube": "blocked",
+                                                    "services": ["roblox"]}  # fmt: skip
+    assert describe(prof.profiles()["groups"][str(kids)], {"roblox": "Roblox"}) == (
+        "Strict, YouTube blocked, also blocks Roblox"
+    )
+    # Allowed: YouTube comes off even when everyone else has it blocked.
+    f.blocked_global = ["tiktok", "youtube"]
+    await prof.set_group(kids, {"youtube": "allowed"})
+    c = _clients(prof)["NetWatch: Kids"]
+    assert c["blocked_services"] == ["tiktok"] and not c["use_global_blocked_services"]
+    # A change to the global settings is picked up on the next check.
+    f.parental = True
+    assert (await prof.reconcile())["changes"] == [
+        {"action": "updated", "client": "NetWatch: Kids"}
+    ]
+    assert _clients(prof)["NetWatch: Kids"]["parental_enabled"]
+    # No blocking with one app blocked: only that app.
+    await prof.set_group(kids, {"filtering": "no_blocking", "services": ["discord"]})
+    c = _clients(prof)["NetWatch: Kids"]
+    assert not c["filtering_enabled"] and c["blocked_services"] == ["discord"]
+    with pytest.raises(ActionError, match="does not know the app"):
+        await prof.set_group(kids, {"services": ["myspace"]})
+    with pytest.raises(ActionError, match="YouTube must be"):
+        await prof.set_group(kids, {"youtube": "sometimes"})
+
+
+async def test_v017_profiles_are_read_as_filtering(prof):
+    from netwatch.services.adguard.profiles import PROFILES_KEY
+
+    kids = prof.gs.create("Kids", "rose", "child")["id"]
+    prof.store.kv_set(
+        PROFILES_KEY,
+        {
+            "devices": {},
+            "groups": {str(kids): {"filtering": "strict", "youtube": "default", "services": []}},
+        },
+    )
+    assert prof.profiles()["groups"][str(kids)] == {"filtering": "strict", "youtube": "default",
+                                                    "services": []}  # fmt: skip
