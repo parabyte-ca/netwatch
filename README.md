@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.18.3-blue)
+![Version](https://img.shields.io/badge/version-0.19.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -24,7 +24,8 @@ and the DNS page; **v0.12** AdGuard Home in the device inventory; **v0.13** opti
 **v0.14** device groups and tags, and every device on the map; **v0.15** quiet groups, groups
 at a glance and groups in the weekly report; **v0.16** the full screen map and DHCP
 reservations through AdGuard Home; **v0.17** AdGuard Home settings per device and per group;
-**v0.18 (this release)** YouTube and app controls per device and per group. See the [Roadmap](#roadmap) for what's next.
+**v0.18** YouTube and app controls per device and per group; **v0.19 (this release)** schedules
+per group or device (internet off at night, YouTube off during homework). See the [Roadmap](#roadmap) for what's next.
 
 ## Features
 - **Probes:** ICMP (from every 1 s), DNS query latency/failures, TCP connect, and HTTP checks,
@@ -379,6 +380,18 @@ AdGuard Home actions** to get a **Controls** section on the DNS page:
   device joins or leaves a group, the client follows within about 15 seconds. NetWatch only changes
   the clients it made: a device already in one of your own AdGuard Home clients is left out and
   shown on the DNS page.
+- **Schedules per group or device:** for example "School nights: internet off 21:00 to 07:00,
+  Sunday to Thursday" or "Homework: YouTube and games off 16:00 to 18:00 on weekdays". Set them in
+  a group's AdGuard Home dialog (Devices → Groups…) or on a device's page, from a preset (School
+  nights, Homework, Bedtime) or your own days and times; a window may end the next morning. While
+  one is on you can give **+15 min**, **+1 hour** or turn it **off until it next starts**; **Skip
+  today** skips the next one; **Internet off now** turns it off for 30 minutes to 2 hours. The
+  Overview shows what is on now with a +15 min button, the DNS page lists every schedule, and the
+  timeline shows when each started and ended. Times follow the `TZ` setting, daylight saving
+  included. Internet off adds a rule for that NetWatch client in AdGuard Home (`$client`, ahead of
+  allow rules) and removes it when the window ends; your own rules are never touched. Devices keep
+  DNS answers they already have for a few minutes, and a device using its own encrypted DNS goes
+  around AdGuard Home.
 - **YouTube and apps per device and per group:** next to filtering, set **YouTube** to
   **Restricted Mode** (hides mature videos and comments), **Blocked**, or **Allowed** (even when
   YouTube is blocked for everyone else), and pick **apps to block** from AdGuard Home's own list
@@ -658,7 +671,7 @@ Planned, in order (suggestions welcome):
 | Done in 0.14 | **Every device on the map:** each device as its own node under the Deco, switch or Home Hub it connects through, coloured by group (or by status or bandwidth), with tags as badges. Groups can be collapsed into one node and expanded again; filter by group or tag; drag devices to arrange them, with positions saved in NetWatch (the same on every browser and phone); saved views (e.g. "Kids only", "Smart home") |
 | Done in 0.18 | **YouTube and app controls per device or group:** YouTube Restricted Mode, blocked or allowed, and apps to block from AdGuard Home's list. Allowing only chosen channels or videos is not possible with DNS. Schedules come with per-group schedules |
 | Next | **Who's home:** pick the phones (or other devices) that belong to each person; NetWatch shows who is home from whether those devices are on the Wi-Fi, with arrival and departure times on the timeline and a "home now" list on the Overview. Phones that sleep their Wi-Fi are smoothed over (away only after a set time without being seen). Stays on the LAN: nothing is sent anywhere |
-| Next | **Per-group schedules:** time rules for a group or device through AdGuard Home, for example Kids' internet off from 21:00 to 07:00 on school nights, or YouTube and games blocked during homework hours, with exceptions you can grant from NetWatch ("15 more minutes"). Changes are confirmed and written to the security log like the other AdGuard Home actions |
+| Done in 0.19 | **Per-group schedules:** internet off, YouTube off, apps or strict filtering on days and times for a group or device, with +15 min, +1 hour, off until it next starts, skip today and "internet off now"; confirmed and written to the security log |
 | Later | **Wi-Fi coverage view:** a floor plan with the Decos placed and each device's signal and roaming per room |
 | Later | **Speed tests against your plan:** nightly tests reported as a share of the plan's speed, with a 90-day trend |
 
