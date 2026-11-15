@@ -1375,9 +1375,9 @@ def test_profiles_api_and_security_log(client):
     assert st.adguard_profiles.dirty  # a group change asks for a sync
     st.discovery.inventory.forget()
 
-    assert client.put(f"{base}/group/{kids}", json={"profile": "loose"}).status_code == 422
-    assert client.put(f"{base}/group/99999", json={"profile": "strict"}).status_code == 404
-    r = client.put(f"{base}/group/{kids}", json={"profile": "strict"}).json()
+    assert client.put(f"{base}/group/{kids}", json={"filtering": "loose"}).status_code == 422
+    assert client.put(f"{base}/group/99999", json={"filtering": "strict"}).status_code == 404
+    r = client.put(f"{base}/group/{kids}", json={"filtering": "strict"}).json()
     assert r["changes"] == [{"action": "added", "client": "NetWatch: Kids"}]
     assert r["conflicts"][0]["client"] == "My TV"
     g = client.get(base).json()
@@ -1386,14 +1386,25 @@ def test_profiles_api_and_security_log(client):
     }
     kids_client = next(c for c in g["managed"] if c["key"] == f"group:{kids}")
     assert kids_client["devices"] == [{"id": ipad, "label": "Sam's iPad"}]
-    r = client.put(f"{base}/device/{ipad}", json={"profile": "no_blocking"}).json()
+    r = client.put(f"{base}/device/{ipad}", json={"filtering": "no_blocking"}).json()
     assert {"action": "added", "client": "NetWatch: Sam's iPad"} in r["changes"]
     assert {"action": "removed", "client": "NetWatch: Kids"} in r["changes"]
-    assert client.put(f"{base}/device/99999", json={"profile": "strict"}).status_code == 404
+    assert client.put(f"{base}/device/99999", json={"filtering": "strict"}).status_code == 404
+    assert [x["id"] for x in client.get(base).json()["services_all"]][:2] == ["youtube", "tiktok"]
+    r = client.put(
+        f"{base}/group/{kids}",
+        json={"filtering": "strict", "youtube": "blocked", "services": ["roblox"]},
+    )
+    assert r.status_code == 200
+    bad = client.put(f"{base}/group/{kids}", json={"services": ["myspace"]})
+    assert bad.status_code == 422 and "does not know the app" in bad.json()["detail"]
+    assert client.put(f"{base}/group/{kids}", json={"youtube": "never"}).status_code == 422
 
     joined = "\n".join(e["title"] for e in st.events.list(0, 10**13, kinds=[SECURITY]))
     assert "AdGuard Home: the group Kids set to Strict (added NetWatch: Kids)" in joined
     assert "AdGuard Home: Sam's iPad set to No blocking (" in joined
+    assert "the group Kids set to Strict, YouTube blocked, also blocks Roblox" in joined
+    assert "could not set the group Kids to Default filtering, also blocks myspace" in joined
     assert PASSWORD not in joined and PASSWORD not in json.dumps(client.get(base).json())
 
 

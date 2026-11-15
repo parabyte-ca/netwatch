@@ -62,6 +62,8 @@ def describe(s: dict, names: dict[str, str] | None = None) -> str:
         parts.append(YOUTUBE_LABEL[s["youtube"]])
     if s["services"]:
         parts.append("also blocks " + ", ".join((names or {}).get(x, x) for x in s["services"]))
+    if s["filtering"] == "default" and s["services"] and s["youtube"] == "default":
+        parts.insert(0, "Default filtering")
     return ", ".join(parts) or "Default"
 
 
