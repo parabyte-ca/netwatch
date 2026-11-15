@@ -161,3 +161,23 @@ def test_spa_serving(tmp_path):
         assert c.get("/api/does-not-exist").status_code == 401  # API needs a session
         login(c)
         assert c.get("/api/does-not-exist").status_code == 404
+
+
+def test_installable_app_files(tmp_path):
+    """The service worker must never be cached, or a fix to it would not reach installed apps."""
+    from fastapi.testclient import TestClient
+
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "index.html").write_text("<html>app</html>")
+    (static / "sw.js").write_text("self.addEventListener('fetch', () => {});")
+    (static / "manifest.webmanifest").write_text('{"name": "NetWatch"}')
+    s = test_settings(tmp_path, static_dir=static)
+    with TestClient(create_app(s, prober=FakeProber())) as c:
+        r = c.get("/sw.js")
+        assert r.headers["content-type"].startswith(("text/javascript", "application/javascript"))
+        assert r.headers["cache-control"] == "no-cache"
+        r = c.get("/manifest.webmanifest")
+        assert r.headers["content-type"].startswith("application/manifest+json")
+        assert r.json() == {"name": "NetWatch"}
+        assert "default-src 'self'" in r.headers["content-security-policy"]
