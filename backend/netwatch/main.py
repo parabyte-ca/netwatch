@@ -38,6 +38,7 @@ from .api import (
 )
 from .api import auth as auth_api
 from .api import people as people_api
+from .api import speed as speed_api
 from .auth import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, AuthStore, LoginThrottle, issue_setup_token
 from .config import Settings, get_settings
 from .db import make_engine, run_migrations
@@ -71,6 +72,7 @@ from .services.runtime_settings import OVERRIDES_KEY, apply_values, load_overrid
 from .services.scheduler import Monitor
 from .services.secrets import SecretBox
 from .services.seed import seed_defaults
+from .services.speed_plan import SpeedPlan
 from .services.storage import Store
 from .services.throughput import ThroughputStore, ThroughputTester
 from .services.traffic import HOUR_WATERMARK_KEY, TrafficStore
@@ -330,7 +332,30 @@ def create_app(
         def quiet(until_ms: int) -> None:
             recorder.quiet_until_ms = max(recorder.quiet_until_ms, until_ms)
 
-        app.state.bufferbloat = BufferbloatTester(bufferbloat_store, quiet=quiet)
+        def plan() -> dict:
+            return {
+                "plan_down_mbps": settings.plan_down_mbps,
+                "plan_up_mbps": settings.plan_up_mbps,
+                "plan_slow_pct": settings.plan_slow_pct,
+            }
+
+        def link_mbps() -> int | None:
+            speeds = [i.get("speed") for i in nic.status() if i.get("present") and i.get("speed")]
+            return min(speeds) if speeds else None
+
+        speed_plan = SpeedPlan(bufferbloat_store.list, events, plan, store.kv_get, store.kv_set)
+        app.state.speed_plan = speed_plan
+
+        def after_test(row: dict) -> None:
+            if row.get("trigger") == "scheduled" and row.get("status") == "ok":
+                speed_plan.check()
+
+        app.state.bufferbloat = BufferbloatTester(
+            bufferbloat_store,
+            quiet=quiet,
+            context=lambda: {**plan(), "link_mbps": link_mbps()},
+            on_result=after_test,
+        )
         app.state.bufferbloat_store = bufferbloat_store
         hub_store = HubStore(engine)
         app.state.hub_store = hub_store
@@ -392,6 +417,7 @@ def create_app(
             tz=lambda: settings.tz,
             groups=app.state.group_stats,
             people=app.state.presence.week_summary,
+            speed=speed_plan.period,
         )
         app.state.assistant = Assistant(
             store, SecretBox(settings.data_dir), app, tz=lambda: settings.tz
@@ -545,6 +571,7 @@ def create_app(
     app.include_router(adguard_actions.router)
     app.include_router(device_groups.router)
     app.include_router(people_api.router)
+    app.include_router(speed_api.router)
     app.include_router(netmap.router)
     app.include_router(traffic.router)
     app.include_router(score.router)

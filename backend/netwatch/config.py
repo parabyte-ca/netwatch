@@ -96,6 +96,11 @@ class Settings(BaseSettings):
     traffic_retention_days: int = Field(default=7, ge=1, le=90)
     # Nightly bufferbloat (latency under load) test, 20 min after the update window opens.
     bufferbloat_nightly: bool = True
+    # Your internet plan's speeds (0 = not set): the nightly test is reported as a share of them.
+    plan_down_mbps: int = Field(default=0, ge=0, le=100_000)
+    plan_up_mbps: int = Field(default=0, ge=0, le=100_000)
+    # Nights in a row under this share of the plan open "Internet slower than your plan".
+    plan_slow_pct: int = Field(default=70, ge=30, le=95)
     # Nightly exposure scan (open LAN services, Home Hub port forwards), 40 min after the window.
     exposure_scan_nightly: bool = True
     # Lets NetWatch change AdGuard Home (pause protection, allow/block domains, switch upstream).
