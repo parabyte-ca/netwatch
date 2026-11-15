@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..services.adguard.actions import ActionError, ActionsDisabled
 from ..services.adguard.profiles import describe
+from ..services.adguard.schedules import describe_effects
 from ..services.discovery.inventory import device_label
 from .auth import security_event
 
@@ -395,3 +396,207 @@ async def set_device_profile(device_id: int, body: SettingsIn, request: Request)
 @router.put("/profiles/group/{group_id}")
 async def set_group_profile(group_id: int, body: SettingsIn, request: Request) -> dict:
     return await _set(request, "group", group_id, body)
+
+
+# ── schedules ───────────────────────────────────────────────────────────────
+
+
+class TargetIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["group", "device"]
+    id: int
+
+
+class EffectsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    internet_off: bool = False
+    youtube_off: bool = False
+    strict: bool = False
+    services: list[str] = Field(default_factory=list, max_length=30)
+
+
+class ScheduleIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=40)
+    target: TargetIn
+    days: list[Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]] = Field(min_length=1)
+    start: str = Field(pattern=r"^\d{2}:\d{2}$")
+    end: str = Field(pattern=r"^\d{2}:\d{2}$")
+    effects: EffectsIn
+    enabled: bool = True
+
+
+class ExtendIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    how: Literal["15", "60", "until_next", "skip"]
+
+
+class NowIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    target: TargetIn
+    minutes: Literal[30, 60, 120]
+
+
+def _sched(request: Request):
+    return request.app.state.adguard_schedules
+
+
+def _gate(request: Request) -> None:
+    if not _acts(request).enabled():
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "AdGuard Home actions are turned off")
+
+
+async def _target(request: Request, t: TargetIn) -> tuple[dict, str]:
+    """The target as stored (a device by its primary row) and its name for the log."""
+    st = request.app.state
+    if t.kind == "group":
+        g = await asyncio.to_thread(st.groups.get, t.id)
+        if g is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such group")
+        return {"kind": "group", "id": t.id}, f"the group {g['name']}"
+    dev = await asyncio.to_thread(st.device_store.get, t.id)
+    if dev is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such device")
+    prim = (await asyncio.to_thread(st.groups.primaries, [t.id]))[0]
+    return {"kind": "device", "id": prim}, device_label(dev)[:60]
+
+
+async def _apply(request: Request, what: str) -> dict:
+    """Bring AdGuard Home in line now, so a change shows at once rather than within 15 s."""
+    return await _run(request, what, _profiles(request).reconcile())
+
+
+async def _sched_state(request: Request) -> dict:
+    s = await asyncio.to_thread(_sched(request).state)
+    labels = {f"group:{g['id']}": g["name"] for g in request.app.state.groups.list()}
+    for row in [*s["schedules"], *s["active"]]:
+        k = f"{row['target']['kind']}:{row['target']['id']}"
+        if k not in labels and row["target"]["kind"] == "device":
+            dev = await asyncio.to_thread(request.app.state.device_store.get, row["target"]["id"])
+            labels[k] = device_label(dev) if dev else "a removed device"
+        row["target_label"] = labels.get(k, "a removed group")
+    return s
+
+
+@router.get("/schedules")
+async def schedules(request: Request) -> dict:
+    _gate(request)
+    return await _sched_state(request)
+
+
+@router.post("/schedules")
+async def add_schedule(body: ScheduleIn, request: Request) -> dict:
+    _gate(request)
+    target, who = await _target(request, body.target)
+    raw = {**body.model_dump(), "target": target}
+    await _run(request, f"add a schedule for {who}", _profiles(request)._check_apps(
+        {"services": raw["effects"]["services"]}))  # fmt: skip
+    try:
+        s = await asyncio.to_thread(_sched(request).add, raw, _who(request))
+    except ActionError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    await _apply(request, f"apply the schedule {s['name']}")
+    await security_event(
+        request, "info",
+        f"AdGuard Home: schedule \"{s['name']}\" added for {who} ({', '.join(s['days'])} "
+        f"{s['start']} to {s['end']}: {describe_effects(s['effects'])})",
+        {"action": "adguard_schedule", "schedule": s["id"]},
+    )  # fmt: skip
+    return {"schedule": s, "state": await _sched_state(request)}
+
+
+@router.put("/schedules/{sid}")
+async def update_schedule(sid: str, body: ScheduleIn, request: Request) -> dict:
+    _gate(request)
+    target, who = await _target(request, body.target)
+    raw = {**body.model_dump(), "target": target}
+    await _run(request, "change a schedule", _profiles(request)._check_apps(
+        {"services": raw["effects"]["services"]}))  # fmt: skip
+    try:
+        s = await asyncio.to_thread(_sched(request).update, sid, raw)
+    except ActionError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    await _apply(request, f"apply the schedule {s['name']}")
+    on = "" if s["enabled"] else " (turned off)"
+    await security_event(request, "info",
+                         f"AdGuard Home: schedule \"{s['name']}\" for {who} changed{on}",
+                         {"action": "adguard_schedule", "schedule": sid})  # fmt: skip
+    return {"schedule": s, "state": await _sched_state(request)}
+
+
+@router.delete("/schedules/{sid}")
+async def delete_schedule(sid: str, request: Request) -> dict:
+    _gate(request)
+    try:
+        s = await asyncio.to_thread(_sched(request).delete, sid)
+    except ActionError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    await _apply(request, "remove a schedule")
+    await security_event(request, "info", f"AdGuard Home: schedule \"{s['name']}\" deleted",
+                         {"action": "adguard_schedule", "schedule": sid})  # fmt: skip
+    return {"state": await _sched_state(request)}
+
+
+_HOW = {"15": "15 more minutes", "60": "1 more hour", "until_next": "off until it next starts",
+        "skip": "skipped once"}  # fmt: skip
+
+
+@router.post("/schedules/{sid}/extend")
+async def extend_schedule(sid: str, body: ExtendIn, request: Request) -> dict:
+    _gate(request)
+    s = await asyncio.to_thread(_sched(request).get, sid)
+    if s is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such schedule")
+    try:
+        until = await asyncio.to_thread(_sched(request).extend, sid, body.how)
+    except ActionError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    await _apply(request, "apply an exception")
+    await security_event(
+        request, "info",
+        f"AdGuard Home: schedule \"{s['name']}\": {_HOW[body.how]} "
+        f"(until {_clock(request, until)})",
+        {"action": "adguard_schedule_exception", "schedule": sid, "until_ms": until},
+    )  # fmt: skip
+    return {"off_until_ms": until, "state": await _sched_state(request)}
+
+
+@router.delete("/schedules/{sid}/exception")
+async def resume_schedule(sid: str, request: Request) -> dict:
+    _gate(request)
+    s = await asyncio.to_thread(_sched(request).get, sid)
+    if s is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such schedule")
+    await asyncio.to_thread(_sched(request).clear_exception, sid)
+    await _apply(request, "resume a schedule")
+    await security_event(request, "info", f"AdGuard Home: schedule \"{s['name']}\" back on",
+                         {"action": "adguard_schedule_exception", "schedule": sid})  # fmt: skip
+    return {"state": await _sched_state(request)}
+
+
+@router.post("/schedules/now")
+async def internet_off_now(body: NowIn, request: Request) -> dict:
+    _gate(request)
+    target, who = await _target(request, body.target)
+    m = await asyncio.to_thread(_sched(request).manual_on, target, body.minutes, _who(request))
+    await _apply(request, "turn the internet off now")
+    await security_event(
+        request, "warning",
+        f"AdGuard Home: internet off now for {who}, {body.minutes} min "
+        f"(until {_clock(request, m['until_ms'])})",
+        {"action": "adguard_internet_off_now", "until_ms": m["until_ms"]},
+    )  # fmt: skip
+    return {"manual": m, "state": await _sched_state(request)}
+
+
+@router.delete("/schedules/now/{mid}")
+async def internet_back_on(mid: str, request: Request) -> dict:
+    _gate(request)
+    try:
+        await asyncio.to_thread(_sched(request).manual_off, mid)
+    except ActionError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+    await _apply(request, "turn the internet back on")
+    await security_event(request, "info", "AdGuard Home: internet back on (ended early)",
+                         {"action": "adguard_internet_off_now"})  # fmt: skip
+    return {"state": await _sched_state(request)}

@@ -1636,3 +1636,77 @@ async def test_manual_internet_off_on_a_device_and_cleanup_when_the_device_goes(
     p.schedules.manual_off(m["id"])
     await p.reconcile()
     assert line not in p.fake.user_rules and "NetWatch: Console" not in _clients(p)
+
+
+def test_schedules_api_and_security_log(client):
+    from netwatch.services.adguard.profiles import internet_off_rule
+    from netwatch.services.events import SECURITY
+
+    st = client.app.state
+    fake = FakeAdGuard()
+    st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
+    st.adguard.save(HOST, PORT, False, USER, True, PASSWORD)
+    base = "/api/adguard/actions/schedules"
+    assert client.get(base).status_code == 403
+    client.put("/api/admin/settings", json={"changes": {"adguard_actions": True}})
+    now = int(time.time() * 1000)
+    ipad = st.device_store.insert({"mac": "00:11:22:00:00:01", "first_seen_ms": 0,
+                                   "last_seen_ms": now, "name": "Sam's iPad"})  # fmt: skip
+    kids = client.post("/api/device-groups", json={"name": "Kids", "colour": "rose",
+                                                   "icon": "child"}).json()["id"]  # fmt: skip
+    client.post("/api/devices/bulk", json={"ids": [ipad], "group_id": kids})
+    st.discovery.inventory.forget()
+    g = client.get(base).json()
+    assert g["schedules"] == [] and g["tz"] and g["presets"][0]["name"] == "School nights"
+
+    start, end = _window_now()
+    body = {"name": "Bedtime", "target": {"kind": "group", "id": kids}, "days": ["mon", "tue",
+            "wed", "thu", "fri", "sat", "sun"], "start": start, "end": end,
+            "effects": {"internet_off": True}}  # fmt: skip
+    assert (
+        client.post(base, json={**body, "target": {"kind": "group", "id": 999}}).status_code == 404
+    )
+    assert client.post(base, json={**body, "days": []}).status_code == 422
+    bad = client.post(base, json={**body, "effects": {"services": ["myspace"]}})
+    assert bad.status_code == 422 and "does not know the app" in bad.json()["detail"]
+    r = client.post(base, json=body)
+    assert r.status_code == 200, r.text
+    sid = r.json()["schedule"]["id"]
+    line = internet_off_rule("NetWatch: Kids")
+    assert line in fake.user_rules  # applied at once
+    s = client.get(base).json()
+    assert (
+        s["active"][0]["target_label"] == "Kids" and s["schedules"][0]["summary"] == "internet off"
+    )
+
+    r = client.post(f"{base}/{sid}/extend", json={"how": "15"})
+    assert r.status_code == 200 and line not in fake.user_rules
+    assert client.get(base).json()["schedules"][0]["off_until_ms"] == r.json()["off_until_ms"]
+    assert client.request("DELETE", f"{base}/{sid}/exception").status_code == 200
+    assert line in fake.user_rules
+    assert client.post(f"{base}/{sid}/extend", json={"how": "forever"}).status_code == 422
+    r = client.put(f"{base}/{sid}", json={**body, "enabled": False})
+    assert r.status_code == 200 and line not in fake.user_rules
+
+    r = client.post(f"{base}/now", json={"target": {"kind": "device", "id": ipad}, "minutes": 30})
+    assert r.status_code == 200
+    assert (
+        internet_off_rule("NetWatch: Sam's iPad")
+        == "||*^$client='NetWatch: Sam\\'s iPad',important"
+    )
+    assert internet_off_rule("NetWatch: Sam's iPad") in fake.user_rules
+    mid = r.json()["manual"]["id"]
+    assert client.post(f"{base}/now", json={"target": {"kind": "device", "id": ipad},
+                                           "minutes": 45}).status_code == 422  # fmt: skip
+    assert client.request("DELETE", f"{base}/now/{mid}").status_code == 200
+    assert not any("$client" in x for x in fake.user_rules)
+    assert client.request("DELETE", f"{base}/{sid}").status_code == 200
+    assert client.get(base).json()["schedules"] == []
+
+    joined = "\n".join(e["title"] for e in st.events.list(0, 10**13, kinds=[SECURITY]))
+    for want in ('schedule "Bedtime" added for the group Kids', '"Bedtime": 15 more minutes',
+                 '"Bedtime" back on', '"Bedtime" for the group Kids changed (turned off)',
+                 "internet off now for Sam's iPad, 30 min", "internet back on (ended early)",
+                 'schedule "Bedtime" deleted'):  # fmt: skip
+        assert want in joined, want
+    assert PASSWORD not in joined
