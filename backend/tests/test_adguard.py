@@ -1535,3 +1535,179 @@ def test_dns_chart_buckets_weight_by_queries_and_keep_gaps():
     for gap in (s[2], s[3]):  # nothing recorded: a gap, not a line
         assert gap["reachable"] is None and gap["queries"] is None and gap["avg_ms"] is None
     assert s[4]["reachable"] is False and s[4]["queries"] is None
+
+
+# ── schedules in AdGuard Home ────────────────────────────────────────────────
+
+
+def _window_now(minutes_before=60, minutes_after=60):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo("America/Toronto"))
+    f = "%H:%M"
+    return (now - timedelta(minutes=minutes_before)).strftime(f), (
+        now + timedelta(minutes=minutes_after)
+    ).strftime(f)
+
+
+@pytest.fixture
+def sprof(prof, store):
+    from netwatch.services.adguard.schedules import ScheduleStore
+
+    prof.schedules = ScheduleStore(store, "America/Toronto")
+    return prof
+
+
+async def test_a_schedule_turns_the_internet_off_with_a_client_rule(sprof):
+    from netwatch.services.adguard.profiles import internet_off_rule
+    from netwatch.services.events import DNS
+
+    p = sprof
+    kids = p.gs.create("Kids", "rose", "child")["id"]
+    a = _dev(p, "00:11:22:00:00:01", "Sam's iPad")
+    p.gs.assign([a], kids)
+    start, end = _window_now()
+    s = p.schedules.add({"name": "Bedtime", "target": {"kind": "group", "id": kids},
+                         "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+                         "start": start, "end": end,
+                         "effects": {"internet_off": True}}, "admin")  # fmt: skip
+    r = await p.reconcile()
+    line = internet_off_rule("NetWatch: Kids")
+    assert line == "||*^$client='NetWatch: Kids',important"
+    assert {"action": "added", "client": "NetWatch: Kids"} in r["changes"]
+    assert p.fake.user_rules == ["||doubleclick.net^", "# my own rule", line]
+    c = _clients(p)["NetWatch: Kids"]
+    assert c["ids"] == ["00:11:22:00:00:01"]  # a client even though settings are default
+    ev = [
+        e
+        for e in p.actions.events.list(0, 10**13, kinds=[DNS])
+        if e["details"].get("type") == "schedule"
+    ]
+    planned = ev[0]["end_ms"]  # recorded with its planned end: on the timeline, not an incident
+    assert ev[0]["title"] == "Kids: internet off (Bedtime)" and planned > time.time() * 1000
+    assert (await p.reconcile())["changes"] == []  # stable
+    # +15 min: the line goes, the user's rules stay, the event ends
+    p.schedules.extend(s["id"], "15")
+    r = await p.reconcile()
+    assert {"action": "internet back on", "client": line} in r["changes"]
+    assert p.fake.user_rules == ["||doubleclick.net^", "# my own rule"]
+    ev = [
+        e
+        for e in p.actions.events.list(0, 10**13, kinds=[DNS])
+        if e["details"].get("type") == "schedule"
+    ]
+    assert ev[0]["end_ms"] < planned  # ended early with +15 min
+
+
+async def test_schedule_effects_overlay_settings_and_reach_device_clients(sprof):
+    p = sprof
+    p.fake.blocked_global = []
+    kids = p.gs.create("Kids", "rose", "child")["id"]
+    a = _dev(p, "00:11:22:00:00:01", "Tablet")
+    b = _dev(p, "00:11:22:00:00:02", "Laptop")
+    p.gs.assign([a, b], kids)
+    await p.set_device(b, {"filtering": "no_blocking"})  # its own client
+    start, end = _window_now()
+    p.schedules.add({"name": "Homework", "target": {"kind": "group", "id": kids},
+                     "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "start": start,
+                     "end": end,
+                     "effects": {"youtube_off": True, "services": ["roblox"]}},
+                    "admin")  # fmt: skip
+    await p.reconcile()
+    cs = _clients(p)
+    assert cs["NetWatch: Kids"]["blocked_services"] == ["roblox", "youtube"]
+    # the laptop has its own settings, but the group's homework schedule still applies to it
+    assert cs["NetWatch: Laptop"]["blocked_services"] == ["roblox", "youtube"]
+    assert not cs["NetWatch: Laptop"]["filtering_enabled"]
+    d = p.desired()
+    assert d[f"group:{kids}"]["active"] == ["Homework"]
+    assert d[f"group:{kids}"]["base"]["youtube"] == "default"
+
+
+async def test_manual_internet_off_on_a_device_and_cleanup_when_the_device_goes(sprof):
+    from netwatch.services.adguard.profiles import internet_off_rule
+
+    p = sprof
+    a = _dev(p, "00:11:22:00:00:01", "Console")
+    m = p.schedules.manual_on({"kind": "device", "id": a}, 30, "admin")
+    await p.reconcile()
+    line = internet_off_rule("NetWatch: Console")
+    assert line in p.fake.user_rules and "NetWatch: Console" in _clients(p)
+    p.schedules.manual_off(m["id"])
+    await p.reconcile()
+    assert line not in p.fake.user_rules and "NetWatch: Console" not in _clients(p)
+
+
+def test_schedules_api_and_security_log(client):
+    from netwatch.services.adguard.profiles import internet_off_rule
+    from netwatch.services.events import SECURITY
+
+    st = client.app.state
+    fake = FakeAdGuard()
+    st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
+    st.adguard.save(HOST, PORT, False, USER, True, PASSWORD)
+    base = "/api/adguard/actions/schedules"
+    assert client.get(base).status_code == 403
+    client.put("/api/admin/settings", json={"changes": {"adguard_actions": True}})
+    now = int(time.time() * 1000)
+    ipad = st.device_store.insert({"mac": "00:11:22:00:00:01", "first_seen_ms": 0,
+                                   "last_seen_ms": now, "name": "Sam's iPad"})  # fmt: skip
+    kids = client.post("/api/device-groups", json={"name": "Kids", "colour": "rose",
+                                                   "icon": "child"}).json()["id"]  # fmt: skip
+    client.post("/api/devices/bulk", json={"ids": [ipad], "group_id": kids})
+    st.discovery.inventory.forget()
+    g = client.get(base).json()
+    assert g["schedules"] == [] and g["tz"] and g["presets"][0]["name"] == "School nights"
+
+    start, end = _window_now()
+    body = {"name": "Bedtime", "target": {"kind": "group", "id": kids}, "days": ["mon", "tue",
+            "wed", "thu", "fri", "sat", "sun"], "start": start, "end": end,
+            "effects": {"internet_off": True}}  # fmt: skip
+    assert (
+        client.post(base, json={**body, "target": {"kind": "group", "id": 999}}).status_code == 404
+    )
+    assert client.post(base, json={**body, "days": []}).status_code == 422
+    bad = client.post(base, json={**body, "effects": {"services": ["myspace"]}})
+    assert bad.status_code == 422 and "does not know the app" in bad.json()["detail"]
+    r = client.post(base, json=body)
+    assert r.status_code == 200, r.text
+    sid = r.json()["schedule"]["id"]
+    line = internet_off_rule("NetWatch: Kids")
+    assert line in fake.user_rules  # applied at once
+    s = client.get(base).json()
+    assert (
+        s["active"][0]["target_label"] == "Kids" and s["schedules"][0]["summary"] == "internet off"
+    )
+
+    r = client.post(f"{base}/{sid}/extend", json={"how": "15"})
+    assert r.status_code == 200 and line not in fake.user_rules
+    assert client.get(base).json()["schedules"][0]["off_until_ms"] == r.json()["off_until_ms"]
+    assert client.request("DELETE", f"{base}/{sid}/exception").status_code == 200
+    assert line in fake.user_rules
+    assert client.post(f"{base}/{sid}/extend", json={"how": "forever"}).status_code == 422
+    r = client.put(f"{base}/{sid}", json={**body, "enabled": False})
+    assert r.status_code == 200 and line not in fake.user_rules
+
+    r = client.post(f"{base}/now", json={"target": {"kind": "device", "id": ipad}, "minutes": 30})
+    assert r.status_code == 200
+    assert (
+        internet_off_rule("NetWatch: Sam's iPad")
+        == "||*^$client='NetWatch: Sam\\'s iPad',important"
+    )
+    assert internet_off_rule("NetWatch: Sam's iPad") in fake.user_rules
+    mid = r.json()["manual"]["id"]
+    assert client.post(f"{base}/now", json={"target": {"kind": "device", "id": ipad},
+                                           "minutes": 45}).status_code == 422  # fmt: skip
+    assert client.request("DELETE", f"{base}/now/{mid}").status_code == 200
+    assert not any("$client" in x for x in fake.user_rules)
+    assert client.request("DELETE", f"{base}/{sid}").status_code == 200
+    assert client.get(base).json()["schedules"] == []
+
+    joined = "\n".join(e["title"] for e in st.events.list(0, 10**13, kinds=[SECURITY]))
+    for want in ('schedule "Bedtime" added for the group Kids', '"Bedtime": 15 more minutes',
+                 '"Bedtime" back on', '"Bedtime" for the group Kids changed (turned off)',
+                 "internet off now for Sam's iPad, 30 min", "internet back on (ended early)",
+                 'schedule "Bedtime" deleted'):  # fmt: skip
+        assert want in joined, want
+    assert PASSWORD not in joined

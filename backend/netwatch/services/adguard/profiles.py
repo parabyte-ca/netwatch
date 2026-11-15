@@ -16,8 +16,10 @@ import logging
 import re
 import time
 
+from ..events import DNS
 from .actions import ActionError
 from .client import norm_mac
+from .schedules import describe_effects, overlay
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +37,7 @@ _SERVICE_ID = re.compile(r"^[a-z0-9_]{1,64}$")
 PREFIX = "NetWatch: "
 SYNC_S = 15  # how soon a group change reaches AdGuard Home
 FULL_SYNC_S = 300  # also re-check everything this often (drift)
+SCHEDULE_RULES_KEY = "adguard_schedule_rules"  # the $client lines NetWatch added for "internet off"
 _ENGINES = ("bing", "duckduckgo", "ecosia", "google", "pixabay", "yandex", "youtube")
 
 
@@ -146,16 +149,25 @@ def _differs(cur: dict, want: dict) -> bool:
     return False
 
 
+def internet_off_rule(client: str) -> str:
+    """Block every lookup for one AdGuard Home client, ahead of allow rules ($important)."""
+    esc = "".join("\\" + c if c in "\\'\",|" else c for c in client)
+    return f"||*^$client='{esc}',important"
+
+
 def client_name(label: str) -> str:
     clean = re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f]", "", label or "")).strip()
     return (PREFIX + (clean or "device"))[:64].rstrip()
 
 
 class ProfileSync:
-    def __init__(self, actions, inventory, groups) -> None:
+    def __init__(self, actions, inventory, groups, schedules=None) -> None:
         self.actions = actions  # AdGuardActions: the on/off gate and the client
         self.inventory = inventory
         self.groups = groups
+        self.schedules = schedules  # ScheduleStore, or None
+        self._events: dict[str, tuple[int, int]] = {}  # active schedule → (event id, planned end)
+        self._last_sig: tuple | None = None
         self.store = actions.store
         self.conflicts: list[dict] = []
         self.last_sync_ms: int | None = None
@@ -217,14 +229,24 @@ class ProfileSync:
 
     def has_work(self) -> bool:
         p = self.profiles()
-        return bool(p["devices"] or p["groups"] or self.tracked())
+        scheduled = bool(self.schedules and (self.schedules.list() or self.schedules.active()))
+        return bool(p["devices"] or p["groups"] or self.tracked() or scheduled or self._events)
+
+    def active_signature(self) -> tuple:
+        """What schedules are in force now; a change means AdGuard Home needs updating."""
+        if not self.schedules:
+            return ()
+        return tuple(sorted((a["id"], a["target"]["kind"], a["target"]["id"])
+                            for a in self.schedules.active()))  # fmt: skip
 
     # ── what AdGuard Home should hold ────────────────────────────────────────
 
-    def desired(self) -> dict[str, dict]:
-        """key → {name, profile (settings), label, devices: [{id, label, macs}]}; prunes."""
+    def desired(self, now_ms: int | None = None) -> dict[str, dict]:
+        """key → {name, profile (settings in force now), base, internet_off, active, label,
+        devices: [{id, label, macs}]}; prunes stale choices."""
+        now = now_ms or int(time.time() * 1000)
         p = self.profiles()
-        rows = self.inventory.listing(int(time.time() * 1000))
+        rows = self.inventory.listing(now)
         ids = {d["id"] for d in rows}
         groups = {g["id"]: g for g in self.groups.list()}
         dev = {int(k): v for k, v in p["devices"].items() if int(k) in ids}
@@ -233,22 +255,50 @@ class ProfileSync:
                   "groups": {str(k): v for k, v in grp.items()}}  # fmt: skip
         if pruned != p:
             self.store.kv_set(PROFILES_KEY, pruned)
+        # Schedules: their targets need a client even with default settings; deleted groups
+        # and devices take their schedules with them.
+        sched_g: set[int] = set()
+        sched_d: set[int] = set()
+        effects: dict[tuple[str, int], list[dict]] = {}
+        names: dict[tuple[str, int], list[str]] = {}
+        if self.schedules is not None:
+            for s in self.schedules.list():
+                kind, tid = s["target"]["kind"], s["target"]["id"]
+                if (kind == "group" and tid not in groups) or (kind == "device" and tid not in ids):
+                    self.schedules.drop_target(kind, tid)
+                    continue
+                if s.get("enabled", True):
+                    (sched_g if kind == "group" else sched_d).add(tid)
+            for a in self.schedules.active(now):
+                k = (a["target"]["kind"], a["target"]["id"])
+                (sched_g if k[0] == "group" else sched_d).add(k[1])
+                effects.setdefault(k, []).append(a["effects"])
+                names.setdefault(k, []).append(a["name"])
         out: dict[str, dict] = {}
-        for gid, prof in grp.items():
+        for gid in set(grp) | (sched_g & set(groups)):
             g = groups[gid]
-            out[f"group:{gid}"] = {"name": client_name(g["name"]), "profile": prof,
-                                   "label": g["name"], "devices": []}  # fmt: skip
+            out[f"group:{gid}"] = {"name": client_name(g["name"]), "label": g["name"],
+                                   "base": grp.get(gid) or normalize_settings({}),
+                                   "fx": effects.get(("group", gid), []),
+                                   "active": names.get(("group", gid), []),
+                                   "devices": []}  # fmt: skip
         for d in rows:
             entry = {"id": d["id"], "label": d["label"], "macs": list(d["macs"])}
-            if d["id"] in dev:
+            gid = d.get("group_id")
+            if d["id"] in dev or d["id"] in sched_d:
+                # Its own client: its own settings, else its group's; its group's schedules too.
                 out[f"device:{d['id']}"] = {
                     "name": client_name(d["label"]),
-                    "profile": dev[d["id"]],
                     "label": d["label"],
+                    "base": dev.get(d["id"]) or grp.get(gid) or normalize_settings({}),
+                    "fx": effects.get(("device", d["id"]), []) + effects.get(("group", gid), []),
+                    "active": names.get(("device", d["id"]), []) + names.get(("group", gid), []),
                     "devices": [entry],
                 }
-            elif d.get("group_id") in grp:
-                out[f"group:{d['group_id']}"]["devices"].append(entry)
+            elif f"group:{gid}" in out:
+                out[f"group:{gid}"]["devices"].append(entry)
+        for e in out.values():
+            e["profile"], e["internet_off"] = overlay(e["base"], e.pop("fx"))
         # Names must be unique in AdGuard Home: a device sharing a name gets its id added.
         seen: set[str] = set()
         for key in sorted(out, key=lambda k: (not k.startswith("group:"), k)):
@@ -268,7 +318,8 @@ class ProfileSync:
             client = await self.actions._client()  # ActionsDisabled when actions are off
             tracked = await asyncio.to_thread(self.tracked)
             desired = await asyncio.to_thread(self.desired)
-            if not desired and not tracked:
+            lines_had = await asyncio.to_thread(self.store.kv_get, SCHEDULE_RULES_KEY, [])
+            if not desired and not tracked and not lines_had and not self._events:
                 self.conflicts, self.error = [], None
                 self.last_sync_ms = int(time.time() * 1000)
                 return {"changes": [], "conflicts": []}
@@ -342,9 +393,55 @@ class ProfileSync:
                 tracked[key] = body["name"]
                 await asyncio.to_thread(self.store.kv_set, TRACKED_KEY, tracked)
             await asyncio.to_thread(self.store.kv_set, TRACKED_KEY, tracked)
+            # 3. "Internet off": one $client rule per client while a schedule says so.
+            lines = sorted({internet_off_rule(want[k]["name"]) for k, d in desired.items()
+                            if d["internet_off"] and k in want})  # fmt: skip
+            changes += await self._sync_lines(client, lines, list(lines_had or []))
+            await asyncio.to_thread(self._schedule_events, desired)
             self.conflicts, self.error = conflicts, None
             self.last_sync_ms = int(time.time() * 1000)
             return {"changes": changes, "conflicts": conflicts}
+
+    async def _sync_lines(self, client, want: list[str], had: list[str]) -> list[dict]:
+        """Add and remove NetWatch's own $client lines; the user's own rules are never touched."""
+        if sorted(want) == sorted(had):
+            return []
+        current = await self.actions._call(client.user_rules())
+        new = [r for r in current if r not in had or r in want]
+        new += [r for r in want if r not in new]
+        if new != current:
+            await self.actions._call(client.set_user_rules(new))
+        await asyncio.to_thread(self.store.kv_set, SCHEDULE_RULES_KEY, list(want))
+        added = [{"action": "internet off", "client": r} for r in want if r not in had]
+        return added + [{"action": "internet back on", "client": r} for r in had if r not in want]
+
+    def _schedule_events(self, desired: dict) -> None:
+        """One information event per schedule on a group or device, recorded with its planned
+        end (so it shows on the timeline, not as an ongoing incident) and shortened if it ends
+        early."""
+        if self.schedules is None:
+            return
+        now = int(time.time() * 1000)
+        labels = {k: d["label"] for k, d in desired.items()}
+        current: dict[str, dict] = {}
+        for a in self.schedules.active(now):
+            key = f"{a['id']}:{a['target']['kind']}:{a['target']['id']}"
+            current[key] = a
+        for key, a in current.items():
+            if key in self._events:
+                continue
+            who = labels.get(f"{a['target']['kind']}:{a['target']['id']}", a["target"]["kind"])
+            eid = self.actions.events.open(
+                DNS, "info", now, f"{who}: {describe_effects(a['effects'])} ({a['name']})",
+                details={"type": "schedule", "schedule": a["id"], "target": a["target"],
+                         "until_ms": a["end_ms"], "manual": a["manual"]},
+                end_ms=a["end_ms"],
+            )  # fmt: skip
+            self._events[key] = (eid, a["end_ms"])
+        for key in [k for k in self._events if k not in current]:
+            eid, planned = self._events.pop(key)
+            if now < planned:  # ended early: +15 min, back on now, turned off
+                self.actions.events.set_end(eid, now)
 
     async def _check_apps(self, s: dict) -> None:
         if not s["services"]:
@@ -398,13 +495,15 @@ class ProfileSync:
         while True:
             await asyncio.sleep(SYNC_S)
             now = time.monotonic()
-            due = self.dirty or now - last_full >= FULL_SYNC_S
+            sig = await asyncio.to_thread(self.active_signature)
+            due = self.dirty or now - last_full >= FULL_SYNC_S or sig != self._last_sig
             if not due or not self.actions.enabled() or not self.actions.service.configured:
                 continue
             try:
                 if await asyncio.to_thread(self.has_work):
                     result = await self.reconcile()
                     last_full = now
+                    self._last_sig = sig
                     for ch in result["changes"]:
                         self.actions.events.instant(
                             "security", "info", int(time.time() * 1000),

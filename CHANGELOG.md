@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.19.0] - 2026-11-15
+### Added
+- Schedules for a group or a device (with AdGuard Home actions on): days, a start and an end time
+  (a window may end the next morning) and what happens while it is on: internet off, YouTube off,
+  apps blocked or strict filtering. Presets: School nights, Homework, Bedtime. Exceptions from
+  NetWatch: +15 min, +1 hour, off until it next starts, skip today, and back on now; "Internet off
+  now" for 30 minutes, 1 hour or 2 hours. Shown in the group's AdGuard Home dialog and on the
+  device's page, as "Active now" on the Overview, as a list on the DNS page, and as information
+  events on the timeline. Times follow `TZ`, daylight saving included. A schedule starts or ends
+  within about 15 seconds; every change is confirmed and written to the security log.
+- Internet off is a rule for the NetWatch client in AdGuard Home (`||*^$client='NetWatch: Kids',important`),
+  added and removed by NetWatch; your own rules are never touched.
+- `GET/POST/PUT/DELETE /api/adguard/actions/schedules`, `POST /schedules/{id}/extend`,
+  `DELETE /schedules/{id}/exception`, `POST /schedules/now`, `DELETE /schedules/now/{id}`.
+
 ## [0.18.3] - 2026-11-15
 ### Fixed
 - Pages no longer get wider than a phone screen. The device page's "Same device as…" list took the

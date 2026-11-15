@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { ActiveNow } from '../components/Schedules';
 import { Link } from 'react-router-dom';
 import { EventRow } from '../components/EventRow';
 import { StatusBadge } from '../components/StatusBadge';
@@ -164,6 +165,7 @@ export function Overview() {
       </section>
 
       <NotPollingHint states={integrations.data} />
+      <ActiveNow />
 
       {(active.data?.length ?? 0) > 0 && (
         <section aria-label="Active incidents" className="rounded-lg bg-slate-900 p-2 ring-1 ring-rose-900/60">
