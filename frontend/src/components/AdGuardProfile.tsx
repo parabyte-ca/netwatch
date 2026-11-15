@@ -16,7 +16,7 @@ const FILTER_HELP: Record<AdGuardProfileName, string> = {
   strict: 'Blocklists plus safe browsing, parental control and safe search.',
 };
 const YOUTUBE_LABEL: Record<YouTubeSetting, string> = {
-  default: 'As set above', restricted: 'Restricted Mode', blocked: 'Blocked', allowed: 'Allowed (even if blocked for everyone)',
+  default: 'As set above', restricted: 'Restricted Mode', blocked: 'Blocked', allowed: 'Allowed, no Restricted Mode (even if blocked for everyone)',
 };
 const YOUTUBE_SHORT: Record<Exclude<YouTubeSetting, 'default'>, string> = {
   restricted: 'YouTube Restricted Mode', blocked: 'YouTube blocked', allowed: 'YouTube allowed',

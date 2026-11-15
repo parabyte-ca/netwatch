@@ -1711,3 +1711,16 @@ def test_schedules_api_and_security_log(client):
                  'schedule "Bedtime" deleted'):  # fmt: skip
         assert want in joined, want
     assert PASSWORD not in joined
+
+
+def test_youtube_allowed_turns_off_restricted_mode_from_global_safe_search():
+    from netwatch.services.adguard.profiles import client_body
+
+    g = {"filtering": True, "parental": False, "safebrowsing": True, "blocked": ["youtube"],
+         "safesearch": {"enabled": True, "google": True, "youtube": True}}  # fmt: skip
+    for filtering in ("default", "strict"):
+        c = client_body("NetWatch: Phone", {"filtering": filtering, "youtube": "allowed"}, [], g)
+        assert c["safesearch"]["youtube"] is False and "youtube" not in c["blocked_services"]
+        assert c["safesearch"]["enabled"] and c["safesearch"]["google"]  # other engines stay
+    c = client_body("NetWatch: Phone", {"youtube": "default"}, [], g)
+    assert c["safesearch"]["youtube"] is True

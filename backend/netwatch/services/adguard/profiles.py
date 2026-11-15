@@ -96,6 +96,9 @@ def client_body(name: str, settings: dict, macs: list[str], g: dict | None = Non
         if not ss["enabled"]:
             ss = {"enabled": True, **{e: False for e in _ENGINES}}
         ss["youtube"] = True
+    elif s["youtube"] == "allowed":
+        # Safe search for YouTube is Restricted Mode (it hides comments): allowed means without it.
+        ss["youtube"] = False
     base = [] if f == "no_blocking" else list(g.get("blocked") or [])
     blocked = set(base) | set(s["services"])
     if s["youtube"] == "blocked":
