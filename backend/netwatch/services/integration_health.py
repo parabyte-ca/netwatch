@@ -16,7 +16,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .events import MONITOR, EventLog
+from .events import INTEGRATION, EventLog
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +24,7 @@ TICK_S = 15
 DAY_MS = 86_400_000
 NIGHTLY_STALE_MS = 26 * 3600_000  # a nightly job missing for more than a day
 WEEKLY_STALE_MS = 8 * DAY_MS
+NIC_GRACE_MS = 2 * 60_000  # the NIC monitor's first reading after a restart
 EVENT_AFTER_MS = 30 * 60_000  # stale this long before it goes on the timeline
 EVENTS_KEY = "integration_health_events"  # {source key: event id}
 
@@ -109,7 +110,7 @@ class IntegrationHealth:
             state, detail = PAUSED, f"Stopped: {paused}. Save the settings again to resume."
             fix = {"action": "admin", "label": "Open settings", "anchor": p.admin_anchor}
         elif last_ok and now - last_ok <= window:
-            state, detail = OK, "Reading."
+            state, detail = OK, f"Polled every {p.poll_s} s."
         elif not last_ok and now - self.started_ms <= window:
             state, detail = WAITING, "Started; the first read is on its way."
         else:
@@ -154,7 +155,7 @@ class IntegrationHealth:
             "networking.",
         }
 
-    def _nic_row(self) -> dict | None:
+    def _nic_row(self, now: int) -> dict | None:
         if self.nic is None:
             return None
         ifaces = [i for i in (self.nic() or []) if i.get("present")]
@@ -170,6 +171,8 @@ class IntegrationHealth:
         if up:
             speeds = ", ".join(f"{i['iface']} {i['speed']} Mb/s" for i in up if i.get("speed"))
             return {**row, "state": OK, "detail": f"Link up ({speeds or up[0]['iface']})."}
+        if now - self.started_ms <= NIC_GRACE_MS:
+            return {**row, "state": WAITING, "detail": "Started; reading the interfaces."}
         if ifaces:
             return {**row, "state": STALE, "detail": "Link down on every watched interface."}
         return {**row, "state": STALE, "detail": "No watched interface found."}
@@ -265,7 +268,7 @@ class IntegrationHealth:
             r
             for r in (
                 self._capture_row(now),
-                self._nic_row(),
+                self._nic_row(now),
                 *self._nightly_rows(now),
                 self._weekly_row(now),
                 self._helper_row(),
@@ -294,9 +297,9 @@ class IntegrationHealth:
             else:
                 self._stale_since.pop(k, None)
             if bad and k not in open_ids and now - self._stale_since[k] >= EVENT_AFTER_MS:
-                title = f"{r['label']} has stopped reading"
+                title = f"{r['label']} has stopped working"
                 open_ids[k] = self.events.open(
-                    MONITOR,
+                    INTEGRATION,
                     "info",
                     self._stale_since[k],
                     title,

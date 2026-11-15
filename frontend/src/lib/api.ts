@@ -195,7 +195,8 @@ export type EventKind =
   | 'exposure'
   | 'dns'
   | 'presence'
-  | 'speed';
+  | 'speed'
+  | 'integration';
 
 export interface TimelineEvent {
   id: number;

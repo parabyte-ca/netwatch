@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from netwatch.services.events import MONITOR, EventLog
+from netwatch.services.events import INTEGRATION, EventLog
 from netwatch.services.integration_health import IntegrationHealth, Poller
 
 MIN = 60_000
@@ -77,12 +77,12 @@ def test_stale_for_30_minutes_opens_one_event_and_reading_closes_it(store):
     assert h.check(T0 + 35 * MIN) == []
     assert h.check(T0 + 41 * MIN) == [{"source": "adguard", "action": "opened"}]
     assert h.check(T0 + 50 * MIN) == []  # one event, not one per check
-    (e,) = ev.list(0, 10**14, kinds=[MONITOR])
-    assert e["title"] == "AdGuard Home has stopped reading" and e["severity"] == "info"
+    (e,) = ev.list(0, 10**14, kinds=[INTEGRATION])
+    assert e["title"] == "AdGuard Home has stopped working" and e["severity"] == "info"
     assert e["open"] and e["start_ms"] == T0 + 10 * MIN
     svc.poll(T0 + 55 * MIN)
     assert h.check(T0 + 56 * MIN) == [{"source": "adguard", "action": "closed"}]
-    (e,) = ev.list(0, 10**14, kinds=[MONITOR])
+    (e,) = ev.list(0, 10**14, kinds=[INTEGRATION])
     assert not e["open"]
 
 
@@ -91,7 +91,7 @@ def test_polling_off_is_not_a_problem(store):
     h, ev = make(store, svc)
     for m in (1, 40, 80):
         h.check(T0 + m * MIN)
-    assert ev.list(0, 10**14, kinds=[MONITOR]) == [] and h.view(T0)["problems"] == 0
+    assert ev.list(0, 10**14, kinds=[INTEGRATION]) == [] and h.view(T0)["problems"] == 0
 
 
 def test_other_sources(store):
@@ -137,6 +137,12 @@ def test_other_sources(store):
     assert rows["helper"]["state"] == "stale"
     jobs[0]["enabled"] = False
     assert row(h, now, "bufferbloat")["state"] == "off"
+
+
+def test_nic_waits_for_its_first_reading(store):
+    h, _ = make(store, FakeSvc(), nic=lambda: [{"iface": "eth0", "present": False}])
+    assert row(h, T0 + MIN, "nic")["state"] == "waiting"
+    assert row(h, T0 + 3 * MIN, "nic")["state"] == "stale"
 
 
 def test_api(client):

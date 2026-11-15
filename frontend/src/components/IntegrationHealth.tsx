@@ -5,7 +5,7 @@ import { fmtAgo } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
 
 const STATE: Record<HealthState, { label: string; dot: string; text: string }> = {
-  ok: { label: 'Reading', dot: 'bg-emerald-400', text: 'text-emerald-300' },
+  ok: { label: 'OK', dot: 'bg-emerald-400', text: 'text-emerald-300' },
   waiting: { label: 'Starting', dot: 'bg-sky-400', text: 'text-sky-300' },
   stale: { label: 'Stopped', dot: 'bg-rose-400', text: 'text-rose-300' },
   paused: { label: 'Paused', dot: 'bg-amber-400', text: 'text-amber-300' },
@@ -90,7 +90,7 @@ export function IntegrationProblems() {
   if (!bad.length) return null;
   return (
     <p role="status" className="rounded-md bg-rose-950/40 p-2 text-sm text-rose-200 ring-1 ring-rose-900">
-      {listNames(bad.map((r) => r.label))} {bad.length > 1 ? 'have' : 'has'} stopped reading, so some pages are missing data.{' '}
+      {listNames(bad.map((r) => r.label))} {bad.length > 1 ? 'have' : 'has'} stopped working, so some pages are missing data.{' '}
       <Link to="/system" className="text-sky-300 hover:underline">See integration health</Link>
     </p>
   );

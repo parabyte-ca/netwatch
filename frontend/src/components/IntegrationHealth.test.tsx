@@ -45,6 +45,6 @@ describe('integration health', () => {
     unmount();
     f.mockResolvedValue(json({ rows, problems: 2 }));
     render(<MemoryRouter><IntegrationProblems /></MemoryRouter>);
-    expect(await screen.findByRole('status')).toHaveTextContent('AdGuard Home and Nightly load and speed test have stopped reading');
+    expect(await screen.findByRole('status')).toHaveTextContent('AdGuard Home and Nightly load and speed test have stopped working');
   });
 });
