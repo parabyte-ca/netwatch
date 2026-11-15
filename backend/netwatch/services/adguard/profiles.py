@@ -218,6 +218,7 @@ class ProfileSync:
                         if keep:
                             await call(client.update_client(name, {**cur, "ids": sorted(keep)}))
                             cur["ids"] = sorted(keep)
+                            changes.append({"action": "updated", "client": name})
                         else:
                             await call(client.delete_client(name))
                             by_name.pop(name, None)
@@ -231,6 +232,8 @@ class ProfileSync:
                     changes.append({"action": "added", "client": body["name"]})
                 elif old != body["name"] or _differs(cur, body):
                     await call(client.update_client(old, body))
+                    if {"action": "updated", "client": old} in changes:
+                        changes.remove({"action": "updated", "client": old})
                     changes.append({"action": "updated", "client": body["name"]})
                 tracked[key] = body["name"]
                 await asyncio.to_thread(self.store.kv_set, TRACKED_KEY, tracked)

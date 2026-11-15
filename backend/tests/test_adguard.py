@@ -1275,6 +1275,13 @@ async def test_group_changes_follow_and_default_removes(prof):
     await prof.set_group(kids, "strict")
     await prof.set_group(teens, "no_blocking")
     assert "NetWatch: Teens" not in _clients(prof)  # no members yet: no client
+    b = _dev(prof, "00:11:22:00:00:02", "Phone")
+    prof.gs.assign([b], kids)
+    await prof.reconcile()
+    prof.gs.assign([b], None)  # leaving the group shrinks the client, and says so
+    assert (await prof.reconcile())["changes"] == [
+        {"action": "updated", "client": "NetWatch: Kids"}
+    ]
     prof.gs.assign([a], teens)  # moving a device frees its MAC before it is added elsewhere
     r = await prof.reconcile()
     cs = _clients(prof)

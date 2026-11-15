@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..services.adguard.actions import ActionError, ActionsDisabled
 from ..services.adguard.profiles import PROFILE_LABEL
+from ..services.discovery.inventory import device_label
 from .auth import security_event
 
 router = APIRouter(prefix="/api/adguard/actions")
@@ -361,7 +362,7 @@ async def _set(request: Request, kind: str, target_id: int, body: ProfileIn) -> 
         dev = await asyncio.to_thread(request.app.state.device_store.get, target_id)
         if dev is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "no such device")
-        what = (dev.get("name") or dev["mac"])[:60]
+        what = device_label(dev)[:60]
     else:
         g = await asyncio.to_thread(request.app.state.groups.get, target_id)
         if g is None:
