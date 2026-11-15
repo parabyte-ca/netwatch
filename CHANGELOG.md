@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.17.0] - 2026-11-15
+### Added
+- AdGuard Home settings per device and per group (with AdGuard Home actions on): No blocking (an
+  exception: nothing is blocked) or Strict (blocklists, safe browsing, parental control and safe
+  search, which includes YouTube Restricted Mode). Set it for a group in Devices → Groups… or for
+  one device on its page; the DNS page lists them. NetWatch keeps an AdGuard Home persistent client
+  for each ("NetWatch: Kids") with every MAC it knows for the devices; a device's own setting beats
+  its group's, and group changes reach AdGuard Home within about 15 seconds (everything is checked
+  again every 5 minutes). Only the clients NetWatch made are changed; a device already in one of
+  your own clients is left out and reported. Changes are confirmed and written to the security log.
+- `GET /api/adguard/actions/profiles`, `PUT /api/adguard/actions/profiles/device/{id}` and
+  `/profiles/group/{id}`.
+
 ## [0.16.0] - 2026-11-15
 ### Added
 - Full screen map: a Full screen button (or the F key; Esc leaves) fills the screen with the map,
