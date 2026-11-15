@@ -22,8 +22,12 @@ DUPLICATE_WINDOW_MS = 60_000
 DHCP_SERVER_WINDOW_MS = 24 * 3600_000
 DHCP_JOIN_WINDOW_MS = 3600_000
 DHCP_JOIN_THRESHOLD = 4  # broadcast DHCP exchanges per device per hour
+# Phones, tablets, laptops and private-address devices rejoin each time they wake or roam.
+DHCP_JOIN_THRESHOLD_MOBILE = 12
 IP_CHANGE_WINDOW_MS = 24 * 3600_000
-IP_CHANGE_THRESHOLD = 3
+IP_CHANGE_THRESHOLD = 3  # new addresses per device per day
+IP_CHANGE_THRESHOLD_MOBILE = 6
+NEW_MAC_GRACE_MS = 10 * 60_000  # a rotated private MAC settling in is not churn
 STORM_WINDOW_S = 10
 STORM_QUIET_S = 30
 COOLDOWN_MS = 3600_000
@@ -97,16 +101,20 @@ class AnomalyDetector:
         kv_get: Callable[[str, object], object] = lambda k, d=None: d,
         kv_set: Callable[[str, object], None] = lambda k, v: None,
         storm_pps: int = 100,
+        profile: Callable[[str], dict | None] = lambda mac: None,
     ) -> None:
         self.events = events
         self.gateway_ip = gateway_ip
         self.own_macs = own_macs
         self.kv_get, self.kv_set = kv_get, kv_set
         self.storm_pps = storm_pps
+        # mac → {"mobile": bool, "last_ip": str | None}, or None for an unknown device.
+        self.profile = profile
         self._claims: dict[str, dict[str, int]] = defaultdict(dict)  # ip → mac → last ts
         self._servers: dict[str, dict] = {}  # DHCP server ip → {mac, first, last}
         self._joins: dict[str, deque[int]] = defaultdict(deque)
-        self._ip_changes: dict[str, deque[int]] = defaultdict(deque)
+        # group → (ts, address, counted): every address the group used in the window.
+        self._ip_changes: dict[str, deque[tuple[int, str, bool]]] = defaultdict(deque)
         self._arp_secs: dict[int, int] = defaultdict(int)
         self._arp_by_mac: dict[int, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self._storm_event: int | None = None
@@ -254,35 +262,61 @@ class AnomalyDetector:
             q = self._joins[obs.mac]
             if q and ts - q[-1] < 30_000:
                 return
+            prof = self.profile(obs.mac) or {}
+            requested = info.get("requested_ip")
+            if requested and requested == prof.get("last_ip"):
+                return  # waking up and asking for the address it already had is not churn
             q.append(ts)
             while q and ts - q[0] > DHCP_JOIN_WINDOW_MS:
                 q.popleft()
-            if len(q) >= DHCP_JOIN_THRESHOLD:
+            limit = DHCP_JOIN_THRESHOLD_MOBILE if prof.get("mobile") else DHCP_JOIN_THRESHOLD
+            if len(q) >= limit:
                 name = info.get("hostname") or obs.mac
                 self._emit(
                     Finding(
                         "dhcp_churn",
                         obs.mac,
                         "warning",
-                        f"{name} rejoined the network {len(q)} times in an hour",
+                        f"{name} rejoined the network {len(q)} times in an hour "
+                        "(it may be losing Wi-Fi)",
                         {"mac": obs.mac, "hostname": info.get("hostname"), "joins": len(q)},
                     ),
                     ts,
                 )
 
-    def ip_changed(self, mac: str, label: str, old_ip: str, new_ip: str, ts_ms: int) -> None:
-        q = self._ip_changes[mac]
-        q.append(ts_ms)
-        while q and ts_ms - q[0] > IP_CHANGE_WINDOW_MS:
+    def ip_changed(
+        self,
+        mac: str,
+        label: str,
+        old_ip: str,
+        new_ip: str,
+        ts_ms: int,
+        *,
+        group: str | None = None,
+        mobile: bool = False,
+        first_seen_ms: int | None = None,
+    ) -> None:
+        """Count addresses a device (or its merged group) had not used in the last day."""
+        if not old_ip or not new_ip:
+            return  # first address, or the address was cleared: not a change
+        q = self._ip_changes[group or mac]
+        while q and ts_ms - q[0][0] > IP_CHANGE_WINDOW_MS:
             q.popleft()
-        if len(q) >= IP_CHANGE_THRESHOLD:
+        seen = {ip for _, ip, _ in q}
+        if old_ip not in seen:
+            q.append((ts_ms, old_ip, False))
+        settling = first_seen_ms is not None and ts_ms - first_seen_ms < NEW_MAC_GRACE_MS
+        q.append((ts_ms, new_ip, new_ip not in seen and new_ip != old_ip and not settling))
+        changes = sum(1 for *_, counted in q if counted)
+        limit = IP_CHANGE_THRESHOLD_MOBILE if mobile else IP_CHANGE_THRESHOLD
+        if changes >= limit:
             self._emit(
                 Finding(
                     "ip_churn",
                     mac,
                     "warning",
-                    f"{label} changed IP address {len(q)} times in 24 h",
-                    {"mac": mac, "from_ip": old_ip, "to_ip": new_ip, "changes": len(q)},
+                    f"{label} changed to a new IP address {changes} times in 24 h",
+                    {"mac": mac, "from_ip": old_ip, "to_ip": new_ip, "changes": changes},
                 ),
                 ts_ms,
                 cooldown_ms=IP_CHANGE_WINDOW_MS,
@@ -308,12 +342,11 @@ class AnomalyDetector:
         for ip in [ip for ip, c in self._claims.items()
                    if not c or now_ms - max(c.values()) > DUPLICATE_WINDOW_MS]:  # fmt: skip
             del self._claims[ip]
-        for d, window in (
-            (self._joins, DHCP_JOIN_WINDOW_MS),
-            (self._ip_changes, IP_CHANGE_WINDOW_MS),
-        ):
-            for k in [k for k, q in d.items() if not q or now_ms - q[-1] > window]:
-                del d[k]
+        joins, ips = self._joins, self._ip_changes
+        for k in [k for k, q in joins.items() if not q or now_ms - q[-1] > DHCP_JOIN_WINDOW_MS]:
+            del joins[k]
+        for k in [k for k, q in ips.items() if not q or now_ms - q[-1][0] > IP_CHANGE_WINDOW_MS]:
+            del ips[k]
         for k in [k for k, t in self._last_emit.items() if now_ms - t > 24 * 3600_000]:
             del self._last_emit[k]
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import socket
+
 import pytest
 
 from netwatch.db import make_engine, run_migrations
@@ -371,3 +373,62 @@ def test_adguard_observations_name_and_classify(inv):
     # A name given in NetWatch still wins.
     inv.store.update(d["id"], {"name": "Laptop"})
     assert device_label(inv.store.get(d["id"])) == "Laptop"
+
+
+def _rejoin(det, mac, ts, requested=None):
+    opts = {50: socket.inet_aton(requested)} if requested else None
+    for o in frames(dhcp_client_frame(mac, 3, options=opts), ts=ts):
+        det.observe(o)
+
+
+def test_phone_waking_with_its_own_address_is_not_churn(events):
+    det = make_detector(events, profile=lambda m: {"mobile": True, "last_ip": "192.168.2.40"})
+    for i in range(10):
+        _rejoin(det, PHONE_A, 1_000_000 + i * 300_000, requested="192.168.2.40")
+    assert _anomalies(events) == []
+
+
+def test_phone_needs_more_rejoins_than_a_plug(events):
+    det = make_detector(events, profile=lambda m: {"mobile": m == PHONE_A, "last_ip": None})
+    for i in range(11):
+        _rejoin(det, PHONE_A, 1_000_000 + i * 300_000)
+    assert _anomalies(events) == []
+    _rejoin(det, PHONE_A, 1_000_000 + 11 * 300_000)
+    assert len(_anomalies(events)) == 1
+
+
+def test_plug_rejoining_four_times_alerts_with_a_reason(events):
+    det = make_detector(events, profile=lambda m: {"mobile": False, "last_ip": "192.168.2.50"})
+    for i in range(4):
+        _rejoin(det, PHONE_B, 1_000_000 + i * 600_000, requested=f"192.168.2.{60 + i}")
+    (ev,) = _anomalies(events)
+    assert "it may be losing Wi-Fi" in ev["title"]
+
+
+def test_flipping_back_to_a_recent_address_counts_once(events):
+    det = make_detector(events)
+    t = 1_000_000
+    for i, (a, b) in enumerate([("10.0.0.2", "10.0.0.3"), ("10.0.0.3", "10.0.0.2")] * 3):
+        det.ip_changed(PHONE_B, "Plug", a, b, t + i * 60_000)
+    assert _anomalies(events) == []
+    det.ip_changed(PHONE_B, "Plug", "10.0.0.2", "10.0.0.4", t + 10 * 60_000)
+    det.ip_changed(PHONE_B, "Plug", "10.0.0.4", "10.0.0.5", t + 11 * 60_000)
+    (ev,) = _anomalies(events)
+    assert ev["details"]["changes"] == 3
+
+
+def test_rotating_private_mac_on_a_merged_phone_is_not_ip_churn(events):
+    det = make_detector(events)
+    t = 10_000_000
+    for i in range(8):  # each new MAC settles on a fresh address minutes after it appears
+        ts = t + i * 3600_000
+        det.ip_changed(f"da:00:00:00:00:{i:02x}", "iPhone", f"10.0.0.{i}", f"10.0.0.{i + 50}",
+                       ts, group="7", mobile=True, first_seen_ms=ts - 60_000)  # fmt: skip
+    assert _anomalies(events) == []
+
+
+def test_first_address_is_not_a_change(events):
+    det = make_detector(events)
+    for i in range(5):
+        det.ip_changed(PHONE_B, "Plug", "", f"10.0.0.{i}", 1_000_000 + i * 1000)
+    assert _anomalies(events) == []

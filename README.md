@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.19.0-blue)
+![Version](https://img.shields.io/badge/version-0.19.1-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -71,7 +71,8 @@ per group or device (internet off at night, YouTube off during homework). See th
 - **Anomaly alerts** on the timeline, each with the evidence and the usual cause: duplicate IP
   addresses, a second DHCP server (e.g. a Deco that fell out of AP mode), ARP storms (switching
   loops), gateway MAC changes, devices repeatedly rejoining the network (Wi-Fi drops), IPs
-  that keep changing, double NAT and carrier-grade NAT (from path tests), resolvers that
+  that keep changing (phones, tablets, laptops and private-address devices get higher limits,
+  and waking up with the same address or flipping back to a recent one does not count), double NAT and carrier-grade NAT (from path tests), resolvers that
   disagree, and resolvers that answer for non-existent names. "New device" events start after
   a one-hour learning period (private-MAC devices are not announced, as they rotate).
 - **Diagnosis engine:** failures that overlap are grouped into incidents, and each incident is
@@ -393,8 +394,8 @@ AdGuard Home actions** to get a **Controls** section on the DNS page:
   DNS answers they already have for a few minutes, and a device using its own encrypted DNS goes
   around AdGuard Home.
 - **YouTube and apps per device and per group:** next to filtering, set **YouTube** to
-  **Restricted Mode** (hides mature videos and comments), **Blocked**, or **Allowed** (even when
-  YouTube is blocked for everyone else), and pick **apps to block** from AdGuard Home's own list
+  **Restricted Mode** (hides mature videos and comments), **Blocked**, or **Allowed** (no Restricted Mode,
+  even when YouTube is blocked or Safe Search is on for everyone else), and pick **apps to block** from AdGuard Home's own list
   (TikTok, Roblox, Fortnite, Discord and so on). With filtering left at Default, the devices keep
   AdGuard Home's global filtering, safe browsing and parental control (NetWatch copies them and
   refreshes them every 5 minutes), and apps you block for everyone stay blocked. Allowing only
@@ -450,6 +451,8 @@ Phone layout check: with NetWatch running (for example the demo data), `NODE_PAT
 node frontend/scripts/check-layout.mjs http://127.0.0.1:8090 admin '<password>'` visits every page
 at 390 px wide and fails if any page is wider than the screen, naming the element that sticks
 out. `TEXT_SCALE=1.3` repeats it with a larger phone text size. It needs Playwright installed.
+CI runs the same check on every pull request with seeded data (`scripts/ci-layout.sh`, after
+`npm run build` and `pip install -e backend`).
 
 Unprivileged ICMP needs `net.ipv4.ping_group_range` to include your group on the dev
 machine. The container uses privileged raw sockets instead.
