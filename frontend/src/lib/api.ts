@@ -679,7 +679,7 @@ export interface BufferbloatTest {
 
 export interface AdGuardRow {
   ts_ms: number;
-  reachable: boolean;
+  reachable: boolean | null; // null: nothing recorded in this bucket
   queries: number | null;
   blocked: number | null;
   avg_ms: number | null;
@@ -805,6 +805,8 @@ export interface DeviceDns {
 
 export interface AdGuardSummary extends AdGuardStatus {
   hours: number;
+  /** Chart resolution in seconds (5 min, 15 min or 1 hour); every bucket is present, empty ones are null. */
+  bucket_s?: number;
   series: AdGuardRow[];
   queries: number;
   blocked_pct: number | null;

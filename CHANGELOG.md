@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.18.2] - 2026-11-15
+### Fixed
+- The DNS page charts were spiky and broken up: each minute was its own point, and a quiet minute
+  (no queries, so no response time) broke the line. Readings are now grouped into 5-minute (6 h),
+  15-minute (24 h) or 1-hour (7 days) buckets, with response times weighted by the number of
+  queries and the block rate taken over the whole bucket. A time with no readings at all (polling
+  off, NetWatch stopped) now shows as a gap instead of a straight line across it.
+
 ## [0.18.1] - 2026-11-15
 ### Changed
 - New Deco, Home Hub and AdGuard Home set-ups poll by default (the box starts ticked); a saved

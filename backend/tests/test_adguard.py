@@ -678,7 +678,9 @@ def test_dns_page_summary(client):
     st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
     st.adguard.save(HOST, PORT, False, USER, True, PASSWORD)
     r = client.get("/api/adguard").json()
-    assert r["series"] == [] and r["queries"] == 0 and r["blocked_pct"] is None
+    assert r["bucket_s"] == 900 and len(r["series"]) in (96, 97)  # every 15-min bucket of 24 h
+    assert all(p["avg_ms"] is None for p in r["series"]) and r["queries"] == 0
+    assert r["blocked_pct"] is None
     assert "password" not in r
     now = datetime.now(UTC)
     for i in range(10):
@@ -686,7 +688,9 @@ def test_dns_page_summary(client):
                    reason="FilteredBlackList" if i < 3 else "NotFilteredNotFound")  # fmt: skip
     assert client.portal.call(st.adguard.poll)
     r = client.get("/api/adguard?hours=6").json()
-    assert r["hours"] == 6 and len(r["series"]) == 1
+    filled = [p for p in r["series"] if p["queries"] is not None]
+    assert r["hours"] == 6 and r["bucket_s"] == 300 and len(filled) == 1
+    assert filled[0]["queries"] == 10 and filled[0]["blocked"] == 3
     assert r["queries"] == 10 and r["blocked_pct"] == 30.0 and r["failed_pct"] == 0.0
     assert r["upstreams"] and r["upstreams"][0]["queries"] == 7
     assert r["top_clients"][0]["client"] == "192.168.1.50"
@@ -1502,3 +1506,32 @@ def test_integrations_state_and_turning_polling_on(client):
     assert client.get("/api/admin/integrations").json()["adguard"]["state"] in ("waiting", "ok")
     titles = [e["title"] for e in st.events.list(0, 10**13, kinds=[SECURITY])]
     assert "AdGuard Home polling turned on" in titles
+
+
+def test_dns_chart_buckets_weight_by_queries_and_keep_gaps():
+    from netwatch.services.adguard.service import bucket_s_for, bucket_series
+
+    assert (bucket_s_for(6), bucket_s_for(24), bucket_s_for(168)) == (300, 900, 3600)
+    m = 60_000
+    t0 = 1_800_000_000_000 - 1_800_000_000_000 % (5 * m)
+    rows = [
+        # a busy minute and a quiet one in the first bucket
+        {"ts_ms": t0, "reachable": True, "queries": 90, "blocked": 9, "avg_ms": 10.0,
+         "p95_ms": 40.0},
+        {"ts_ms": t0 + m, "reachable": True, "queries": 10, "blocked": 10, "avg_ms": 50.0,
+         "p95_ms": 80.0},
+        # idle but polled: counted as reachable with no queries
+        {"ts_ms": t0 + 5 * m, "reachable": True, "queries": 0, "blocked": 0, "avg_ms": None,
+         "p95_ms": None},
+        # then nothing recorded for 10 minutes (polling off)
+        {"ts_ms": t0 + 20 * m, "reachable": False, "queries": 0, "blocked": 0, "avg_ms": None,
+         "p95_ms": None},
+    ]  # fmt: skip
+    s = bucket_series(rows, t0, t0 + 20 * m, 300)
+    assert [p["ts_ms"] for p in s] == [t0 + i * 5 * m for i in range(5)]
+    assert s[0] == {"ts_ms": t0, "reachable": True, "queries": 100, "blocked": 19,
+                    "avg_ms": 14.0, "p95_ms": 44.0}  # fmt: skip
+    assert s[1]["reachable"] is True and s[1]["queries"] == 0 and s[1]["avg_ms"] is None
+    for gap in (s[2], s[3]):  # nothing recorded: a gap, not a line
+        assert gap["reachable"] is None and gap["queries"] is None and gap["avg_ms"] is None
+    assert s[4]["reachable"] is False and s[4]["queries"] is None
