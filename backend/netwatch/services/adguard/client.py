@@ -249,7 +249,13 @@ class AdGuardClient:
 
     async def user_rules(self) -> list[str]:
         f = await self._get("/control/filtering/status")
-        rules = f.get("user_rules") if isinstance(f, dict) else None
+        # AdGuard Home sends "user_rules": null when there are no custom rules yet. A missing
+        # key is refused: writing back a list we could not read would wipe the user's rules.
+        if not isinstance(f, dict) or "user_rules" not in f:
+            raise AdGuardError("unexpected filtering answer (is this AdGuard Home?)")
+        rules = f["user_rules"]
+        if rules is None:
+            return []
         if not isinstance(rules, list):
             raise AdGuardError("unexpected filtering answer (is this AdGuard Home?)")
         return [str(r) for r in rules]
