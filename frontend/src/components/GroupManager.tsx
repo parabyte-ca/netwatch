@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { api, type DeviceGroup } from '../lib/api';
 import { GROUP_COLOURS, GroupIcon, ICON_NAMES, colourOf } from '../lib/groups';
 import { ConfirmDialog, type Confirm } from './ConfirmDialog';
-import { GroupProfileSelect, useProfiles } from './AdGuardProfile';
+import { GroupProfileButton, useProfiles } from './AdGuardProfile';
 import type { AdGuardProfiles } from '../lib/api';
 
 const input = 'rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 focus:border-sky-500 focus:outline-none';
@@ -68,7 +68,7 @@ function Row({ g, onChanged, ask, profiles, onProfiles }: { g: DeviceGroup; onCh
             {g.quiet && <span className="ml-2 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400" title={QUIET_HELP}>quiet</span>}
           </span>
           <span className="text-xs text-slate-500">{g.devices} device{g.devices === 1 ? '' : 's'}</span>
-          {profiles && <GroupProfileSelect group={g} profiles={profiles} onChanged={onProfiles} ask={ask} />}
+          {profiles && <GroupProfileButton group={g} profiles={profiles} onChanged={onProfiles} ask={ask} />}
           <button className="text-xs text-sky-400 hover:underline" onClick={() => setEdit(true)}>Edit</button>
           <button className="text-xs text-rose-300 hover:underline" onClick={() => ask({
             title: `Delete the group ${g.name}?`,

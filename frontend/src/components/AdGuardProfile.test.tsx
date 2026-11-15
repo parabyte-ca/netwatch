@@ -2,16 +2,19 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AdGuardProfiles } from '../lib/api';
-import { DeviceProfile, GroupProfileSelect, ProfileList } from './AdGuardProfile';
+import { DeviceProfile, GroupProfileButton, ProfileList, describe as describeSettings } from './AdGuardProfile';
 
 afterEach(() => vi.restoreAllMocks());
 
+const strict = { filtering: 'strict' as const, youtube: 'restricted' as const, services: ['tiktok'] };
+const services = [{ id: 'youtube', name: 'YouTube' }, { id: 'tiktok', name: 'TikTok' }, { id: 'roblox', name: 'Roblox' }];
 const state = (over: Partial<AdGuardProfiles> = {}): AdGuardProfiles => ({
-  profiles: { devices: {}, groups: { '3': 'strict' } },
+  profiles: { devices: {}, groups: { '3': strict } },
   clients: { 'group:3': 'NetWatch: Kids' },
-  conflicts: [{ device_id: 9, label: 'Living room TV', mac: '00:11:22:00:00:99', client: 'My TV', profile: 'strict' }],
+  conflicts: [{ device_id: 9, label: 'Living room TV', mac: '00:11:22:00:00:99', client: 'My TV', profile: strict }],
   last_sync_ms: 1, error: null,
-  managed: [{ key: 'group:3', name: 'NetWatch: Kids', profile: 'strict', label: 'Kids', devices: [{ id: 5, label: "Sam's iPad" }] }],
+  managed: [{ key: 'group:3', name: 'NetWatch: Kids', profile: strict, label: 'Kids', devices: [{ id: 5, label: "Sam's iPad" }] }],
+  services_all: services,
   ...over,
 });
 
@@ -28,7 +31,12 @@ function mock(s: AdGuardProfiles | 'off') {
   return calls;
 }
 
-describe('AdGuard Home profiles', () => {
+describe('AdGuard Home settings', () => {
+  it('describes settings like the security log', () => {
+    expect(describeSettings(strict, { tiktok: 'TikTok' })).toBe('Strict, YouTube Restricted Mode, also blocks TikTok');
+    expect(describeSettings({ filtering: 'default', youtube: 'default', services: ['roblox'] }, { roblox: 'Roblox' })).toBe('Default filtering, also blocks Roblox');
+  });
+
   it('hides everything when actions are off', async () => {
     mock('off');
     const { container } = render(<MemoryRouter><DeviceProfile d={{ id: 5, label: 'iPad', group: null }} /><ProfileList /></MemoryRouter>);
@@ -36,16 +44,18 @@ describe('AdGuard Home profiles', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('shows the group setting on a device and sets its own after confirming', async () => {
+  it('shows the group settings on a device and saves its own (YouTube blocked, Roblox) after confirming', async () => {
     const calls = mock(state());
     render(<MemoryRouter><DeviceProfile d={{ id: 5, label: "Sam's iPad", group: { id: 3, name: 'Kids' } }} /></MemoryRouter>);
-    const sel = await screen.findByLabelText('AdGuard Home profile');
-    expect(sel).toHaveValue('default');
-    expect(within(sel).getByRole('option', { name: 'Use group: Strict' })).toBeInTheDocument();
-    fireEvent.change(sel, { target: { value: 'no_blocking' } });
-    const dlg = screen.getByRole('dialog', { name: "Set Sam's iPad to No blocking?" });
+    const card = await screen.findByRole('region', { name: 'AdGuard Home settings' });
+    expect(card).toHaveTextContent('Now: Strict, YouTube Restricted Mode, also blocks TikTok (from the Kids group)');
+    fireEvent.change(within(card).getByLabelText('Device YouTube'), { target: { value: 'blocked' } });
+    fireEvent.change(within(card).getByLabelText('Device add an app to block'), { target: { value: 'roblox' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Save' }));
+    const dlg = screen.getByRole('dialog', { name: "Set Sam's iPad to YouTube blocked, also blocks Roblox?" });
     fireEvent.click(within(dlg).getByRole('button', { name: 'Set' }));
-    await waitFor(() => expect(calls).toContainEqual({ url: '/api/adguard/actions/profiles/device/5', method: 'PUT', body: { profile: 'no_blocking' } }));
+    await waitFor(() => expect(calls).toContainEqual({ url: '/api/adguard/actions/profiles/device/5', method: 'PUT',
+      body: { filtering: 'default', youtube: 'blocked', services: ['roblox'] } }));
   });
 
   it('explains a device that is already in your own client', async () => {
@@ -54,23 +64,27 @@ describe('AdGuard Home profiles', () => {
     expect(await screen.findByText(/already in your AdGuard Home client "My TV"/)).toBeInTheDocument();
   });
 
-  it('sets a group profile from the group manager', async () => {
+  it('edits a group in a dialog from the group manager', async () => {
     const calls = mock(state());
     const ask = vi.fn();
-    render(<GroupProfileSelect group={{ id: 4, name: 'Teens' }} profiles={state()} onChanged={async () => {}} ask={ask} />);
-    fireEvent.change(screen.getByLabelText('AdGuard Home profile for Teens'), { target: { value: 'strict' } });
-    expect(ask).toHaveBeenCalledTimes(1);
+    render(<GroupProfileButton group={{ id: 3, name: 'Kids' }} profiles={state()} onChanged={async () => {}} ask={ask} />);
+    fireEvent.click(screen.getByRole('button', { name: /AdGuard Home: Strict/ }));
+    const dlg = screen.getByRole('dialog', { name: 'AdGuard Home settings for Kids' });
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Stop blocking TikTok' }));
+    fireEvent.change(within(dlg).getByLabelText('Kids YouTube'), { target: { value: 'blocked' } });
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Save' }));
     const confirm = ask.mock.calls[0]![0];
-    expect(confirm.title).toBe('Set the Teens group to Strict?');
+    expect(confirm.title).toBe('Set the Kids group to Strict, YouTube blocked?');
     await confirm.run();
-    expect(calls).toContainEqual({ url: '/api/adguard/actions/profiles/group/4', method: 'PUT', body: { profile: 'strict' } });
+    expect(calls).toContainEqual({ url: '/api/adguard/actions/profiles/group/3', method: 'PUT',
+      body: { filtering: 'strict', youtube: 'blocked', services: [] } });
   });
 
-  it('lists the clients NetWatch keeps and the conflicts', async () => {
+  it('lists the clients NetWatch keeps with their settings, and the conflicts', async () => {
     mock(state());
     render(<MemoryRouter><ProfileList /></MemoryRouter>);
     const list = await screen.findByRole('region', { name: 'Per-device and per-group settings' });
-    expect(list).toHaveTextContent('NetWatch: Kids');
+    expect(list).toHaveTextContent('NetWatch: KidsStrict, YouTube Restricted Mode, also blocks TikTok');
     expect(within(list).getByRole('link', { name: "Sam's iPad" })).toHaveAttribute('href', '/devices/5');
     expect(list).toHaveTextContent('Living room TV is already in your AdGuard Home client "My TV"');
   });

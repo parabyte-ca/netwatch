@@ -754,14 +754,22 @@ export interface Reservation {
 }
 
 export type AdGuardProfileName = 'default' | 'no_blocking' | 'strict';
+export type YouTubeSetting = 'default' | 'restricted' | 'blocked' | 'allowed';
+
+export interface AdGuardSettings {
+  filtering: AdGuardProfileName;
+  youtube: YouTubeSetting;
+  services: string[];
+}
 
 export interface AdGuardProfiles {
-  profiles: { devices: Record<string, AdGuardProfileName>; groups: Record<string, AdGuardProfileName> };
+  profiles: { devices: Record<string, AdGuardSettings>; groups: Record<string, AdGuardSettings> };
   clients: Record<string, string>;
-  conflicts: { device_id: number | null; label: string; mac: string | null; client: string; profile: AdGuardProfileName }[];
+  conflicts: { device_id: number | null; label: string; mac: string | null; client: string; profile: AdGuardSettings }[];
   last_sync_ms: number | null;
   error: string | null;
-  managed: { key: string; name: string; profile: AdGuardProfileName; label: string; devices: { id: number; label: string }[] }[];
+  managed: { key: string; name: string; profile: AdGuardSettings; label: string; devices: { id: number; label: string }[] }[];
+  services_all: { id: string; name: string }[];
 }
 
 export interface AdGuardActionsState {
@@ -1224,10 +1232,10 @@ export const api = {
   adguardResume: () => request<unknown>('/api/adguard/actions/resume', post()),
   adguardDhcp: () => request<AdGuardDhcp>('/api/adguard/actions/dhcp'),
   adguardProfiles: () => request<AdGuardProfiles>('/api/adguard/actions/profiles'),
-  setDeviceProfile: (id: number, profile: AdGuardProfileName) =>
-    request<unknown>(`/api/adguard/actions/profiles/device/${id}`, { method: 'PUT', body: JSON.stringify({ profile }) }),
-  setGroupProfile: (id: number, profile: AdGuardProfileName) =>
-    request<unknown>(`/api/adguard/actions/profiles/group/${id}`, { method: 'PUT', body: JSON.stringify({ profile }) }),
+  setDeviceProfile: (id: number, settings: AdGuardSettings) =>
+    request<unknown>(`/api/adguard/actions/profiles/device/${id}`, { method: 'PUT', body: JSON.stringify(settings) }),
+  setGroupProfile: (id: number, settings: AdGuardSettings) =>
+    request<unknown>(`/api/adguard/actions/profiles/group/${id}`, { method: 'PUT', body: JSON.stringify(settings) }),
   adguardReserve: (mac: string, ip: string, hostname?: string) =>
     request<{ reservation: Reservation }>('/api/adguard/actions/dhcp/reservations', post({ mac, ip, hostname: hostname || undefined })),
   adguardUnreserve: (mac: string) =>
