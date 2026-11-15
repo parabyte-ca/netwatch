@@ -3,6 +3,7 @@ import { Route, Routes } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { Admin } from './pages/Admin';
 import { DeviceDetail } from './pages/DeviceDetail';
+import { Person } from './pages/Person';
 import { Devices } from './pages/Devices';
 import { Diagnosis } from './pages/Diagnosis';
 import { Diagnostics } from './pages/Diagnostics';
@@ -29,6 +30,7 @@ export function App() {
         <Route path="targets/:id" element={<TargetDetail />} />
         <Route path="devices" element={<Devices />} />
         <Route path="devices/:id" element={<DeviceDetail />} />
+        <Route path="people/:id" element={<Person />} />
         <Route path="exposure" element={<Exposure />} />
         <Route path="dns" element={<Dns />} />
         <Route path="health-score" element={<Health />} />

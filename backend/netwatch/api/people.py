@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..services.device_groups import COLOURS
+from ..services.discovery.inventory import device_label
 from ..services.people import MAX_DEVICES, PeopleError
 from .auth import security_event
 
@@ -104,7 +105,18 @@ async def person_history(person_id: int, request: Request, days: int = 7) -> dic
     person = next((x for x in await asyncio.to_thread(p.status) if x["id"] == person_id), None)
     if person is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such person")
-    return {"person": person, **await asyncio.to_thread(p.history, person_id, days)}
+    store = request.app.state.discovery.inventory.store
+
+    def labels() -> list[dict]:
+        out = []
+        for did in person["device_ids"]:
+            d = store.get(did)
+            if d is not None:
+                out.append({"id": did, "label": device_label(d)})
+        return out
+
+    hist = await asyncio.to_thread(p.history, person_id, days)
+    return {"person": person, "devices": await asyncio.to_thread(labels), **hist}
 
 
 @router.put("/people-settings")

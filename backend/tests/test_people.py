@@ -180,7 +180,9 @@ def test_people_api(client):
     assert body["people"][0]["home"] is False
     r = client.patch(f"/api/people/{pid}", json={"name": "Samira"}, headers=CSRF)
     assert r.json()["name"] == "Samira"
-    assert client.get(f"/api/people/{pid}/history?days=7").json()["person"]["name"] == "Samira"
+    h = client.get(f"/api/people/{pid}/history?days=7").json()
+    assert h["person"]["name"] == "Samira"
+    assert h["devices"] == [{"id": did, "label": "aa:00:00:00:00:10"}]
     assert client.get("/api/people/999/history").status_code == 404
     assert client.put("/api/people-settings", json={"away_after_min": 3},
                       headers=CSRF).status_code == 422  # fmt: skip

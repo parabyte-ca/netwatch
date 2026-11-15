@@ -108,6 +108,7 @@ export const EVENT_LABEL: Record<string, string> = {
   hub: 'Home Hub',
   exposure: 'Exposure',
   dns: 'DNS',
+  presence: "Who's home",
 };
 
 export const DEVICE_TYPE_LABEL: Record<string, string> = {

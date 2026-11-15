@@ -193,7 +193,8 @@ export type EventKind =
   | 'wifi'
   | 'hub'
   | 'exposure'
-  | 'dns';
+  | 'dns'
+  | 'presence';
 
 export interface TimelineEvent {
   id: number;
@@ -384,6 +385,32 @@ export interface DeviceRow {
   label: string;
   online: boolean;
   macs: string[];
+}
+
+export interface Person {
+  id: number;
+  name: string;
+  colour: string;
+  sort: number;
+  created_ms: number;
+  device_ids: number[];
+  /** null when the person has no devices yet */
+  home: boolean | null;
+  since_ms: number | null;
+  last_seen_ms: number | null;
+}
+
+export interface PeopleList {
+  people: Person[];
+  settings: { away_after_min: number };
+  colours: string[];
+}
+
+export interface PersonHistory {
+  person: Person;
+  devices: { id: number; label: string }[];
+  events: { ts_ms: number; action: 'arrived' | 'left'; title: string }[];
+  days: { date: string; start_ms: number; spans: { start_ms: number; end_ms: number; home: boolean | null }[] }[];
 }
 
 export interface DeviceMember {
@@ -1254,6 +1281,14 @@ export const api = {
   groupsExportUrl: '/api/device-groups/export',
   importGroups: (data: unknown) =>
     request<{ groups_created: number; devices: number; unknown_macs: string[] }>('/api/device-groups/import', post(data)),
+  people: () => request<PeopleList>('/api/people'),
+  createPerson: (body: { name: string; colour: string; device_ids: number[] }) => request<Person>('/api/people', post(body)),
+  editPerson: (id: number, body: Partial<{ name: string; colour: string; device_ids: number[] }>) =>
+    request<Person>(`/api/people/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deletePerson: (id: number) => request<{ events_deleted: number }>(`/api/people/${id}`, { method: 'DELETE' }),
+  personHistory: (id: number, days = 7) => request<PersonHistory>(`/api/people/${id}/history?days=${days}`),
+  savePeopleSettings: (away_after_min: number) =>
+    request<{ away_after_min: number }>('/api/people-settings', { method: 'PUT', body: JSON.stringify({ away_after_min }) }),
   devices: (q?: string) =>
     request<{ now_ms: number; devices: DeviceRow[] }>(`/api/devices${q ? `?q=${encodeURIComponent(q)}` : ''}`),
   device: (id: number) => request<DeviceDetail>(`/api/devices/${id}`),
