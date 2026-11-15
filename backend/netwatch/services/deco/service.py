@@ -200,6 +200,11 @@ class DecoService:
             self._task = None
         await self._drop_client()
 
+    def set_polling(self, enabled: bool) -> None:
+        """Turn polling on or off without touching the address or the password."""
+        c = self.store.kv_get(CONFIG_KEY, {}) or {}
+        self.store.kv_set(CONFIG_KEY, {**c, "enabled": bool(enabled)})
+
     def kick(self) -> None:
         """Poll now (after the settings change) instead of waiting for the next cycle."""
         if self.config()["enabled"] and self.configured and not self.paused:

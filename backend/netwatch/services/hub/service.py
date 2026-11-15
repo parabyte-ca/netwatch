@@ -138,6 +138,11 @@ class HubService:
     def start(self) -> None:
         self._task = asyncio.create_task(self._loop(), name="netwatch-hub")
 
+    def set_polling(self, enabled: bool) -> None:
+        """Turn polling on or off without touching the address or the password."""
+        c = self.store.kv_get(CONFIG_KEY, {}) or {}
+        self.store.kv_set(CONFIG_KEY, {**c, "enabled": bool(enabled)})
+
     def kick(self) -> None:
         if self.config()["enabled"] and self.configured and not self.paused:
             self._kick = asyncio.create_task(self.poll(), name="netwatch-hub-kick")

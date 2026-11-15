@@ -75,6 +75,15 @@ describe('Dns', () => {
     await waitFor(() => expect(urls).toContain('/api/adguard?hours=168'));
   });
 
+  it('offers to turn polling on when it is saved but not polling', async () => {
+    const urls = mock({ ...base, enabled: false, state: 'not_polling' });
+    render(<MemoryRouter><Dns /></MemoryRouter>);
+    const note = await screen.findByRole('status');
+    expect(note).toHaveTextContent('Saved, but not polling. This page, DNS health and diagnosis need polling on.');
+    fireEvent.click(within(note).getByRole('button', { name: 'Turn on polling and save' }));
+    await waitFor(() => expect(urls.calls).toContainEqual({ url: '/api/admin/integrations/adguard/polling', method: 'POST', body: { enabled: true } }));
+  });
+
   it('warns when AdGuard Home is down or protection is off', async () => {
     mock({ ...base, error: 'cannot reach AdGuard Home (ConnectError)', latest: { ...base.latest!, reachable: false, protection: null } });
     render(<MemoryRouter><Dns /></MemoryRouter>);

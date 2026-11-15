@@ -1223,6 +1223,9 @@ export const api = {
     return request<NetworkMapResponse>(`/api/map${qs ? `?${qs}` : ''}`);
   },
   adguard: () => request<AdGuardStatus>('/api/admin/adguard'),
+  integrations: () => request<Record<'deco' | 'hub' | 'adguard', { label: string; state: PollState; paused: string | null }>>('/api/admin/integrations'),
+  setPolling: (name: 'deco' | 'hub' | 'adguard', enabled: boolean) =>
+    request<unknown>(`/api/admin/integrations/${name}/polling`, post({ enabled })),
   saveAdGuard: (body: { host: string; port: number; https: boolean; username: string; enabled: boolean; password?: string; forget_password?: boolean }) =>
     request<AdGuardStatus>('/api/admin/adguard', { method: 'PUT', body: JSON.stringify(body) }),
   testAdGuard: (body: { host: string; port: number; https: boolean; username: string; password?: string }) =>

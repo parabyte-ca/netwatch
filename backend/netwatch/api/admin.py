@@ -627,3 +627,41 @@ class AssistantTestIn(BaseModel):
 @router.post("/assistant/test")
 async def test_assistant(body: AssistantTestIn, request: Request) -> dict:
     return await request.app.state.assistant.test(body.api_key)
+
+
+# ── integrations: polling at a glance ───────────────────────────────────────
+
+_INTEGRATIONS = {"deco": "Deco mesh", "hub": "Home Hub", "adguard": "AdGuard Home"}
+
+
+class PollingIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+
+
+@router.get("/integrations")
+async def integrations(request: Request) -> dict:
+    """Each integration's poll state, for the Overview and the DNS page."""
+    st = request.app.state
+    out = {}
+    for key, label in _INTEGRATIONS.items():
+        svc = getattr(st, key, None)
+        if svc is not None:
+            out[key] = {"label": label, "state": svc.state(), "paused": svc.paused}
+    return out
+
+
+@router.post("/integrations/{name}/polling")
+async def set_polling(
+    name: Literal["deco", "hub", "adguard"], body: PollingIn, request: Request
+) -> dict:
+    svc = getattr(request.app.state, name, None)
+    if svc is None or not svc.configured:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "set it up in Admin first")
+    await asyncio.to_thread(svc.set_polling, body.enabled)
+    if body.enabled:
+        svc.kick()
+    await security_event(
+        request, "info", f"{_INTEGRATIONS[name]} polling turned {'on' if body.enabled else 'off'}"
+    )
+    return svc.status()

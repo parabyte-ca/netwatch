@@ -15,10 +15,11 @@ const targets: Target[] = [
 
 let events: TimelineEvent[] = [];
 
-function mockApi(status: StatusResponse, ev: TimelineEvent[] = []) {
+function mockApi(status: StatusResponse, ev: TimelineEvent[] = [], integrations: unknown = {}) {
   events = ev;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = String(input);
+    if (url === '/api/admin/integrations') return new Response(JSON.stringify(integrations), { status: 200 });
     const body = url.startsWith('/api/status') ? status : url.startsWith('/api/events') ? events : targets;
     return new Response(JSON.stringify(body), { status: 200 });
   });
@@ -42,6 +43,18 @@ describe('Overview', () => {
     expect(screen.getByRole('region', { name: 'Gateway' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Internet' })).toBeInTheDocument();
     expect(await screen.findByText('4.50 ms')).toBeInTheDocument();
+  });
+
+  it('says when an integration is set up but not polling', async () => {
+    mockApi({ now_ms: 10_000, targets: [] }, [], {
+      deco: { label: 'Deco mesh', state: 'not_polling', paused: null },
+      hub: { label: 'Home Hub', state: 'ok', paused: null },
+      adguard: { label: 'AdGuard Home', state: 'not_polling', paused: null },
+    });
+    render(<MemoryRouter><Overview /></MemoryRouter>);
+    const note = await screen.findByRole('status');
+    expect(note).toHaveTextContent('Deco mesh and AdGuard Home are set up but not polling, so their data is missing.');
+    expect(screen.getByRole('link', { name: 'Turn on polling in Admin' })).toHaveAttribute('href', '/admin');
   });
 
   it('calls out targets that are down', async () => {

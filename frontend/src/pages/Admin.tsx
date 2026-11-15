@@ -3,6 +3,7 @@ import { EventRow } from '../components/EventRow';
 import { api, type AdGuardStatus, type AssistantStatus, type DecoStatus, type DecoTestResult, type HubStatus, type SettingField, type SettingsResponse } from '../lib/api';
 import { fmtAgo, fmtBytes, fmtDurationMs, fmtTime } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
+import { NotPolling } from '../components/NotPolling';
 
 const btn = 'rounded-md px-3 py-1.5 text-sm font-medium disabled:opacity-50';
 const input =
@@ -398,7 +399,7 @@ function AdGuardCard() {
     setPort(String(d.port || 80));
     setHttps(d.https);
     setUsername(d.username);
-    setEnabled(d.enabled);
+    setEnabled(d.password_set ? d.enabled : true); // new set-ups poll unless unticked
   };
   useEffect(() => {
     api.adguard().then(apply, (e) => setError(err(e)));
@@ -520,7 +521,7 @@ function HubCard() {
   const apply = (d: HubStatus) => {
     setSt(d);
     setHost(d.host || d.suggestion || '');
-    setEnabled(d.enabled);
+    setEnabled(d.password_set ? d.enabled : true); // new set-ups poll unless unticked
   };
   useEffect(() => {
     api.hub().then(apply, (e) => setError(err(e)));
@@ -637,7 +638,7 @@ function DecoCard() {
   const apply = (d: DecoStatus) => {
     setSt(d);
     setHost(d.host);
-    setEnabled(d.enabled);
+    setEnabled(d.password_set ? d.enabled : true); // new set-ups poll unless unticked
   };
   useEffect(() => {
     api.deco().then(apply, (e) => setError(err(e)));
@@ -735,17 +736,6 @@ function DecoCard() {
         </p>
       </div>
     </Card>
-  );
-}
-
-/** Saved but polling unticked: say what that costs, with a one-click fix. */
-function NotPolling({ state, needs, busy, onEnable }: { state?: string; needs: string; busy: boolean; onEnable: () => void }) {
-  if (state !== 'not_polling') return null;
-  return (
-    <div className="flex flex-wrap items-center gap-2 rounded-md bg-amber-950/40 p-2 text-xs text-amber-200 ring-1 ring-amber-900">
-      <span className="flex-1">Saved, but not polling. {needs} need polling on.</span>
-      <button className={`${btn} bg-amber-600 text-white hover:bg-amber-500`} disabled={busy} onClick={onEnable}>Turn on polling and save</button>
-    </div>
   );
 }
 
