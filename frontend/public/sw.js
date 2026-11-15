@@ -3,11 +3,17 @@
 const VERSION = 'v1';
 const SHELL = `netwatch-shell-${VERSION}`;
 const ASSETS = `netwatch-assets-${VERSION}`;
+// Small files the page shell shows (logo) or the browser asks for (manifest, icons).
+const STATIC = ['/favicon.svg', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
 const MAX_ASSETS = 80; // old versions' files are dropped, oldest first
 
 self.addEventListener('install', (event) => {
   // Keep the page that is open on the old version; the new one takes over on the next launch.
-  event.waitUntil(caches.open(SHELL).then((c) => c.add(new Request('/', { cache: 'reload' }))));
+  event.waitUntil(
+    caches
+      .open(SHELL)
+      .then((c) => c.addAll([new Request('/', { cache: 'reload' }), ...STATIC.map((u) => new Request(u, { cache: 'reload' }))])),
+  );
 });
 
 self.addEventListener('activate', (event) => {
@@ -38,6 +44,22 @@ self.addEventListener('fetch', (event) => {
           return res;
         })
         .catch(() => caches.match('/', { cacheName: SHELL }).then((r) => r || Response.error())),
+    );
+    return;
+  }
+
+  if (STATIC.includes(url.pathname)) {
+    // Fresh when online, the saved copy when not.
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(SHELL).then((c) => c.put(url.pathname, copy));
+          }
+          return res;
+        })
+        .catch(() => caches.match(url.pathname, { cacheName: SHELL }).then((r) => r || Response.error())),
     );
     return;
   }

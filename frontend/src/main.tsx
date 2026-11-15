@@ -4,7 +4,10 @@ import { BrowserRouter } from 'react-router-dom';
 import { App } from './App';
 import { AuthGate } from './components/AuthGate';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { listenForInstallPrompt } from './components/InstallButton';
 import './index.css';
+
+listenForInstallPrompt();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

@@ -109,11 +109,11 @@ export function Layout() {
                   {n.label}
                 </NavLink>
               ))}
+              <InstallButton className="block w-full rounded-md px-3 py-2.5 text-left text-base text-sky-400 hover:bg-slate-800/60" />
             </nav>
             <div className="mt-3 flex items-center justify-between border-t border-slate-800 pt-3 text-sm text-slate-400">
               <span className="truncate">{status}</span>
               <span className="flex shrink-0 items-center gap-4">
-                <InstallButton className="text-sky-400 hover:text-sky-300" />
                 <span>{username}</span>
                 <button onClick={() => void logout()} className="text-slate-300 hover:text-white">
                   Sign out

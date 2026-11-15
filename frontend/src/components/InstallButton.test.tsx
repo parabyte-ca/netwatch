@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { InstallButton, isIos } from './InstallButton';
+import { InstallButton, isIos, listenForInstallPrompt, resetInstallPrompt } from './InstallButton';
 
 afterEach(() => {
+  act(() => resetInstallPrompt());
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -30,6 +31,16 @@ describe('InstallButton', () => {
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Install app' })));
     expect(e.prompt).toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'Install app' })).not.toBeInTheDocument();
+  });
+
+  it('keeps an offer made before the button was drawn, for every button', () => {
+    listenForInstallPrompt(); // as main.tsx does at startup
+    const e = installPrompt('dismissed');
+    act(() => {
+      window.dispatchEvent(e);
+    });
+    render(<><InstallButton /><InstallButton /></>);
+    expect(screen.getAllByRole('button', { name: 'Install app' })).toHaveLength(2);
   });
 
   it('is hidden when already running as an installed app', () => {

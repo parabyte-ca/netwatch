@@ -18,40 +18,64 @@ export function isIos(ua = navigator.userAgent, touch = navigator.maxTouchPoints
   return /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && touch > 1);
 }
 
+// The browser offers installing once, often before the app has signed in and drawn its menu, so
+// the offer is kept here for every Install button (desktop header and phone menu alike).
+let offer: InstallPromptEvent | null = null;
+let installedNow = false;
+const subscribers = new Set<() => void>();
+const notify = () => subscribers.forEach((f) => f());
+let listening = false;
+
+/** Called once at startup (main.tsx), before React draws anything. */
+export function listenForInstallPrompt(): void {
+  if (listening) return;
+  listening = true;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    offer = e as InstallPromptEvent;
+    notify();
+  });
+  window.addEventListener('appinstalled', () => {
+    installedNow = true;
+    offer = null;
+    notify();
+  });
+}
+
+/** For tests: forget a kept offer. */
+export function resetInstallPrompt(): void {
+  offer = null;
+  installedNow = false;
+  notify();
+}
+
 /** "Install app" next to Sign out: hidden when installed or when the browser can't install. */
 export function InstallButton({ className = '' }: { className?: string }) {
-  const [prompt, setPrompt] = useState<InstallPromptEvent | null>(null);
-  const [installed, setInstalled] = useState(isStandalone);
+  const [, rerender] = useState(0);
   const [help, setHelp] = useState(false);
 
   useEffect(() => {
-    const onPrompt = (e: Event) => {
-      e.preventDefault();
-      setPrompt(e as InstallPromptEvent);
-    };
-    const onInstalled = () => {
-      setInstalled(true);
-      setPrompt(null);
-    };
-    window.addEventListener('beforeinstallprompt', onPrompt);
-    window.addEventListener('appinstalled', onInstalled);
+    listenForInstallPrompt();
+    const f = () => rerender((n) => n + 1);
+    subscribers.add(f);
     return () => {
-      window.removeEventListener('beforeinstallprompt', onPrompt);
-      window.removeEventListener('appinstalled', onInstalled);
+      subscribers.delete(f);
     };
   }, []);
 
-  if (installed) return null;
-  if (prompt) {
+  if (installedNow || isStandalone()) return null;
+  if (offer) {
+    const current = offer;
     return (
       <button
         type="button"
         className={className}
         onClick={async () => {
-          await prompt.prompt();
-          const { outcome } = await prompt.userChoice;
-          if (outcome === 'accepted') setInstalled(true);
-          setPrompt(null);
+          await current.prompt();
+          const { outcome } = await current.userChoice;
+          if (outcome === 'accepted') installedNow = true;
+          offer = null; // a prompt can only be shown once
+          notify();
         }}
       >
         Install app
