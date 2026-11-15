@@ -69,7 +69,8 @@ function TimeChart({ data, lines, height, yMax, unit, testId }: {
     const el = ref.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const end = Math.floor(Date.now() / 1000);
-    const few = data.series.length < 3;
+    // Few readings (just turned on, or mostly gaps): show dots, since a lone bucket draws no line.
+    const few = data.series.filter((p) => p.queries != null).length < 30;
     const axis = { stroke: '#94a3b8', grid: { stroke: '#1e293b' }, ticks: { stroke: '#334155' } };
     const plot = new uPlot(
       {
@@ -77,7 +78,7 @@ function TimeChart({ data, lines, height, yMax, unit, testId }: {
         height,
         scales: { x: { time: true, range: () => [end - data.hours * 3600, end] }, y: { range: (_u, _min, max) => [0, yMax(max ?? 0)] } },
         axes: [axis, { ...axis, size: 60, values: (_u, vals) => vals.map(unit) }],
-        series: [{}, ...lines.map((l) => ({ label: l.label, stroke: l.stroke, fill: l.fill, width: 1.5, points: { show: few, size: 6 }, value: (_u: uPlot, v: number | null) => l.fmt(v) }))],
+        series: [{}, ...lines.map((l) => ({ label: l.label, stroke: l.stroke, fill: l.fill, width: 1.5, points: { show: few, size: 4 }, value: (_u: uPlot, v: number | null) => l.fmt(v) }))],
       },
       [data.series.map((p) => p.ts_ms / 1000), ...lines.map((l) => l.values)],
       el,
@@ -196,7 +197,7 @@ export function Dns() {
           </div>
 
           <Section title="Response time and block rate">
-            {data.series.length ? <Charts data={data} /> : <p className="text-sm text-slate-400">No readings in this period yet.</p>}
+            {data.series.some((p) => p.queries != null) ? <Charts data={data} /> : <p className="text-sm text-slate-400">No readings in this period yet.</p>}
           </Section>
 
           <Section title="Controls">

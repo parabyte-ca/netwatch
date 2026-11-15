@@ -166,6 +166,45 @@ class AdGuardStore:
             ).rowcount
 
 
+def bucket_s_for(hours: int) -> int:
+    """Chart resolution: 5 min for 6 h, 15 min for 24 h, 1 hour for 7 days."""
+    return 300 if hours <= 6 else 900 if hours <= 24 else 3600
+
+
+def bucket_series(rows: list[dict], start_ms: int, end_ms: int, bucket_s: int) -> list[dict]:
+    """Minute readings grouped into fixed buckets, every bucket present.
+
+    A bucket with no reading at all (polling off, NetWatch down) is all None, so the chart
+    shows a gap instead of a line across it. Response times are weighted by queries, so a busy
+    minute counts more than a quiet one; the block rate is blocked / queries for the bucket.
+    """
+    step = bucket_s * 1000
+    first = start_ms - start_ms % step
+    acc: dict[int, list[dict]] = {}
+    for r in rows:
+        acc.setdefault(r["ts_ms"] - r["ts_ms"] % step, []).append(r)
+    out = []
+    for b in range(first, end_ms + 1, step):
+        rs = acc.get(b)
+        if not rs:
+            out.append({"ts_ms": b, "reachable": None, "queries": None, "blocked": None,
+                        "avg_ms": None, "p95_ms": None})  # fmt: skip
+            continue
+        ok = [r for r in rs if r["reachable"]]
+        q = sum(r["queries"] or 0 for r in ok)
+        bl = sum(r["blocked"] or 0 for r in ok)
+
+        def weighted(key: str, rows_: list[dict] = ok) -> float | None:
+            pts = [(r[key], max(1, r["queries"] or 0)) for r in rows_ if r[key] is not None]
+            w = sum(n for _, n in pts)
+            return round(sum(v * n for v, n in pts) / w, 1) if w else None
+
+        out.append({"ts_ms": b, "reachable": bool(ok), "queries": q if ok else None,
+                    "blocked": bl if ok else None, "avg_ms": weighted("avg_ms"),
+                    "p95_ms": weighted("p95_ms")})  # fmt: skip
+    return out
+
+
 class AdGuardService:
     def __init__(
         self,
@@ -812,10 +851,7 @@ class AdGuardService:
         """Series, block rate, per-upstream health and top clients for the DNS page."""
         end = int(time.time() * 1000)
         rows = self.adguard_store.history(end - hours * 3_600_000, end + 1)
-        series = [
-            {k: r[k] for k in ("ts_ms", "reachable", "queries", "blocked", "avg_ms", "p95_ms")}
-            for r in rows
-        ]
+        series = bucket_series(rows, end - hours * 3_600_000, end, bucket_s_for(hours))
         ok = [r for r in rows if r["reachable"]]
         queries = sum(r["queries"] or 0 for r in ok)
         blocked = sum(r["blocked"] or 0 for r in ok)
@@ -850,6 +886,7 @@ class AdGuardService:
         return {
             **self.status(),
             "hours": hours,
+            "bucket_s": bucket_s_for(hours),
             "series": series,
             "queries": queries,
             "blocked_pct": round(100 * blocked / queries, 1) if queries else None,
