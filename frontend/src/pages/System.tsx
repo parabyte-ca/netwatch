@@ -3,6 +3,7 @@ import { useAuth } from '../components/AuthGate';
 import { api, type BumpKind, type Release, type UpdateMode, type UpdateSummary } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { UpdateProgress } from '../components/UpdateProgress';
+import { IntegrationHealthCard } from '../components/IntegrationHealth';
 import { RECENT_MS, parseTs, writePending } from '../lib/updateProgress';
 
 const MODE_LABEL: Record<UpdateMode, string> = {
@@ -150,6 +151,9 @@ export function System() {
   return (
     <div className="space-y-5">
       <h1 className="text-xl font-semibold text-white">System</h1>
+      <Card title="Integration health">
+        <IntegrationHealthCard />
+      </Card>
       {upgraded && (
         <p role="status" className="rounded-md bg-emerald-950/60 px-3 py-2 text-sm text-emerald-200">
           Updated to v{data.current}. Reloading…
