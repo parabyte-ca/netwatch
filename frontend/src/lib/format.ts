@@ -110,6 +110,7 @@ export const EVENT_LABEL: Record<string, string> = {
   dns: 'DNS',
   presence: "Who's home",
   speed: 'Speed',
+  integration: 'Integrations',
 };
 
 export const DEVICE_TYPE_LABEL: Record<string, string> = {

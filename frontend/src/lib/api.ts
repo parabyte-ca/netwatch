@@ -195,7 +195,8 @@ export type EventKind =
   | 'exposure'
   | 'dns'
   | 'presence'
-  | 'speed';
+  | 'speed'
+  | 'integration';
 
 export interface TimelineEvent {
   id: number;
@@ -386,6 +387,19 @@ export interface DeviceRow {
   label: string;
   online: boolean;
   macs: string[];
+}
+
+export type HealthState = 'stale' | 'paused' | 'waiting' | 'not_polling' | 'ok' | 'off';
+
+export interface IntegrationRow {
+  key: string;
+  label: string;
+  state: HealthState;
+  detail: string;
+  error: string | null;
+  last_ok_ms: number | null;
+  reads_24h: { ok: number; total: number } | null;
+  fix: { action: string; label: string; anchor?: string } | null;
 }
 
 export interface SpeedPoint {
@@ -1308,6 +1322,7 @@ export const api = {
   groupsExportUrl: '/api/device-groups/export',
   importGroups: (data: unknown) =>
     request<{ groups_created: number; devices: number; unknown_macs: string[] }>('/api/device-groups/import', post(data)),
+  integrationHealth: () => request<{ rows: IntegrationRow[]; problems: number }>('/api/admin/integrations/health'),
   speedPlan: (days = 90) => request<SpeedPlanView>(`/api/speed-plan?days=${days}`),
   people: () => request<PeopleList>('/api/people'),
   createPerson: (body: { name: string; colour: string; device_ids: number[] }) => request<Person>('/api/people', post(body)),

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { ActiveNow } from '../components/Schedules';
 import { HomeNow } from '../components/People';
+import { IntegrationProblems } from '../components/IntegrationHealth';
 import { Link } from 'react-router-dom';
 import { EventRow } from '../components/EventRow';
 import { StatusBadge } from '../components/StatusBadge';
@@ -166,6 +167,7 @@ export function Overview() {
       </section>
 
       <NotPollingHint states={integrations.data} />
+      <IntegrationProblems />
       <HomeNow />
       <ActiveNow />
 

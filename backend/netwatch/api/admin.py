@@ -651,6 +651,12 @@ async def integrations(request: Request) -> dict:
     return out
 
 
+@router.get("/integrations/health")
+async def integration_health(request: Request) -> dict:
+    """Every feed NetWatch relies on: reading or not, last good read, last error, the fix."""
+    return await asyncio.to_thread(request.app.state.integration_health.view)
+
+
 @router.post("/integrations/{name}/polling")
 async def set_polling(
     name: Literal["deco", "hub", "adguard"], body: PollingIn, request: Request

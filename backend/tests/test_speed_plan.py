@@ -123,11 +123,13 @@ class CountingLoad(HttpLoad):
 
     async def __call__(self, direction, seconds, counter=None):
         counter = counter if counter is not None else [0]
-        start = time.monotonic()
-        while (elapsed := time.monotonic() - start) < seconds:
-            await asyncio.sleep(0.05)
-            rate = 1e6 if elapsed < 1.0 else 12.5e6  # bytes per second
-            counter[0] += int(rate * 0.05)
+        start = last = time.monotonic()
+        while (now := time.monotonic()) - start < seconds:
+            # Bytes follow real elapsed time, so a busy test machine cannot skew the rate.
+            rate = 1e6 if now - start < 1.0 else 12.5e6  # bytes per second
+            counter[0] += int(rate * (now - last))
+            last = now
+            await asyncio.sleep(0.02)
         return counter[0]
 
 

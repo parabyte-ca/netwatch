@@ -34,9 +34,10 @@ EXPOSURE = "exposure"  # new open services and port forwards found by the exposu
 DNS = "dns"  # AdGuard Home: unreachable, protection off, upstreams failing, errors, new clients
 PRESENCE = "presence"  # who's home: arrivals and departures (information only, never quieted)
 SPEED = "speed"  # nightly speed tests well under the internet plan
+INTEGRATION = "integration"  # a feed NetWatch relies on (Deco, Hub, AdGuard, capture...) stopped
 KINDS = (
     OUTAGE, LOSS, NIC_LINK, NIC_SPEED, NIC_ERRORS, MONITOR, ANOMALY, DEVICE, SECURITY, WIFI, HUB,
-    EXPOSURE, DNS, PRESENCE, SPEED,
+    EXPOSURE, DNS, PRESENCE, SPEED, INTEGRATION,
 )  # fmt: skip
 
 

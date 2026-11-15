@@ -47,9 +47,11 @@ from .services.adguard.actions import AdGuardActions
 from .services.adguard.clients import ClientStore as AdGuardClientStore
 from .services.adguard.profiles import ProfileSync
 from .services.adguard.schedules import ScheduleStore
+from .services.adguard.service import POLL_S as ADGUARD_POLL_S
 from .services.adguard.service import AdGuardService, AdGuardStore
 from .services.assistant import Assistant
 from .services.bufferbloat import BufferbloatStore, BufferbloatTester
+from .services.deco.service import POLL_S as DECO_POLL_S
 from .services.deco.service import DecoService
 from .services.device_groups import GroupStore
 from .services.diagnosis import Diagnoser
@@ -59,7 +61,9 @@ from .services.events import MONITOR, SECURITY, EventLog, IncidentRecorder, star
 from .services.exposure import ExposureScanner, ExposureStore
 from .services.group_stats import group_stats
 from .services.health import HealthService
+from .services.hub.service import POLL_S as HUB_POLL_S
 from .services.hub.service import HubService, HubStore
+from .services.integration_health import IntegrationHealth, Poller
 from .services.metrics import Metrics
 from .services.netinfo import default_route
 from .services.netmap import NetMap
@@ -435,6 +439,7 @@ def create_app(
         app.state.restart = _restart_process
         app.state.updates = UpdateManager(settings, store, client=update_client)
         await asyncio.to_thread(app.state.auth.purge_sessions)
+        app.state.integration_health = _integration_health(app, settings, store, events)
 
         recorder.start()
         await monitor.start()
@@ -447,6 +452,7 @@ def create_app(
         app.state.adguard.start()
         app.state.adguard_profiles.start()
         app.state.presence.start()
+        app.state.integration_health.start()
         app.state.bufferbloat.start_schedule(
             enabled=lambda: settings.bufferbloat_nightly,
             window=lambda: app.state.updates.policy().get("window", settings.auto_update_window),
@@ -473,6 +479,7 @@ def create_app(
             await app.state.adguard.stop()
             await app.state.adguard_profiles.stop()
             await app.state.presence.stop()
+            await app.state.integration_health.stop()
             await app.state.bufferbloat.stop()
             await app.state.exposure.stop()
             await app.state.health.stop()
@@ -592,6 +599,59 @@ def create_app(
 def _restart_process(delay_s: float = 1.0) -> None:
     """Stop gracefully after the response is sent; Docker's restart policy starts us again."""
     asyncio.get_running_loop().call_later(delay_s, os.kill, os.getpid(), signal.SIGTERM)
+
+
+def _integration_health(app: FastAPI, settings: Settings, store, events) -> IntegrationHealth:
+    """Wire every feed NetWatch relies on into one health view (System page)."""
+    st = app.state
+
+    def last_runs(rows: list[dict]) -> dict:
+        sched = [r for r in rows if r.get("trigger") == "scheduled"]
+        ok = [r for r in sched if r.get("status") == "ok"]
+        latest = sched[0] if sched else None
+        return {
+            "last_ms": latest["ts_ms"] if latest else None,
+            "last_ok_ms": ok[0]["ts_ms"] if ok else None,
+            "last_error": latest.get("error") if latest and latest.get("status") != "ok" else None,
+        }
+
+    def nightly() -> list[dict]:
+        return [
+            {"key": "bufferbloat", "label": "Nightly load and speed test",
+             "enabled": settings.bufferbloat_nightly,
+             **last_runs(st.bufferbloat_store.list(30))},
+            {"key": "exposure", "label": "Nightly exposure scan",
+             "enabled": settings.exposure_scan_nightly,
+             **last_runs(st.exposure_store.scans(30))},
+        ]  # fmt: skip
+
+    def weekly() -> int | None:
+        rows = st.health.list(1)
+        return rows[0].get("created_ms") if rows else None
+
+    def helper() -> dict:
+        folder = st.updates.folder
+        if folder is None:
+            return {"installed": False}
+        agent = folder.agent()
+        return {"installed": agent is not None, "connected": folder.helper_connected(time.time())}
+
+    pollers = [
+        Poller("deco", "Deco mesh", st.deco, DECO_POLL_S, "deco"),
+        Poller("hub", "Home Hub", st.hub, HUB_POLL_S, "hub"),
+        Poller("adguard", "AdGuard Home", st.adguard, ADGUARD_POLL_S, "adguard"),
+    ]
+    return IntegrationHealth(
+        pollers,
+        events,
+        store.kv_get,
+        store.kv_set,
+        capture=lambda: st.discovery.status()["passive"],
+        nic=st.nic.status,
+        nightly=nightly,
+        weekly=weekly,
+        helper=helper,
+    )
 
 
 def _mount_spa(app: FastAPI, static_dir: Path) -> None:

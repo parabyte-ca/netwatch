@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.23.0] - 2026-11-15
+### Added
+- Integration health on the System page: one row per feed NetWatch relies on (Deco, Home Hub,
+  AdGuard Home, packet capture, the host network port, the nightly load test and exposure scan,
+  the weekly report and the update helper) with its state (OK, starting, stopped, paused,
+  polling off, not set up), last good read, successful reads in the last 24 h, the last error
+  and the fix that applies: turn on polling, open the settings, run now or write the report now.
+- The Overview shows one line when a feed has stopped or is paused, with a link to the card.
+- A feed stopped for 30 minutes opens an information event of the new kind "Integrations"
+  ("AdGuard Home has stopped working"), shown on the timeline by default and closed when the
+  feed reads again. `GET /api/admin/integrations/health`.
+
+### Changed
+- The Wi-Fi coverage floor plan is off the roadmap: the Deco API reports no per-device signal,
+  only the signal between Decos.
+
 ## [0.22.0] - 2026-11-15
 ### Added
 - Speed against your plan: plan download and upload speeds and a "slower than" threshold under
