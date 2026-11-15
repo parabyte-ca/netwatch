@@ -44,6 +44,7 @@ from .probes import Prober
 from .services.adguard.actions import AdGuardActions
 from .services.adguard.clients import ClientStore as AdGuardClientStore
 from .services.adguard.profiles import ProfileSync
+from .services.adguard.schedules import ScheduleStore
 from .services.adguard.service import AdGuardService, AdGuardStore
 from .services.assistant import Assistant
 from .services.bufferbloat import BufferbloatStore, BufferbloatTester
@@ -348,8 +349,12 @@ def create_app(
             app.state.adguard, settings, gateway_ip=lambda: discovery.gateway_ip()
         )
         app.state.adguard.actions = app.state.adguard_actions
+        app.state.adguard_schedules = ScheduleStore(store, settings.tz)
         app.state.adguard_profiles = ProfileSync(
-            app.state.adguard_actions, discovery.inventory, app.state.groups
+            app.state.adguard_actions,
+            discovery.inventory,
+            app.state.groups,
+            schedules=app.state.adguard_schedules,
         )
         app.state.groups.on_change = app.state.adguard_profiles.mark_dirty
         app.state.deco = DecoService(
