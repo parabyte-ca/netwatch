@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import ipaddress
 import logging
 import secrets
@@ -79,6 +80,14 @@ async def dns_lookup(resolver: str, name: str, rdtype: str = "A") -> tuple[str, 
     return "ok", sorted(set(out))
 
 
+MOBILE_TYPES = frozenset({"phone", "tablet", "laptop"})
+
+
+def is_mobile(d: dict) -> bool:
+    """Devices that roam and sleep their Wi-Fi, so rejoining and new addresses are normal."""
+    return bool(d.get("randomised")) or d.get("type") in MOBILE_TYPES
+
+
 class DiscoveryService:
     def __init__(
         self,
@@ -112,6 +121,7 @@ class DiscoveryService:
             kv_get=store.kv_get,
             kv_set=store.kv_set,
             storm_pps=settings.arp_storm_pps,
+            profile=self._churn_profile,
         )
         self.counts: Counter[str] = Counter()
         self._last_neigh_ms = 0
@@ -283,6 +293,10 @@ class DiscoveryService:
             for ip, mac, dev in parse_proc_arp(text, self.iface)
         ]
 
+    def _churn_profile(self, mac: str) -> dict | None:
+        d = self.devices.get_by_mac(mac)
+        return {"mobile": is_mobile(d), "last_ip": d.get("last_ip")} if d else None
+
     async def _handle_change(self, ch: Change) -> None:
         d = ch.device
         now = int(time.time() * 1000)
@@ -305,7 +319,17 @@ class DiscoveryService:
             label = device_label(fresh)
             new_ip = fresh["last_ip"]
             await asyncio.to_thread(
-                self.anomalies.ip_changed, fresh["mac"], label, ch.old_ip or "", new_ip or "", now
+                functools.partial(
+                    self.anomalies.ip_changed,
+                    fresh["mac"],
+                    label,
+                    ch.old_ip or "",
+                    new_ip or "",
+                    now,
+                    group=str(fresh.get("merged_into") or fresh["id"]),
+                    mobile=is_mobile(fresh),
+                    first_seen_ms=fresh.get("first_seen_ms") if fresh.get("merged_into") else None,
+                )
             )
             primary = fresh
             if fresh.get("merged_into"):
