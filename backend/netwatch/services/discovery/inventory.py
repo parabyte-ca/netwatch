@@ -105,6 +105,28 @@ class DeviceStore:
         with self.engine.connect() as conn:
             return [dict(r._mapping) for r in conn.execute(stmt)]
 
+    def repair_escaped_names(self) -> int:
+        """Decode names stored before 0.18.3 with mDNS escapes (``Theresa\\226\\128\\153s``)."""
+        from .packets import decode_dns_escapes
+
+        def fix(v):
+            return decode_dns_escapes(v) if isinstance(v, str) and "\\" in v else v
+
+        fixed = 0
+        for d in self.all():
+            upd: dict = {}
+            for col in ("name", "hostname", "mdns_name"):
+                if fix(d.get(col)) != d.get(col):
+                    upd[col] = fix(d[col])[:64]
+            old = d.get("details") or {}
+            det = {k: fix(v) for k, v in old.items()}
+            if det != old:
+                upd["details"] = det
+            if upd:
+                self.update(d["id"], upd)
+                fixed += 1
+        return fixed
+
     def all(self) -> list[dict]:
         with self.engine.connect() as conn:
             return [_row(r) for r in conn.execute(select(devices).order_by(devices.c.id))]

@@ -224,3 +224,35 @@ def test_scan_networks_only_private_and_small():
     assert [str(n) for n in nets] == ["192.168.2.0/24"]
     assert any("not a private" in n for n in notes)
     assert any("10.0.0.0/8" in n and "skipped" in n for n in notes)
+
+
+Q = chr(0x2019)  # right single quote, as in iPhone names
+
+
+def test_mdns_escapes_are_decoded_in_names():
+    from netwatch.services.discovery.packets import clean_name, decode_dns_escapes
+
+    assert decode_dns_escapes(r"Theresa\226\128\153s iPhone") == f"Theresa{Q}s iPhone"
+    assert decode_dns_escapes(r"Living\032Room") == "Living Room"
+    assert decode_dns_escapes(r"a\.b") == "a.b"
+    assert decode_dns_escapes("plain name") == "plain name"
+    assert clean_name(r"Sam\226\128\153s iPad") == f"Sam{Q}s iPad"
+    assert "�" in decode_dns_escapes(r"bad\255byte")  # not UTF-8: replaced, never raises
+
+
+def test_names_stored_with_escapes_are_repaired_once(store):
+    from netwatch.services.discovery.inventory import DeviceStore
+
+    devs = DeviceStore(store.engine)
+    i = devs.insert({"mac": "aa:00:00:00:00:01", "first_seen_ms": 0, "last_seen_ms": 0,
+                     "hostname": r"Theresa\226\128\153s-iPhone",
+                     "details": {"adguard_name": r"Theresa\226\128\153s iPhone",
+                                 "n": 3}})  # fmt: skip
+    devs.insert(
+        {"mac": "aa:00:00:00:00:02", "first_seen_ms": 0, "last_seen_ms": 0, "hostname": "tv"}
+    )
+    assert devs.repair_escaped_names() == 1
+    d = devs.get(i)
+    assert d["hostname"] == f"Theresa{Q}s-iPhone"
+    assert d["details"] == {"adguard_name": f"Theresa{Q}s iPhone", "n": 3}
+    assert devs.repair_escaped_names() == 0  # idempotent

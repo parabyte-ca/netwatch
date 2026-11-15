@@ -191,6 +191,9 @@ class DiscoveryService:
         if self.iface:
             self.local = await asyncio.to_thread(iface_ipv4, self.iface)
         now = int(time.time() * 1000)
+        fixed = await asyncio.to_thread(self.inventory.store.repair_escaped_names)
+        if fixed:
+            log.info("decoded escaped names on %d device(s)", fixed)
         if await asyncio.to_thread(self.store.kv_get, LEARNING_KEY, None) is None:
             await asyncio.to_thread(self.store.kv_set, LEARNING_KEY, now + LEARNING_MS)
         if self.settings.discovery_passive and self.iface:

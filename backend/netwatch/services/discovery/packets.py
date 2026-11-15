@@ -7,6 +7,7 @@ without needing a raw socket.
 from __future__ import annotations
 
 import ipaddress
+import re
 import secrets
 import socket
 import struct
@@ -163,11 +164,38 @@ def _dhcp_options(data: bytes) -> dict[int, bytes]:
     return opts
 
 
+_DNS_ESCAPE = re.compile(r"\\(\d{3}|[^\d])")
+
+
+def decode_dns_escapes(s: str) -> str:
+    r"""DNS-SD / mDNS escapes as text.
+
+    ``\226\128\153`` (decimal bytes, UTF-8) becomes a right single quote, ``\032`` a space and
+    ``\.`` a dot. Names without a backslash come back unchanged.
+    """
+    if "\\" not in s:
+        return s
+    out = bytearray()
+    pos = 0
+    for m in _DNS_ESCAPE.finditer(s):
+        out += s[pos : m.start()].encode("utf-8")
+        tok = m.group(1)
+        if tok.isdigit():
+            n = int(tok)
+            out += bytes([n]) if n < 256 else m.group(0).encode()
+        else:
+            out += tok.encode("utf-8")
+        pos = m.end()
+    out += s[pos:].encode("utf-8")
+    return out.decode("utf-8", "replace")
+
+
 def clean_name(raw: bytes | str | None, limit: int = 63) -> str | None:
     """A printable, trimmed device/host name, or None."""
     if raw is None:
         return None
     s = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+    s = decode_dns_escapes(s)
     s = "".join(ch for ch in s if ch.isprintable()).strip().strip("\x00").strip(".")
     return s[:limit] or None
 
@@ -308,7 +336,7 @@ def _service_type(name: str) -> str:
 
 def _instance_label(name: str) -> str:
     label = name.rstrip(".").split("._", 1)[0]
-    return clean_name(label.replace("\\032", " ")) or label
+    return clean_name(label) or label
 
 
 def parse_ssdp(

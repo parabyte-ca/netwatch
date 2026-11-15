@@ -16,6 +16,8 @@ from typing import Any
 
 import httpx
 
+from ..discovery.packets import decode_dns_escapes
+
 SECRET_KEY = re.compile(r"pass|secret|token|credential|key", re.I)
 MAX_PAGE = 500  # entries per query-log request (AdGuard caps it too)
 MAC_RE = re.compile(r"^([0-9a-f]{2})[:-]?([0-9a-f]{2})[:-]?([0-9a-f]{2})[:-]?"
@@ -61,7 +63,7 @@ def id_kind(raw: str) -> str:
 
 
 def _name(raw: Any) -> str | None:
-    return str(raw or "").strip()[:63] or None
+    return decode_dns_escapes(str(raw or "")).strip()[:63] or None
 
 
 def parse_time(raw: Any) -> datetime | None:
