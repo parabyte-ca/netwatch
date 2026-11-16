@@ -15,9 +15,10 @@ import contextlib
 import logging
 import re
 import time
+from urllib.parse import urlsplit
 
 from ..events import DNS
-from .actions import ActionError
+from .actions import ActionError, ActionsDisabled, clean_domain
 from .client import norm_mac
 from .schedules import describe_effects, overlay
 
@@ -37,7 +38,10 @@ _SERVICE_ID = re.compile(r"^[a-z0-9_]{1,64}$")
 PREFIX = "NetWatch: "
 SYNC_S = 15  # how soon a group change reaches AdGuard Home
 FULL_SYNC_S = 300  # also re-check everything this often (drift)
-SCHEDULE_RULES_KEY = "adguard_schedule_rules"  # the $client lines NetWatch added for "internet off"
+SCHEDULE_RULES_KEY = "adguard_schedule_rules"  # NetWatch's own $client lines (internet off, allow)
+ALLOW_KEY = "adguard_allow"  # {"device:12" | "group:3": [domains always allowed]}
+MAX_ALLOW = 50  # domains per device or group
+MAX_ALLOW_LINES = 500
 _ENGINES = ("bing", "duckduckgo", "ecosia", "google", "pixabay", "yandex", "youtube")
 
 
@@ -152,10 +156,19 @@ def _differs(cur: dict, want: dict) -> bool:
     return False
 
 
+def _esc_client(client: str) -> str:
+    return "".join("\\" + c if c in "\\'\",|" else c for c in client)
+
+
 def internet_off_rule(client: str) -> str:
     """Block every lookup for one AdGuard Home client, ahead of allow rules ($important)."""
-    esc = "".join("\\" + c if c in "\\'\",|" else c for c in client)
-    return f"||*^$client='{esc}',important"
+    return f"||*^$client='{_esc_client(client)}',important"
+
+
+def client_allow_rule(client: str, domain: str) -> str:
+    """Always allow a domain (and its subdomains) for one client. Not $important, so an
+    "internet off" schedule still wins over it."""
+    return f"@@||{domain}^$client='{_esc_client(client)}'"
 
 
 def client_name(label: str) -> str:
@@ -192,6 +205,54 @@ class ProfileSync:
                 if not is_default(s):
                     out[kind][str(k)] = s
         return out
+
+    def allow_lists(self) -> dict[str, list[str]]:
+        """Always-allowed domains per device and group: {"device:12": [...], "group:3": [...]}."""
+        a = self.store.kv_get(ALLOW_KEY, None) or {}
+        if not isinstance(a, dict):
+            return {}
+        return {
+            str(k): sorted({str(d) for d in v})[:MAX_ALLOW]
+            for k, v in a.items()
+            if isinstance(v, list) and v and re.fullmatch(r"(device|group):\d+", str(k))
+        }
+
+    def check_domains(self, raw: list) -> list[str]:
+        cfg = self.actions.service.config()
+        refused = {str(cfg.get("host", "")).lower(), str(self.actions.gateway_ip() or "").lower()}
+        out = set()
+        for d in raw or []:
+            d = str(d).strip()
+            if "://" in d or "/" in d:  # a pasted address: keep the host
+                d = urlsplit(d if "://" in d else f"//{d}").hostname or d
+            c = clean_domain(d)
+            if c in refused:
+                raise ActionError(f"{c} is the address of AdGuard Home or the gateway")
+            out.add(c)
+        if len(out) > MAX_ALLOW:
+            raise ActionError(f"at most {MAX_ALLOW} always-allowed domains each")
+        return sorted(out)
+
+    def _save_allow(self, key: str, domains: list[str]) -> None:
+        a = self.allow_lists()
+        if domains:
+            a[key] = domains
+        else:
+            a.pop(key, None)
+        if sum(len(v) for v in a.values()) > MAX_ALLOW_LINES:
+            raise ActionError(f"at most {MAX_ALLOW_LINES} always-allowed domains in total")
+        self.store.kv_set(ALLOW_KEY, a)
+
+    async def set_allow(self, kind: str, target_id: int, domains: list) -> dict:
+        if not self.actions.enabled():  # nothing is saved that could not be applied
+            raise ActionsDisabled("AdGuard Home actions are turned off (Admin settings)")
+        clean = self.check_domains(domains)
+        if kind == "device":
+            target_id = (await asyncio.to_thread(self.groups.primaries, [target_id]))[0]
+        elif await asyncio.to_thread(self.groups.get, target_id) is None:
+            raise ActionError("no such group")
+        await asyncio.to_thread(self._save_allow, f"{kind}:{target_id}", clean)
+        return await self.reconcile()
 
     def tracked(self) -> dict[str, str]:
         t = self.store.kv_get(TRACKED_KEY, None) or {}
@@ -233,7 +294,8 @@ class ProfileSync:
     def has_work(self) -> bool:
         p = self.profiles()
         scheduled = bool(self.schedules and (self.schedules.list() or self.schedules.active()))
-        return bool(p["devices"] or p["groups"] or self.tracked() or scheduled or self._events)
+        return bool(p["devices"] or p["groups"] or self.tracked() or scheduled or self._events
+                    or self.allow_lists())  # fmt: skip
 
     def active_signature(self) -> tuple:
         """What schedules are in force now; a change means AdGuard Home needs updating."""
@@ -258,6 +320,14 @@ class ProfileSync:
                   "groups": {str(k): v for k, v in grp.items()}}  # fmt: skip
         if pruned != p:
             self.store.kv_set(PROFILES_KEY, pruned)
+        allow = self.allow_lists()
+        live_allow = {k: v for k, v in allow.items()
+                      if (k.startswith("device:") and int(k[7:]) in ids)
+                      or (k.startswith("group:") and int(k[6:]) in groups)}  # fmt: skip
+        if live_allow != allow:
+            self.store.kv_set(ALLOW_KEY, live_allow)
+        allow_d = {int(k[7:]) for k in live_allow if k.startswith("device:")}
+        allow_g = {int(k[6:]) for k in live_allow if k.startswith("group:")}
         # Schedules: their targets need a client even with default settings; deleted groups
         # and devices take their schedules with them.
         sched_g: set[int] = set()
@@ -278,10 +348,11 @@ class ProfileSync:
                 effects.setdefault(k, []).append(a["effects"])
                 names.setdefault(k, []).append(a["name"])
         out: dict[str, dict] = {}
-        for gid in set(grp) | (sched_g & set(groups)):
+        for gid in set(grp) | (sched_g & set(groups)) | allow_g:
             g = groups[gid]
             out[f"group:{gid}"] = {"name": client_name(g["name"]), "label": g["name"],
                                    "base": grp.get(gid) or normalize_settings({}),
+                                   "allow": live_allow.get(f"group:{gid}", []),
                                    "fx": effects.get(("group", gid), []),
                                    "active": names.get(("group", gid), []),
                                    "devices": []}  # fmt: skip
@@ -293,12 +364,17 @@ class ProfileSync:
             entry = {"id": d["id"], "label": d["label"], "macs": list(d["macs"]),
                      "ips": [ip] if ip and ":" not in ip else []}  # fmt: skip
             gid = d.get("group_id")
-            if d["id"] in dev or d["id"] in sched_d:
+            if d["id"] in dev or d["id"] in sched_d or d["id"] in allow_d:
                 # Its own client: its own settings, else its group's; its group's schedules too.
                 out[f"device:{d['id']}"] = {
                     "name": client_name(d["label"]),
                     "label": d["label"],
                     "base": dev.get(d["id"]) or grp.get(gid) or normalize_settings({}),
+                    # Exceptions add up: the group's plus the device's own.
+                    "allow": sorted(
+                        set(live_allow.get(f"group:{gid}", []))
+                        | set(live_allow.get(f"device:{d['id']}", []))
+                    ),
                     "fx": effects.get(("device", d["id"]), []) + effects.get(("group", gid), []),
                     "active": names.get(("device", d["id"]), []) + names.get(("group", gid), []),
                     "devices": [entry],
@@ -410,9 +486,12 @@ class ProfileSync:
                 tracked[key] = body["name"]
                 await asyncio.to_thread(self.store.kv_set, TRACKED_KEY, tracked)
             await asyncio.to_thread(self.store.kv_set, TRACKED_KEY, tracked)
-            # 3. "Internet off": one $client rule per client while a schedule says so.
+            # 3. NetWatch's own $client rules: "internet off" while a schedule says so, and the
+            # always-allowed domains of each client.
             lines = sorted({internet_off_rule(want[k]["name"]) for k, d in desired.items()
-                            if d["internet_off"] and k in want})  # fmt: skip
+                            if d["internet_off"] and k in want}
+                           | {client_allow_rule(want[k]["name"], dom) for k, d in desired.items()
+                              if k in want for dom in d.get("allow", [])})  # fmt: skip
             changes += await self._sync_lines(client, lines, list(lines_had or []))
             await asyncio.to_thread(self._schedule_events, desired)
             self.conflicts, self.error = conflicts, None
@@ -429,8 +508,14 @@ class ProfileSync:
         if new != current:
             await self.actions._call(client.set_user_rules(new))
         await asyncio.to_thread(self.store.kv_set, SCHEDULE_RULES_KEY, list(want))
-        added = [{"action": "internet off", "client": r} for r in want if r not in had]
-        return added + [{"action": "internet back on", "client": r} for r in had if r not in want]
+
+        def label(r: str, on: bool) -> str:
+            if r.startswith("@@"):
+                return "allowed" if on else "exception removed"
+            return "internet off" if on else "internet back on"
+
+        added = [{"action": label(r, True), "client": r} for r in want if r not in had]
+        return added + [{"action": label(r, False), "client": r} for r in had if r not in want]
 
     def _schedule_events(self, desired: dict) -> None:
         """One information event per schedule on a group or device, recorded with its planned
@@ -486,6 +571,7 @@ class ProfileSync:
     def state(self) -> dict:
         return {
             "profiles": self.profiles(),
+            "allow": self.allow_lists(),
             "clients": self.tracked(),
             "conflicts": self.conflicts,
             "last_sync_ms": self.last_sync_ms,

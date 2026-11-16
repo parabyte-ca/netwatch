@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.24.0] - 2026-11-16
+### Added
+- **Always allowed** domains per device and per group, in the device's AdGuard Home settings and
+  the group's dialog. Subdomains are included, a pasted address keeps its host, and AdGuard Home's
+  or the gateway's address is refused; up to 50 each. A device gets its group's exceptions plus
+  its own, and adding one never drops its group's filtering. Each is an
+  `@@||domain^$client='NetWatch: …'` rule among NetWatch's own lines; internet off schedules still
+  win. Every change is confirmed and written to the security log.
+- On a device's DNS card, **Allow here** next to a blocked domain fills in the device's exception
+  (beside **Allow for all**, the global rule). The DNS page counts each client's exceptions.
+- Ask NetWatch reads AdGuard Home: overview, per-device and per-group settings with exceptions and
+  conflicts, schedules, a device's DNS lookups, plus integration health, speed against your plan
+  and who's home. Its instructions explain how settings, schedules and exceptions combine, so it
+  can answer "why is this site blocked on Sam's phone?".
+- **Ask NetWatch: DNS lookups per device** (Admin settings, Integrations, on by default): off
+  keeps per-device domain lists out of what is sent to Anthropic.
+- `PUT /api/adguard/actions/profiles/{device|group}/{id}/allow`.
+
 ## [0.23.1] - 2026-11-16
 ### Fixed
 - Per-device and per-group AdGuard Home settings now reach devices when AdGuard Home is not your

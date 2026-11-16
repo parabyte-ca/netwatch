@@ -143,3 +143,65 @@ def test_key_test_and_api_errors(client):
         json={"enabled": True, "model": "claude-opus-5-5", "effort": "medium", "forget_key": True},
     )
     assert r.json()["key_set"] is False
+
+
+def _adguard(client):
+    import time
+
+    from tests.test_adguard import HOST, PASSWORD, PORT, USER, FakeAdGuard, client_for
+
+    st = client.app.state
+    fake = FakeAdGuard()
+    st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
+    st.adguard.save(HOST, PORT, False, USER, True, PASSWORD)
+    client.put("/api/admin/settings", json={"changes": {"adguard_actions": True}})
+    now = int(time.time() * 1000)
+    phone = st.device_store.insert({"mac": "00:11:22:00:00:31", "first_seen_ms": 0,
+                                    "last_seen_ms": now, "name": "Sam's phone"})  # fmt: skip
+    st.discovery.inventory.forget()
+    client.put(
+        f"/api/adguard/actions/profiles/device/{phone}/allow", json={"domains": ["school.ca"]}
+    )
+    return phone, PASSWORD
+
+
+def test_explains_a_block_with_the_adguard_tools(client):
+    phone, password = _adguard(client)
+    fake = setup(client, [
+        reply([block("tool_use", id="t1", name="adguard_settings", input={}),
+               block("tool_use", id="t2", name="adguard_schedules", input={}),
+               block("tool_use", id="t3", name="device_dns", input={"device_id": phone})],
+              stop="tool_use"),
+        reply([block("tool_use", id="t4", name="adguard_overview", input={"hours": 6}),
+               block("tool_use", id="t5", name="integration_health", input={}),
+               block("tool_use", id="t6", name="speed_vs_plan", input={}),
+               block("tool_use", id="t7", name="whos_home", input={})], stop="tool_use"),
+        reply([block("text", text="example.com is on a blocklist; school.ca is always allowed.")]),
+    ])  # fmt: skip
+    r = client.post("/api/ask", json={"messages": [{"role": "user", "content": "Why blocked?"}]})
+    assert r.status_code == 200, r.text
+    assert r.json()["tools"] == ["adguard_settings", "adguard_schedules", "device_dns",
+                                 "adguard_overview", "integration_health", "speed_vs_plan",
+                                 "whos_home"]  # fmt: skip
+    first = fake.requests[0]
+    assert "AdGuard Home" in str(first["system"])  # the prompt explains the integration
+    results = (
+        fake.requests[1]["messages"][-1]["content"] + fake.requests[2]["messages"][-1]["content"]
+    )
+    assert all(not x.get("is_error") for x in results), [x for x in results if x.get("is_error")]
+    settings = results[0]["content"]
+    assert "school.ca" in settings and "services_all" not in settings
+    assert all(password not in x["content"] for x in results)  # never the AdGuard password
+
+
+def test_dns_lookups_switch_keeps_domain_lists_from_the_assistant(client):
+    phone, _ = _adguard(client)
+    client.put("/api/admin/settings", json={"changes": {"assistant_dns_details": False}})
+    fake = setup(client, [
+        reply([block("tool_use", id="t1", name="device_dns", input={"device_id": phone})],
+              stop="tool_use"),
+        reply([block("text", text="I can't see that device's lookups.")]),
+    ])  # fmt: skip
+    client.post("/api/ask", json={"messages": [{"role": "user", "content": "What did it visit?"}]})
+    res = fake.requests[1]["messages"][-1]["content"][0]
+    assert res["is_error"] and "turned off" in res["content"]

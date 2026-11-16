@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AdGuardProfiles } from '../lib/api';
-import { DeviceProfile, GroupProfileButton, ProfileList, describe as describeSettings } from './AdGuardProfile';
+import { DeviceProfile, GroupProfileButton, ProfileList, describe as describeSettings, hostOf } from './AdGuardProfile';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -87,5 +87,45 @@ describe('AdGuard Home settings', () => {
     expect(list).toHaveTextContent('NetWatch: KidsStrict, YouTube Restricted Mode, also blocks TikTok');
     expect(within(list).getByRole('link', { name: "Sam's iPad" })).toHaveAttribute('href', '/devices/5');
     expect(list).toHaveTextContent('Living room TV is already in your AdGuard Home client "My TV"');
+  });
+});
+
+describe('always-allowed domains', () => {
+  it('turns a pasted address into its site', () => {
+    expect(hostOf(' https://Classroom.Google.com/u/0 ')).toBe('classroom.google.com');
+    expect(hostOf('school.ca/login')).toBe('school.ca');
+    expect(hostOf('school.ca')).toBe('school.ca');
+  });
+
+  it("adds an exception for one device, showing its group's exceptions", async () => {
+    const calls = mock(state({ allow: { 'group:3': ['khanacademy.org'], 'device:5': ['school.ca'] } }));
+    render(<MemoryRouter><DeviceProfile d={{ id: 5, label: "Sam's iPad", group: { id: 3, name: 'Kids' } }} /></MemoryRouter>);
+    const box = await screen.findByLabelText('Always allowed');
+    expect(within(box).getByText('school.ca')).toBeInTheDocument();
+    expect(within(box).getByText('khanacademy.org')).toBeInTheDocument();
+    expect(within(box).getByText('from Kids')).toBeInTheDocument();
+    fireEvent.change(within(box).getByLabelText("Always allow for Sam's iPad"), { target: { value: 'classroom.google.com' } });
+    fireEvent.click(within(box).getByRole('button', { name: 'Allow' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('Internet off schedules still apply.');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Allow' }));
+    await waitFor(() => expect(calls).toContainEqual({
+      url: '/api/adguard/actions/profiles/device/5/allow', method: 'PUT', body: { domains: ['school.ca', 'classroom.google.com'] },
+    }));
+  });
+
+  it("removes one and fills in a domain from the device's DNS card", async () => {
+    const calls = mock(state({ allow: { 'device:5': ['school.ca', 'b.ca'] } }));
+    render(<MemoryRouter><DeviceProfile d={{ id: 5, label: 'iPad', group: null }} /></MemoryRouter>);
+    const box = await screen.findByLabelText('Always allowed');
+    window.dispatchEvent(new CustomEvent('netwatch:allow-domain', { detail: { deviceId: 5, domain: 'cdn.school.ca' } }));
+    await waitFor(() => expect(within(box).getByLabelText('Always allow for iPad')).toHaveValue('cdn.school.ca'));
+    window.dispatchEvent(new CustomEvent('netwatch:allow-domain', { detail: { deviceId: 6, domain: 'other.ca' } }));
+    expect(within(box).getByLabelText('Always allow for iPad')).toHaveValue('cdn.school.ca'); // another device's
+    fireEvent.click(within(box).getByRole('button', { name: 'Remove b.ca' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(calls).toContainEqual({
+      url: '/api/adguard/actions/profiles/device/5/allow', method: 'PUT', body: { domains: ['school.ca'] },
+    }));
   });
 });

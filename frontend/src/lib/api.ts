@@ -832,11 +832,13 @@ export interface AdGuardSettings {
 
 export interface AdGuardProfiles {
   profiles: { devices: Record<string, AdGuardSettings>; groups: Record<string, AdGuardSettings> };
+  /** always-allowed domains: {"device:12": [...], "group:3": [...]} */
+  allow?: Record<string, string[]>;
   clients: Record<string, string>;
   conflicts: { device_id: number | null; label: string; mac: string | null; client: string; profile: AdGuardSettings }[];
   last_sync_ms: number | null;
   error: string | null;
-  managed: { key: string; name: string; profile: AdGuardSettings; label: string; devices: { id: number; label: string }[] }[];
+  managed: { key: string; name: string; profile: AdGuardSettings; allow?: string[]; label: string; devices: { id: number; label: string }[] }[];
   services_all: { id: string; name: string }[];
 }
 
@@ -1386,6 +1388,8 @@ export const api = {
   internetBackOn: (id: string) => request<{ state: SchedulesState }>(`/api/adguard/actions/schedules/now/${id}`, { method: 'DELETE' }),
   setDeviceProfile: (id: number, settings: AdGuardSettings) =>
     request<unknown>(`/api/adguard/actions/profiles/device/${id}`, { method: 'PUT', body: JSON.stringify(settings) }),
+  setAllowed: (kind: 'device' | 'group', id: number, domains: string[]) =>
+    request<{ allow: string[] }>(`/api/adguard/actions/profiles/${kind}/${id}/allow`, { method: 'PUT', body: JSON.stringify({ domains }) }),
   setGroupProfile: (id: number, settings: AdGuardSettings) =>
     request<unknown>(`/api/adguard/actions/profiles/group/${id}`, { method: 'PUT', body: JSON.stringify(settings) }),
   adguardReserve: (mac: string, ip: string, hostname?: string) =>

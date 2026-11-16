@@ -45,7 +45,21 @@ home network. NetWatch pings and probes targets (the Home Hub, Deco mesh units, 
 DNS resolvers), keeps an event timeline, diagnoses incidents layer by layer (TrueNAS link, \
 switch, Home Hub, Deco mesh, Bell network, internet), discovers devices, measures per-device \
 bandwidth through the Deco API, grades latency under load (bufferbloat), reads the Bell Home Hub \
-4000 (fibre signal, uptime, port forwards) and scans for exposed services.
+4000 (fibre signal, uptime, port forwards) and scans for exposed services. It also reads \
+AdGuard Home, the home's DNS filter (queries, block rate, upstream health, per-device lookups), \
+and, when AdGuard Home actions are on, keeps a persistent AdGuard Home client named "NetWatch: \
+<name>" for each group or device with its own settings: filtering (default, no blocking or \
+strict), YouTube (restricted, blocked or allowed), apps to block, schedules (internet off, \
+YouTube off, apps, strict) and always-allowed domains. A device's own settings replace its \
+group's; always-allowed domains add up (group plus device); an "internet off" schedule wins \
+over always-allowed domains. A device not matched to its NetWatch client (for example one in \
+the user's own AdGuard Home client, listed as a conflict) gets AdGuard Home's global settings. \
+NetWatch also tracks who is home, speed tests against the internet plan, and whether each \
+integration is still reading.
+
+To explain why something is blocked or restricted for a device: look up the device, then its \
+AdGuard Home settings, active schedules and always-allowed domains (adguard_settings, \
+adguard_schedules), then its DNS lookups (device_dns) for blocked domains.
 
 Answer the user's question about their network using the tools: look things up rather than \
 guessing, and say so when the data does not cover the question. Lead with the answer, then the \
@@ -53,7 +67,9 @@ evidence (times, durations, which targets failed and which stayed healthy). When
 wrong, say what to check or change, and whether it looks like the Bell line, the home network \
 or one device. Times from the tools are epoch milliseconds unless labelled; give times in the \
 user's local time zone. Keep answers short and plain; use a short list when it helps. The tools \
-only read data; you cannot change settings, restart anything or run tests."""
+only read data; you cannot change settings, restart anything or run tests. When something \
+should change, say where in NetWatch to do it (for example the device's page, AdGuard Home \
+settings, Always allowed)."""
 
 
 @dataclass(frozen=True)
@@ -64,6 +80,7 @@ class Tool:
     build: Callable[[dict], list[tuple[str, dict]]]  # input -> [(path, params)]
     shape: Callable[[list[Any]], Any] = lambda rs: rs[0] if len(rs) == 1 else rs
     required: tuple[str, ...] = ()
+    dns_details: bool = False  # reads per-device DNS lookups (Admin switch)
 
     def schema(self) -> dict:
         return {
@@ -122,6 +139,21 @@ def _report(rs: list[Any]) -> dict:
 def _devices(rs: list[Any]) -> list[dict]:
     keep = ("id", "label", "type", "vendor", "last_ip", "online", "last_seen_ms", "macs")
     return [{k: d.get(k) for k in keep} for d in rs[0]["devices"]][:300]
+
+
+def _adguard_overview(rs: list[Any]) -> dict:
+    status, summary = rs
+    keep = ("enabled", "state", "error", "last_ok_ms", "paused", "status", "latest", "dhcp")
+    return {"connection": {k: status.get(k) for k in keep}, "last_hours": summary}
+
+
+def _adguard_settings(rs: list[Any]) -> dict:
+    profiles, actions = rs
+    p = dict(profiles)
+    catalogue = {x["id"]: x["name"] for x in p.pop("services_all", None) or []}
+    used = {s for c in p.get("managed", []) for s in c.get("profile", {}).get("services", [])}
+    p["app_names"] = {k: v for k, v in catalogue.items() if k in used}
+    return {"per_device_and_group": p, "netwatch_actions": actions}
 
 
 def _line(rs: list[Any]) -> dict:
@@ -238,6 +270,71 @@ TOOLS: tuple[Tool, ...] = (
         {},
         lambda i: [("/api/path-tests", {"limit": 10})],
     ),
+    Tool(
+        "adguard_overview",
+        "AdGuard Home (the DNS filter): connection and protection state, DHCP, and over the last "
+        "N hours the queries, block rate, upstream DNS health and top clients.",
+        {"hours": {"type": "integer", "description": "1-168, default 24."}},
+        lambda i: [
+            ("/api/admin/adguard", {}),
+            ("/api/adguard", {"hours": max(1, min(int(i.get("hours") or 24), 168))}),
+        ],
+        _adguard_overview,
+    ),
+    Tool(
+        "adguard_settings",
+        "Per-group and per-device AdGuard Home settings NetWatch manages: filtering, YouTube, "
+        "blocked apps, always-allowed domains, the NetWatch clients with their devices, "
+        "conflicts and the last sync; plus NetWatch's global allow and block rules and any "
+        "protection pause. Fails with 403 when AdGuard Home actions are turned off.",
+        {},
+        lambda i: [("/api/adguard/actions/profiles", {}), ("/api/adguard/actions", {})],
+        _adguard_settings,
+    ),
+    Tool(
+        "adguard_schedules",
+        "AdGuard Home schedules per group or device (internet off, YouTube off, apps, strict): "
+        "which are on now, the next start and end, and exceptions.",
+        {},
+        lambda i: [("/api/adguard/actions/schedules", {})],
+    ),
+    Tool(
+        "device_dns",
+        "One device's DNS lookups from AdGuard Home: queries per hour, share blocked, top domains "
+        "and top blocked domains. Needs the device id (find it with devices).",
+        {
+            "device_id": {"type": "integer"},
+            "hours": {"type": "integer", "description": "24 or 168."},
+        },
+        lambda i: [
+            (
+                f"/api/devices/{int(i['device_id'])}/dns",
+                {"hours": 168 if int(i.get("hours") or 24) > 24 else 24},
+            )
+        ],
+        required=("device_id",),
+        dns_details=True,
+    ),
+    Tool(
+        "integration_health",
+        "Whether each feed NetWatch relies on is reading (Deco, Home Hub, AdGuard Home, packet "
+        "capture, host network port, nightly tests, weekly report, update helper), with errors.",
+        {},
+        lambda i: [("/api/admin/integrations/health", {})],
+    ),
+    Tool(
+        "speed_vs_plan",
+        "Nightly speed tests as a share of the internet plan's speeds: last result, 30-day "
+        "medians and the 90-day series.",
+        {},
+        lambda i: [("/api/speed-plan", {"days": 90})],
+    ),
+    Tool(
+        "whos_home",
+        "Who is home: each person, their devices, home or away and since when.",
+        {},
+        lambda i: [("/api/people", {})],
+    ),
 )
 BY_NAME = {t.name: t for t in TOOLS}
 
@@ -349,6 +446,13 @@ class Assistant:
         tool = BY_NAME.get(name)
         if tool is None:
             return f"unknown tool {name}", True
+        settings = getattr(self.app.state, "settings", None)
+        if tool.dns_details and not getattr(settings, "assistant_dns_details", True):
+            return (
+                "Per-device DNS lookups are turned off for Ask NetWatch (Admin settings, "
+                "Integrations). Say so, and answer from the other tools.",
+                True,
+            )
         try:
             calls = tool.build(args or {})
         except (KeyError, TypeError, ValueError) as exc:
