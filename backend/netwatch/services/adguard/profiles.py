@@ -286,7 +286,12 @@ class ProfileSync:
                                    "active": names.get(("group", gid), []),
                                    "devices": []}  # fmt: skip
         for d in rows:
-            entry = {"id": d["id"], "label": d["label"], "macs": list(d["macs"])}
+            # Its current address too: AdGuard Home can only match a MAC when it is the DHCP
+            # server, so with the Home Hub handing out addresses (or a private Wi-Fi address)
+            # the MAC alone leaves the device on the global settings.
+            ip = d.get("last_ip") if d.get("online") else None
+            entry = {"id": d["id"], "label": d["label"], "macs": list(d["macs"]),
+                     "ips": [ip] if ip and ":" not in ip else []}  # fmt: skip
             gid = d.get("group_id")
             if d["id"] in dev or d["id"] in sched_d:
                 # Its own client: its own settings, else its group's; its group's schedules too.
@@ -338,6 +343,13 @@ class ProfileSync:
 
             conflicts: list[dict] = []
             want: dict[str, dict] = {}
+            # An address may be in one client only: skip any that two devices report (a stale
+            # lease) or that one of the user's own clients already lists.
+            ip_count: dict[str, int] = {}
+            for d in desired.values():
+                for dev in d["devices"]:
+                    for ip in dev.get("ips", []):
+                        ip_count[ip] = ip_count.get(ip, 0) + 1
             for key, d in desired.items():
                 macs: list[str] = []
                 for dev in d["devices"]:
@@ -348,6 +360,8 @@ class ProfileSync:
                                           "profile": d["profile"]})  # fmt: skip
                         continue
                     macs.extend(dev["macs"])
+                    macs.extend(ip for ip in dev.get("ips", [])
+                                if ip not in foreign and ip_count.get(ip) == 1)  # fmt: skip
                 if d["name"] in by_name and d["name"] not in ours:
                     conflicts.append({"device_id": None, "label": d["label"], "mac": None,
                                       "client": d["name"], "profile": d["profile"]})  # fmt: skip
