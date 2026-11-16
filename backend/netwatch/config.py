@@ -105,6 +105,8 @@ class Settings(BaseSettings):
     exposure_scan_nightly: bool = True
     # Lets NetWatch change AdGuard Home (pause protection, allow/block domains, switch upstream).
     adguard_actions: bool = False
+    # Ask NetWatch may read per-device DNS lookups (domain names go to Anthropic with a question).
+    assistant_dns_details: bool = True
 
     @property
     def discovery_subnet_list(self) -> list[str]:
