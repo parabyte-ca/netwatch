@@ -346,6 +346,7 @@ async def profiles(request: Request) -> dict:
             "key": key,
             "name": d["name"],
             "profile": d["profile"],
+            "allow": d.get("allow", []),
             "label": d["label"],
             "devices": [
                 {"id": x["id"], "label": x["label"]}
@@ -396,6 +397,49 @@ async def set_device_profile(device_id: int, body: SettingsIn, request: Request)
 @router.put("/profiles/group/{group_id}")
 async def set_group_profile(group_id: int, body: SettingsIn, request: Request) -> dict:
     return await _set(request, "group", group_id, body)
+
+
+class AllowIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    domains: list[str] = Field(default_factory=list, max_length=50)
+
+
+async def _set_allow(request: Request, kind: str, target_id: int, body: AllowIn) -> dict:
+    p = _profiles(request)
+    if kind == "device":
+        dev = await asyncio.to_thread(request.app.state.device_store.get, target_id)
+        if dev is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such device")
+        what = device_label(dev)[:60]
+        key_id = (await asyncio.to_thread(request.app.state.groups.primaries, [target_id]))[0]
+    else:
+        g = await asyncio.to_thread(request.app.state.groups.get, target_id)
+        if g is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such group")
+        what, key_id = f"the group {g['name']}", target_id
+    before = set((await asyncio.to_thread(p.allow_lists)).get(f"{kind}:{key_id}", []))
+    r = await _run(request, f"change always-allowed domains for {what}",
+                   p.set_allow(kind, target_id, body.domains))  # fmt: skip
+    after = set((await asyncio.to_thread(p.allow_lists)).get(f"{kind}:{key_id}", []))
+    for dom in sorted(after - before):
+        await security_event(request, "info", f"AdGuard Home: always allowed {dom} for {what}",
+                             {"action": "adguard_allow", "kind": kind, "id": target_id,
+                              "domain": dom})  # fmt: skip
+    for dom in sorted(before - after):
+        await security_event(request, "info", f"AdGuard Home: {dom} no longer always allowed "
+                             f"for {what}", {"action": "adguard_allow_removed", "kind": kind,
+                                             "id": target_id, "domain": dom})  # fmt: skip
+    return {**r, "allow": sorted(after), "state": p.state()}
+
+
+@router.put("/profiles/device/{device_id}/allow")
+async def set_device_allow(device_id: int, body: AllowIn, request: Request) -> dict:
+    return await _set_allow(request, "device", device_id, body)
+
+
+@router.put("/profiles/group/{group_id}/allow")
+async def set_group_allow(group_id: int, body: AllowIn, request: Request) -> dict:
+    return await _set_allow(request, "group", group_id, body)
 
 
 # ── schedules ───────────────────────────────────────────────────────────────

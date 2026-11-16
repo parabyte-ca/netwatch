@@ -1724,3 +1724,134 @@ def test_youtube_allowed_turns_off_restricted_mode_from_global_safe_search():
         assert c["safesearch"]["enabled"] and c["safesearch"]["google"]  # other engines stay
     c = client_body("NetWatch: Phone", {"youtube": "default"}, [], g)
     assert c["safesearch"]["youtube"] is True
+
+
+# ── always-allowed domains per device and group (v0.24) ──────────────────────
+
+
+def test_client_allow_rule_escapes_the_client_name():
+    from netwatch.services.adguard.profiles import client_allow_rule
+
+    assert client_allow_rule("NetWatch: Sam's iPad", "school.ca") == (
+        "@@||school.ca^$client='NetWatch: Sam\\'s iPad'"
+    )
+
+
+async def test_exceptions_keep_the_group_settings_and_add_up(sprof):
+    from netwatch.services.adguard.profiles import client_allow_rule, internet_off_rule
+
+    p = sprof
+    kids = p.gs.create("Kids", "rose", "child")["id"]
+    laptop = _dev(p, "00:11:22:00:00:03", "School laptop")
+    ipad = _dev(p, "00:11:22:00:00:01", "Sam's iPad")
+    p.gs.assign([laptop, ipad], kids)
+    await p.set_group(kids, "strict")
+    await p.set_allow("group", kids, ["Khanacademy.org"])
+    r = await p.set_allow("device", laptop, ["school.ca", "https://classroom.google.com/x"])
+    assert {"action": "added", "client": "NetWatch: School laptop"} in r["changes"]
+    cs = _clients(p)
+    own = cs["NetWatch: School laptop"]
+    # An exception alone does not drop the group's Strict filtering.
+    assert own["filtering_enabled"] and own["parental_enabled"] and own["safesearch"]["youtube"]
+    assert "00:11:22:00:00:03" not in cs["NetWatch: Kids"]["ids"]
+    rules = p.fake.user_rules
+    assert client_allow_rule("NetWatch: School laptop", "school.ca") in rules
+    assert client_allow_rule("NetWatch: School laptop", "classroom.google.com") in rules
+    assert client_allow_rule("NetWatch: School laptop", "khanacademy.org") in rules  # from Kids
+    assert client_allow_rule("NetWatch: Kids", "khanacademy.org") in rules
+    assert rules[:2] == ["||doubleclick.net^", "# my own rule"]  # the user's own rules stay
+    # Removing the device's exceptions drops only its own lines; the device keeps the group's.
+    r = await p.set_allow("device", laptop, [])
+    assert {
+        "action": "exception removed",
+        "client": client_allow_rule("NetWatch: School laptop", "school.ca"),
+    } in r["changes"]
+    assert client_allow_rule("NetWatch: School laptop", "school.ca") not in p.fake.user_rules
+    assert client_allow_rule("NetWatch: Kids", "khanacademy.org") in p.fake.user_rules
+    assert "00:11:22:00:00:03" in _clients(p)["NetWatch: Kids"]["ids"]
+    assert internet_off_rule("NetWatch: Kids") not in p.fake.user_rules
+
+
+async def test_exception_rules_validated(sprof):
+    from netwatch.services.adguard.actions import ActionError
+
+    p = sprof
+    tv = _dev(p, "00:11:22:00:00:04", "TV")
+    for bad, msg in (("192.168.2.10", "not an address"), ("not a domain", "plain domain name")):
+        with pytest.raises(ActionError, match=msg):
+            await p.set_allow("device", tv, [bad])
+    cfg = p.actions.service.config
+    p.actions.service.config = lambda: {**cfg(), "host": "adguard.home.arpa"}
+    with pytest.raises(ActionError, match="AdGuard Home or the gateway"):
+        await p.set_allow("device", tv, ["adguard.home.arpa"])
+    p.actions.service.config = cfg
+    with pytest.raises(ActionError, match="at most 50"):
+        await p.set_allow("device", tv, [f"site{i}.ca" for i in range(51)])
+    with pytest.raises(ActionError, match="no such group"):
+        await p.set_allow("group", 999, ["a.ca"])
+
+
+async def test_exceptions_go_with_a_deleted_device(sprof):
+    p = sprof
+    tv = _dev(p, "00:11:22:00:00:05", "TV")
+    await p.set_allow("device", tv, ["netflix.com"])
+    assert p.allow_lists() == {f"device:{tv}": ["netflix.com"]}
+    from sqlalchemy import delete
+
+    from netwatch.db import devices
+
+    with p.devs.engine.begin() as conn:
+        conn.execute(delete(devices).where(devices.c.id == tv))
+    p.inventory.forget()
+    await p.reconcile()
+    assert p.allow_lists() == {} and not any("netflix" in r for r in p.fake.user_rules)
+
+
+async def test_internet_off_still_wins_over_an_exception(sprof):
+    from netwatch.services.adguard.profiles import client_allow_rule, internet_off_rule
+
+    p = sprof
+    tv = _dev(p, "00:11:22:00:00:06", "Kids TV")
+    await p.set_allow("device", tv, ["youtube.com"])
+    p.schedules.manual_on({"kind": "device", "id": tv}, 30, "admin")
+    await p.reconcile()
+    rules = p.fake.user_rules
+    allow = client_allow_rule("NetWatch: Kids TV", "youtube.com")
+    off = internet_off_rule("NetWatch: Kids TV")
+    # Both lines are there; AdGuard Home applies the $important block ahead of the allow rule.
+    assert allow in rules and off in rules
+    assert off.endswith(",important") and not allow.endswith("important")
+
+
+def test_allow_api_guards_and_security_log(client):
+    from netwatch.services.events import SECURITY
+
+    st = client.app.state
+    fake = FakeAdGuard()
+    st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
+    st.adguard.save(HOST, PORT, False, USER, True, PASSWORD)
+    now = int(time.time() * 1000)
+    ipad = st.device_store.insert({"mac": "00:11:22:00:00:01", "first_seen_ms": 0,
+                                   "last_seen_ms": now, "name": "Sam's iPad"})  # fmt: skip
+    url = f"/api/adguard/actions/profiles/device/{ipad}/allow"
+    assert client.put(url, json={"domains": ["school.ca"]}).status_code == 403  # actions off
+    client.put("/api/admin/settings", json={"changes": {"adguard_actions": True}})
+    st.discovery.inventory.forget()
+    assert client.put(url, json={"domains": ["school.ca"]},
+                      headers={"X-Requested-With": ""}).status_code == 403  # fmt: skip
+    r = client.put(url, json={"domains": ["school.ca"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["allow"] == ["school.ca"]
+    assert "@@||school.ca^$client='NetWatch: Sam\\'s iPad'" in fake.user_rules
+    prof = client.get("/api/adguard/actions/profiles").json()
+    assert prof["allow"] == {f"device:{ipad}": ["school.ca"]}
+    assert next(c for c in prof["managed"] if c["key"] == f"device:{ipad}")["allow"] == [
+        "school.ca"
+    ]
+    assert client.put(url, json={"domains": ["10.0.0.1"]}).status_code == 422
+    assert client.put("/api/adguard/actions/profiles/device/9999/allow",
+                      json={"domains": []}).status_code == 404  # fmt: skip
+    client.put(url, json={"domains": []})
+    log = [e["title"] for e in st.events.list(0, 10**14, kinds=[SECURITY])]
+    assert "AdGuard Home: always allowed school.ca for Sam's iPad" in log
+    assert "AdGuard Home: school.ca no longer always allowed for Sam's iPad" in log
