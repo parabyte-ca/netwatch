@@ -1855,3 +1855,31 @@ def test_allow_api_guards_and_security_log(client):
     log = [e["title"] for e in st.events.list(0, 10**14, kinds=[SECURITY])]
     assert "AdGuard Home: always allowed school.ca for Sam's iPad" in log
     assert "AdGuard Home: school.ca no longer always allowed for Sam's iPad" in log
+
+
+async def test_clients_also_list_the_current_ip_so_adguard_matches_without_its_dhcp(sprof):
+    """With the Home Hub handing out addresses, AdGuard Home cannot match a MAC; the device's
+    current IP lets it find the NetWatch client (else the global settings apply, e.g. YouTube
+    Restricted Mode from global safe search)."""
+    p = sprof
+    now = int(time.time() * 1000)
+    phone = _dev(p, "da:11:22:00:00:21", "Alan's iPhone", last_ip="192.168.2.57")
+    tablet = _dev(p, "00:11:22:00:00:22", "Old iPad", last_ip="192.168.2.58",
+                  last_seen_ms=now - 3 * 3600_000)  # offline: no address  # fmt: skip
+    a = _dev(p, "00:11:22:00:00:23", "Box A", last_ip="192.168.2.60")
+    b = _dev(p, "00:11:22:00:00:24", "Box B", last_ip="192.168.2.60")  # a stale duplicate
+    tv = _dev(p, "00:11:22:00:00:25", "Den TV", last_ip="192.168.2.20")  # the user's Office PC IP
+    for d in (phone, tablet, a, b, tv):
+        await p.set_device(d, {"youtube": "allowed"})
+    cs = _clients(p)
+    assert cs["NetWatch: Alan's iPhone"]["ids"] == ["192.168.2.57", "da:11:22:00:00:21"]
+    assert cs["NetWatch: Old iPad"]["ids"] == ["00:11:22:00:00:22"]
+    assert cs["NetWatch: Box A"]["ids"] == ["00:11:22:00:00:23"]
+    assert cs["NetWatch: Box B"]["ids"] == ["00:11:22:00:00:24"]
+    assert cs["NetWatch: Den TV"]["ids"] == ["00:11:22:00:00:25"]
+    assert cs["NetWatch: Alan's iPhone"]["safesearch"]["youtube"] is False
+    # A new address replaces the old one on the next sync.
+    p.devs.update(phone, {"last_ip": "192.168.2.61", "last_seen_ms": now})
+    p.inventory.forget()
+    await p.reconcile()
+    assert _clients(p)["NetWatch: Alan's iPhone"]["ids"] == ["192.168.2.61", "da:11:22:00:00:21"]

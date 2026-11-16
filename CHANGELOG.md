@@ -22,6 +22,16 @@ All notable changes to this project are documented here. The format follows
   keeps per-device domain lists out of what is sent to Anthropic.
 - `PUT /api/adguard/actions/profiles/{device|group}/{id}/allow`.
 
+## [0.23.1] - 2026-11-16
+### Fixed
+- Per-device and per-group AdGuard Home settings now reach devices when AdGuard Home is not your
+  DHCP server. NetWatch's clients listed only MAC addresses, which AdGuard Home can match only
+  through its own DHCP leases; with the Home Hub handing out addresses (or an iPhone's private
+  Wi-Fi address) the device fell back to the global settings, so "YouTube allowed" still showed
+  "Restricted Mode has hidden comments". Each NetWatch client now also lists its devices' current
+  IP while they are online, skipping an address two devices report or one of your own clients
+  holds. The next sync (within about 15 seconds of updating) applies it.
+
 ## [0.23.0] - 2026-11-15
 ### Added
 - Integration health on the System page: one row per feed NetWatch relies on (Deco, Home Hub,
