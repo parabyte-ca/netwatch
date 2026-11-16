@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.23.0-blue)
+![Version](https://img.shields.io/badge/version-0.24.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -156,8 +156,11 @@ per group or device (internet off at night, YouTube off during homework). See th
 - **Ask NetWatch:** ask about the network in plain language ("was the internet down this week,
   and whose fault was it?", "who is using the bandwidth?") from a chat panel on every page.
   Claude answers from NetWatch's own data through read-only tools (live status, timeline,
-  diagnosis, ISP report, devices, bandwidth, health score, exposure, the Bell line) and can't
-  change anything. Off until you save an Anthropic API key under Admin; uses Claude Opus 5.5 by
+  diagnosis, ISP report, devices, bandwidth, health score, exposure, the Bell line, AdGuard Home
+  with each device's and group's settings, schedules and always-allowed domains, integration
+  health, speed against your plan and who's home) and can't change anything. Ask "why is
+  example.com blocked on Sam's phone?" and it checks the settings, schedules, exceptions and the
+  phone's blocked lookups. Off until you save an Anthropic API key under Admin; uses Claude Opus 5.5 by
   default (Sonnet or Haiku for lower cost), limited to 40 questions an hour.
 - **Patterns:** failures that repeat at a fixed interval (e.g. every 6 h) or cluster at a time of
   day are called out, since both point at something scheduled.
@@ -411,6 +414,12 @@ AdGuard Home actions** to get a **Controls** section on the DNS page:
   device joins or leaves a group, the client follows within about 15 seconds. NetWatch only changes
   the clients it made: a device already in one of your own AdGuard Home clients is left out and
   shown on the DNS page.
+- **Always allowed (per device or group):** in a device's AdGuard Home settings (or a group's
+  dialog), add sites it may always open, such as a school site a blocklist catches; subdomains
+  are included. A device gets its group's exceptions plus its own, and adding one never changes
+  its filtering. On the device's DNS card, **Allow here** next to a blocked domain fills it in.
+  Internet off schedules still win. NetWatch adds them as `@@||site^$client='NetWatch: …'`
+  rules next to your own and removes only its own.
 - **Schedules per group or device:** for example "School nights: internet off 21:00 to 07:00,
   Sunday to Thursday" or "Homework: YouTube and games off 16:00 to 18:00 on weekdays". Set them in
   a group's AdGuard Home dialog (Devices → Groups…) or on a device's page, from a preset (School
@@ -464,6 +473,9 @@ that account), then under **Admin → Ask NetWatch** paste it, pick the model an
 **Test key** and **Save**. An **Ask NetWatch** button appears at the bottom right of every page.
 The key is encrypted like the Hub and Deco passwords. Each question sends the question and the
 data Claude looks up (target and device names and addresses, incident history) to Anthropic.
+That can include the domains a device looked up when you ask about one; turn off **Ask NetWatch:
+DNS lookups per device** (Admin settings, Integrations) to keep those out. It still sees AdGuard
+Home totals, settings, schedules and exceptions.
 
 ### Local development
 ```bash
@@ -706,6 +718,7 @@ Planned, in order (suggestions welcome):
 | Done in 0.21 | **Who's home:** pick the phones (or other devices) that belong to each person; NetWatch shows who is home from whether those devices are on the Wi-Fi, with arrival and departure times on the timeline and a "home now" list on the Overview. Phones that sleep their Wi-Fi are smoothed over (away only after a set time without being seen). Stays on the LAN: nothing is sent anywhere |
 | Done in 0.19 | **Per-group schedules:** internet off, YouTube off, apps or strict filtering on days and times for a group or device, with +15 min, +1 hour, off until it next starts, skip today and "internet off now"; confirmed and written to the security log |
 | Done in 0.20 | **Install as an app:** a home screen icon, full screen, and a clear "no connection" notice that recovers by itself; the page is kept on the device, network data never is |
+| Done in 0.24 | **Always allowed per device or group, and Ask NetWatch knows AdGuard Home:** exceptions that add up from group to device without changing filtering; Ask NetWatch reads AdGuard Home settings, schedules, exceptions and (optionally) per-device lookups |
 | Done in 0.23 | **Integration health:** every feed NetWatch relies on in one card, with the last good read, the last error and a one-click fix; a stopped feed goes on the timeline |
 | Done in 0.22 | **Speed tests against your plan:** nightly tests reported as a share of the plan's speed, with a 90-day trend |
 
