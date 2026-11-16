@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AdGuardProfiles } from '../lib/api';
-import { DeviceProfile, GroupProfileButton, ProfileList, describe as describeSettings } from './AdGuardProfile';
+import { DeviceProfile, GroupProfileButton, ProfileList, describe as describeSettings, hostOf } from './AdGuardProfile';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -91,6 +91,12 @@ describe('AdGuard Home settings', () => {
 });
 
 describe('always-allowed domains', () => {
+  it('turns a pasted address into its site', () => {
+    expect(hostOf(' https://Classroom.Google.com/u/0 ')).toBe('classroom.google.com');
+    expect(hostOf('school.ca/login')).toBe('school.ca');
+    expect(hostOf('school.ca')).toBe('school.ca');
+  });
+
   it("adds an exception for one device, showing its group's exceptions", async () => {
     const calls = mock(state({ allow: { 'group:3': ['khanacademy.org'], 'device:5': ['school.ca'] } }));
     render(<MemoryRouter><DeviceProfile d={{ id: 5, label: "Sam's iPad", group: { id: 3, name: 'Kids' } }} /></MemoryRouter>);

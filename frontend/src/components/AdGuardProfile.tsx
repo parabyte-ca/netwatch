@@ -116,6 +116,17 @@ export function SettingsEditor({ value, onChange, services, idPrefix }: {
 /** Fired by the device's DNS card ("Allow for this device") to fill in the editor below. */
 export const ALLOW_DOMAIN_EVENT = 'netwatch:allow-domain';
 
+/** A pasted address becomes its site: "https://classroom.google.com/u/0" → "classroom.google.com". */
+export function hostOf(text: string): string {
+  const t = text.trim().toLowerCase();
+  if (!t.includes('/')) return t.replace(/\.$/, '');
+  try {
+    return new URL(t.includes('://') ? t : `http://${t}`).hostname;
+  } catch {
+    return t;
+  }
+}
+
 /** "Always allowed": domains a device or group may always open, even when blocked for everyone. */
 export function AllowedDomains({ kind, id, label, own, inherited, from, ask, onChanged }: {
   kind: 'device' | 'group'; id: number; label: string; own: string[]; inherited?: string[]; from?: string;
@@ -151,7 +162,7 @@ export function AllowedDomains({ kind, id, label, own, inherited, from, ask, onC
     },
   });
   const add = () => {
-    const d = text.trim();
+    const d = hostOf(text);
     if (d && !own.includes(d)) save([...own, d], d);
   };
   const inheritedOnly = (inherited ?? []).filter((d) => !own.includes(d));
