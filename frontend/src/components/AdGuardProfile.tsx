@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, type AdGuardProfileName, type AdGuardProfiles, type AdGuardSettings, type YouTubeSetting } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
@@ -113,6 +113,77 @@ export function SettingsEditor({ value, onChange, services, idPrefix }: {
   );
 }
 
+/** Fired by the device's DNS card ("Allow for this device") to fill in the editor below. */
+export const ALLOW_DOMAIN_EVENT = 'netwatch:allow-domain';
+
+/** "Always allowed": domains a device or group may always open, even when blocked for everyone. */
+export function AllowedDomains({ kind, id, label, own, inherited, from, ask, onChanged }: {
+  kind: 'device' | 'group'; id: number; label: string; own: string[]; inherited?: string[]; from?: string;
+  ask: (c: Confirm) => void; onChanged: () => Promise<void>;
+}) {
+  const [text, setText] = useState('');
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (kind !== 'device') return;
+    const fill = (e: Event) => {
+      const d = (e as CustomEvent<{ deviceId: number; domain: string }>).detail;
+      if (d?.deviceId !== id) return;
+      setText(d.domain);
+      box.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+      box.current?.querySelector('input')?.focus();
+    };
+    window.addEventListener(ALLOW_DOMAIN_EVENT, fill);
+    return () => window.removeEventListener(ALLOW_DOMAIN_EVENT, fill);
+  }, [kind, id]);
+  const save = (domains: string[], added?: string, removed?: string) => ask({
+    title: added ? `Always allow ${added} for ${label}?` : `Stop always allowing ${removed} for ${label}?`,
+    body: added ? (
+      <>
+        <p>{label} can always open {added} and its subdomains, even when it is blocked for everyone.</p>
+        <p>Internet off schedules still apply.</p>
+      </>
+    ) : <p>{removed} goes back to the usual filtering for {label}.</p>,
+    confirmLabel: added ? 'Allow' : 'Remove',
+    run: async () => {
+      await api.setAllowed(kind, id, domains);
+      setText('');
+      await onChanged();
+    },
+  });
+  const add = () => {
+    const d = text.trim();
+    if (d && !own.includes(d)) save([...own, d], d);
+  };
+  const inheritedOnly = (inherited ?? []).filter((d) => !own.includes(d));
+  return (
+    <div ref={box} className="space-y-1.5" aria-label="Always allowed">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Always allowed</h3>
+      {own.length === 0 && inheritedOnly.length === 0 && (
+        <p className="text-xs text-slate-500">No exceptions. Add a site this {kind} should always reach, such as a school site a blocklist catches.</p>
+      )}
+      <ul className="flex flex-wrap gap-1.5">
+        {own.map((d) => (
+          <li key={d} className="inline-flex items-center gap-1 rounded bg-emerald-950 px-2 py-0.5 font-mono text-xs text-emerald-200 ring-1 ring-emerald-800">
+            {d}
+            <button aria-label={`Remove ${d}`} className="text-emerald-300 hover:text-white"
+              onClick={() => save(own.filter((x) => x !== d), undefined, d)}>×</button>
+          </li>
+        ))}
+        {inheritedOnly.map((d) => (
+          <li key={`g-${d}`} className="rounded bg-slate-800 px-2 py-0.5 font-mono text-xs text-slate-300" title={from ? `From the ${from} group` : undefined}>
+            {d}{from && <span className="ml-1 font-sans text-[10px] text-slate-500">from {from}</span>}
+          </li>
+        ))}
+      </ul>
+      <form className="flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); add(); }}>
+        <input aria-label={`Always allow for ${label}`} placeholder="example.com" value={text} onChange={(e) => setText(e.target.value)}
+          className={`${select} min-w-0 flex-1 font-mono`} maxLength={253} />
+        <button type="submit" className={`${btn} bg-slate-800 text-slate-200 hover:bg-slate-700`} disabled={!text.trim()}>Allow</button>
+      </form>
+    </div>
+  );
+}
+
 /** Device page: this device's own settings, or its group's. */
 export function DeviceProfile({ d }: { d: { id: number; label: string; group: { id: number; name: string } | null } }) {
   const { profiles, refresh } = useProfiles();
@@ -146,6 +217,10 @@ export function DeviceProfile({ d }: { d: { id: number; label: string; group: { 
           Not applied: this device is already in your AdGuard Home client "{conflict.client}". Remove it there to let NetWatch manage it.
         </p>
       )}
+      <div className="border-t border-slate-800 pt-3">
+        <AllowedDomains kind="device" id={d.id} label={d.label} own={profiles.allow?.[`device:${d.id}`] ?? []}
+          inherited={d.group ? profiles.allow?.[`group:${d.group.id}`] : undefined} from={d.group?.name} ask={setAsk} onChanged={refresh} />
+      </div>
       <div className="border-t border-slate-800 pt-3">
         <TargetSchedules target={{ kind: 'device', id: d.id }} label={d.label} services={profiles.services_all ?? []} />
       </div>
@@ -182,6 +257,10 @@ export function GroupProfileButton({ group, profiles, onChanged, ask }: {
               </button>
             </div>
             <div className="border-t border-slate-800 pt-3">
+              <AllowedDomains kind="group" id={group.id} label={`the ${group.name} group`} own={profiles.allow?.[`group:${group.id}`] ?? []}
+                ask={(c) => { setOpen(false); ask(c); }} onChanged={onChanged} />
+            </div>
+            <div className="border-t border-slate-800 pt-3">
               <TargetSchedules target={{ kind: 'group', id: group.id }} label={group.name} services={profiles.services_all ?? []} />
             </div>
           </div>
@@ -208,6 +287,7 @@ export function ProfileList() {
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium text-slate-100">{c.name}</span>
                 <span className={`rounded px-1.5 text-[11px] ${c.profile.filtering === 'no_blocking' ? 'bg-amber-950 text-amber-200' : 'bg-sky-950 text-sky-200'}`}>{describe(c.profile, names)}</span>
+                {!!c.allow?.length && <span className="rounded bg-emerald-950 px-1.5 text-[11px] text-emerald-200" title={c.allow.join(', ')}>{c.allow.length} always allowed</span>}
               </div>
               <p className="text-xs text-slate-400">
                 {c.devices.length ? c.devices.map((x, i) => (

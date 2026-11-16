@@ -2,13 +2,16 @@ import { useState } from 'react';
 import { api, type DomainCount } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { useRuleAction } from './AdGuardControls';
+import { ALLOW_DOMAIN_EVENT } from './AdGuardProfile';
 
 const SPANS = [
   { label: '24 h', hours: 24 },
   { label: '7 days', hours: 168 },
 ];
 
-function Domains({ title, items, tone, action }: { title: string; items: DomainCount[]; tone: string; action?: { label: string; run: (d: string) => void } }) {
+type DomainAction = { label: string; run: (d: string) => void };
+
+function Domains({ title, items, tone, action, extra }: { title: string; items: DomainCount[]; tone: string; action?: DomainAction; extra?: DomainAction }) {
   return (
     <div className="min-w-0">
       <h3 className="mb-1 text-xs font-medium text-slate-400">{title}</h3>
@@ -19,11 +22,11 @@ function Domains({ title, items, tone, action }: { title: string; items: DomainC
               <span className={`min-w-0 truncate font-mono text-xs ${tone}`} title={d.domain}>{d.domain}</span>
               <span className="flex shrink-0 items-baseline gap-2">
                 <span className="tabular-nums text-slate-400">{d.queries.toLocaleString()}</span>
-                {action && (
-                  <button className="text-xs text-sky-400 hover:underline" onClick={() => action.run(d.domain)} aria-label={`${action.label} ${d.domain}`}>
-                    {action.label}
+                {[action, extra].filter((a): a is DomainAction => !!a).map((a) => (
+                  <button key={a.label} className="text-xs text-sky-400 hover:underline" onClick={() => a.run(d.domain)} aria-label={`${a.label} ${d.domain}`}>
+                    {a.label}
                   </button>
-                )}
+                ))}
               </span>
             </li>
           ))}
@@ -79,7 +82,8 @@ export function DeviceDns({ id }: { id: number }) {
             <Domains title="Top domains" items={data.top_domains} tone="text-slate-200"
               action={rules.enabled ? { label: 'Block', run: (d) => rules.request(d, 'block') } : undefined} />
             <Domains title="Top blocked domains" items={data.top_blocked} tone="text-violet-300"
-              action={rules.enabled ? { label: 'Allow', run: (d) => rules.request(d, 'allow') } : undefined} />
+              action={rules.enabled ? { label: 'Allow for all', run: (d) => rules.request(d, 'allow') } : undefined}
+              extra={rules.enabled ? { label: 'Allow here', run: (d) => window.dispatchEvent(new CustomEvent(ALLOW_DOMAIN_EVENT, { detail: { deviceId: id, domain: d } })) } : undefined} />
           </div>
           {rules.dialog}
           <p className="text-xs text-slate-500">From AdGuard Home. Domain names are kept as long as raw samples (7 days by default).</p>
