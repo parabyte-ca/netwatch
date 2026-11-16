@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.23.0-blue)
+![Version](https://img.shields.io/badge/version-0.23.1-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -407,7 +407,10 @@ AdGuard Home actions** to get a **Controls** section on the DNS page:
   or **Strict** (blocklists, safe browsing, parental control and safe search, which includes
   YouTube Restricted Mode) for a group (Devices → Groups…) or one device (its page). NetWatch keeps
   a persistent client in AdGuard Home for each, named `NetWatch: Kids` or `NetWatch: Sam's iPad`,
-  holding every MAC it knows for those devices. A device's own setting beats its group's. When a
+  holding every MAC it knows for those devices and, while they are online, their current IP
+  address (AdGuard Home can only match a MAC when it is your DHCP server, so with the Home Hub
+  handing out addresses the IP is what lets it find the device). A device's own setting beats its
+  group's. When a
   device joins or leaves a group, the client follows within about 15 seconds. NetWatch only changes
   the clients it made: a device already in one of your own AdGuard Home clients is left out and
   shown on the DNS page.
