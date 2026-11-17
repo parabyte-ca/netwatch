@@ -63,7 +63,10 @@ export function Layout() {
     <div className="min-h-screen">
       <UpdateBar summary={upd} offline={!!updError} />
       <OfflineBanner hidden={busy || !!readPending()} />
-      <header className="border-b border-slate-800 bg-slate-900/60 print:hidden">
+      {/* On a phone the header stays at the top while the page scrolls (opaque, so content does not
+          show through; below the Ask tray, dialogs and the update bar). Desktop keeps it in flow. The open
+          menu is a panel over the page, so opening it never moves the page. */}
+      <header className="sticky top-0 z-30 border-b border-slate-800 bg-slate-900 lg:static lg:bg-slate-900/60 print:hidden">
         <div className="mx-auto flex max-w-7xl items-center gap-x-6 px-4 py-3">
           <Link to="/" className="flex shrink-0 items-center gap-2">
             <img src="/favicon.svg" alt="" className="h-6 w-6" />
@@ -102,7 +105,7 @@ export function Layout() {
           </div>
         </div>
         {open && (
-          <div id="mobile-menu" className="border-t border-slate-800 px-4 pb-4 pt-2 lg:hidden">
+          <div id="mobile-menu" className="absolute inset-x-0 top-full max-h-[calc(100dvh-4rem)] overflow-y-auto overscroll-contain border-b border-t border-slate-800 bg-slate-900 px-4 pb-4 pt-2 shadow-xl lg:hidden">
             <nav className="grid gap-1" aria-label="Main">
               {NAV.map((n) => (
                 <NavLink key={n.to} to={n.to} end={n.end} className={mobileLink}>

@@ -18,6 +18,12 @@
   main {
     overflow-wrap: break-word;
   }
+  /* The header is stuck to the top on phones: keep scrolled-to things from landing under it. */
+  @media (max-width: 1023.98px) {
+    html {
+      scroll-padding-top: 4rem;
+    }
+  }
   /* Tables scroll sideways in their own box instead of breaking words and addresses. */
   table {
     overflow-wrap: normal;
