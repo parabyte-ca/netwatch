@@ -34,9 +34,36 @@ export function AskPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const log = useRef<HTMLDivElement>(null);
+  const tray = useRef<HTMLElement>(null);
+  const launcher = useRef<HTMLButtonElement>(null);
+  const field = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api.askStatus().then((s) => setAvailable(s.available), () => setAvailable(false));
+  }, [open]);
+  // The tray slides away when you tap anywhere outside it (the tap still reaches what you
+  // tapped), or press Esc. The conversation stays, so reopening picks up where you left off.
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => {
+      const t = e.target as Node | null;
+      if (t && (tray.current?.contains(t) || launcher.current?.contains(t))) return;
+      setOpen(false);
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setOpen(false);
+      launcher.current?.focus();
+    };
+    document.addEventListener('pointerdown', away);
+    document.addEventListener('keydown', esc);
+    return () => {
+      document.removeEventListener('pointerdown', away);
+      document.removeEventListener('keydown', esc);
+    };
+  }, [open]);
+  useEffect(() => {
+    if (open) field.current?.focus({ preventScroll: true });
   }, [open]);
   // Scroll only the conversation, never the page (scrollIntoView also moves the page on phones).
   useEffect(() => {
@@ -72,52 +99,61 @@ export function AskPanel() {
   if (!available && !open) return null;
   return (
     <>
-      {!open && (
-        <button onClick={() => setOpen(true)} className="fixed bottom-4 right-4 z-40 rounded-full bg-sky-600 px-4 py-2.5 text-sm font-medium text-white shadow-lg hover:bg-sky-500">
-          Ask NetWatch
-        </button>
-      )}
-      {open && (
-        <aside aria-label="Ask NetWatch" className="fixed inset-x-0 bottom-0 z-50 flex max-h-[85dvh] flex-col rounded-t-xl bg-slate-900 shadow-2xl ring-1 ring-slate-700 sm:inset-x-auto sm:bottom-4 sm:right-4 sm:h-[36rem] sm:w-[26rem] sm:rounded-xl">
-          <div className="flex items-center justify-between border-b border-slate-800 px-4 py-2">
-            <h2 className="text-sm font-semibold text-white">Ask NetWatch</h2>
-            <div className="flex gap-2">
-              {msgs.length > 0 && <button onClick={() => setMsgs([])} className="text-xs text-slate-400 hover:text-white">New chat</button>}
-              <button onClick={() => setOpen(false)} aria-label="Close" className="px-1 text-slate-400 hover:text-white">✕</button>
+      <button
+        ref={launcher}
+        onClick={() => setOpen(true)}
+        inert={open}
+        aria-hidden={open}
+        tabIndex={open ? -1 : 0}
+        className={`fixed bottom-4 right-4 z-40 rounded-full bg-sky-600 px-4 py-2.5 text-sm font-medium text-white shadow-lg transition-[opacity,transform] duration-200 hover:bg-sky-500 motion-reduce:transition-none ${open ? 'pointer-events-none scale-90 opacity-0' : 'scale-100 opacity-100'}`}
+      >
+        Ask NetWatch
+      </button>
+      <aside
+        ref={tray}
+        aria-label="Ask NetWatch"
+        inert={!open}
+        aria-hidden={!open}
+        className={`fixed inset-x-0 bottom-0 z-50 flex max-h-[85dvh] flex-col rounded-t-xl bg-slate-900 shadow-2xl ring-1 ring-slate-700 transition-[transform,visibility] duration-300 ease-out motion-reduce:transition-none sm:inset-x-auto sm:bottom-4 sm:right-4 sm:h-[36rem] sm:w-[26rem] sm:rounded-xl ${open ? 'visible translate-y-0' : 'invisible translate-y-[calc(100%+2rem)]'}`}
+      >
+        <div className="flex items-center justify-between border-b border-slate-800 px-4 py-2">
+          <h2 className="text-sm font-semibold text-white">Ask NetWatch</h2>
+          <div className="flex gap-2">
+            {msgs.length > 0 && <button onClick={() => setMsgs([])} className="text-xs text-slate-400 hover:text-white">New chat</button>}
+            <button onClick={() => { setOpen(false); launcher.current?.focus(); }} aria-label="Close" className="px-1 text-slate-400 hover:text-white">✕</button>
+          </div>
+        </div>
+        <div ref={log} className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-4 text-sm" aria-live="polite">
+          {msgs.length === 0 && (
+            <div className="space-y-2">
+              <p className="text-slate-400">Ask about outages, slowness, devices or security. Answers come from NetWatch's own data.</p>
+              {SUGGESTIONS.map((s) => (
+                <button key={s} onClick={() => void send(s)} className="block w-full rounded-md bg-slate-800/70 px-3 py-2 text-left text-slate-200 hover:bg-slate-800">
+                  {s}
+                </button>
+              ))}
             </div>
-          </div>
-          <div ref={log} className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-4 text-sm" aria-live="polite">
-            {msgs.length === 0 && (
-              <div className="space-y-2">
-                <p className="text-slate-400">Ask about outages, slowness, devices or security. Answers come from NetWatch's own data.</p>
-                {SUGGESTIONS.map((s) => (
-                  <button key={s} onClick={() => void send(s)} className="block w-full rounded-md bg-slate-800/70 px-3 py-2 text-left text-slate-200 hover:bg-slate-800">
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
-            {msgs.map((m, i) => (
-              <div key={i} className={m.role === 'user' ? 'ml-8 rounded-lg bg-sky-900/50 px-3 py-2 text-slate-100' : 'mr-4 text-slate-200'}>
-                <div className="whitespace-pre-wrap break-words">{m.content}</div>
-                {m.tools && m.tools.length > 0 && (
-                  <div className="mt-1 text-[11px] text-slate-500">Looked at: {[...new Set(m.tools)].map((t) => TOOL_LABEL[t] ?? t).join(', ')}</div>
-                )}
-              </div>
-            ))}
-            {busy && <p className="text-slate-500">Looking into it…</p>}
-            {error && <p role="alert" className="text-rose-400">{error}</p>}
-          </div>
-          <form onSubmit={submit} className="flex gap-2 border-t border-slate-800 p-3">
-            <input aria-label="Question" className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-sky-500 focus:outline-none"
-              placeholder={available ? 'Ask about your network…' : 'Save an API key in Admin first'} value={text} maxLength={2000} disabled={!available}
-              onChange={(e) => setText(e.target.value)} />
-            <button type="submit" disabled={busy || !text.trim() || !available} className="rounded-md bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50">
-              Ask
-            </button>
-          </form>
-        </aside>
-      )}
+          )}
+          {msgs.map((m, i) => (
+            <div key={i} className={m.role === 'user' ? 'ml-8 rounded-lg bg-sky-900/50 px-3 py-2 text-slate-100' : 'mr-4 text-slate-200'}>
+              <div className="whitespace-pre-wrap break-words">{m.content}</div>
+              {m.tools && m.tools.length > 0 && (
+                <div className="mt-1 text-[11px] text-slate-500">Looked at: {[...new Set(m.tools)].map((t) => TOOL_LABEL[t] ?? t).join(', ')}</div>
+              )}
+            </div>
+          ))}
+          {busy && <p className="text-slate-500">Looking into it…</p>}
+          {error && <p role="alert" className="text-rose-400">{error}</p>}
+        </div>
+        <form onSubmit={submit} className="flex gap-2 border-t border-slate-800 p-3">
+          <input ref={field} aria-label="Question" className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-sky-500 focus:outline-none"
+            placeholder={available ? 'Ask about your network…' : 'Save an API key in Admin first'} value={text} maxLength={2000} disabled={!available}
+            onChange={(e) => setText(e.target.value)} />
+          <button type="submit" disabled={busy || !text.trim() || !available} className="rounded-md bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50">
+            Ask
+          </button>
+        </form>
+      </aside>
     </>
   );
 }
