@@ -396,7 +396,10 @@ async def _deco_restart(request: Request, what: str, coro) -> dict:
         await security_event(request, "warning", f"Deco: could not restart {what}: {exc}",
                              {"action": "deco_reboot", "ok": False})  # fmt: skip
         raise HTTPException(exc.status, str(exc)) from None
-    await security_event(request, "warning", f"Deco: restarted {', '.join(out['decos'])}",
+    names = ", ".join(out["decos"])
+    quiet = out.get("unconfirmed") or []
+    title = f"Deco: restart sent to {names} (no reply yet)" if quiet else f"Deco: restarted {names}"
+    await security_event(request, "warning", title,
                          {"action": "deco_reboot", "ok": True, "decos": out["decos"]})  # fmt: skip
     return out
 
