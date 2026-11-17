@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.25.1-blue)
+![Version](https://img.shields.io/badge/version-0.25.2-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -114,7 +114,8 @@ per group or device (internet off at night, YouTube off during homework). See th
   default, **Admin → Settings → Integrations → Deco actions**) it can restart one Deco or the
   whole Wi-Fi network after you confirm, with a limit of one single-Deco restart per Deco every 5 minutes and one whole-network restart every 15;
   a planned restart is logged as information, not as an outage, and a Deco that never goes
-  offline after a restart request is reported.
+  offline after a restart request is reported, with what the Deco answered shown under the
+  buttons.
 - **Live bandwidth per device:** who is using the internet right now and over the last day or
   week ("top talkers" on the Overview and the map), live traffic on every map link (busy links
   are thicker and animated), and a bandwidth chart on each device page. Measured by the Decos,
