@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.25.1] - 2026-11-17
+### Fixed
+- Restarting a Deco showed an error ("502") even though a Deco that accepts a restart simply stops
+  answering. NetWatch now sends the restart once (it used to send it a second time when the Deco
+  did not answer), treats a Deco that goes quiet as a restart in progress, and checks it: if the
+  Deco goes offline and comes back the timeline says so, and if it is still online three minutes
+  later NetWatch warns that it did not restart. Real failures now answer with a message your
+  reverse proxy will not replace, and an error the proxy did hide now points you to the Security
+  log.
+
 ## [0.25.0] - 2026-11-17
 ### Added
 - Restart a Deco, or the whole Wi-Fi network, from NetWatch. Off by default: turn on "Deco actions
