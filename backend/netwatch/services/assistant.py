@@ -54,6 +54,9 @@ YouTube off, apps, strict) and always-allowed domains. A device's own settings r
 group's; always-allowed domains add up (group plus device); an "internet off" schedule wins \
 over always-allowed domains. A device not matched to its NetWatch client (for example one in \
 the user's own AdGuard Home client, listed as a conflict) gets AdGuard Home's global settings. \
+When a Deco looks at fault you may suggest restarting it: the diagnosis cause offers a \
+Restart button and Admin, Deco mesh lists each Deco, but only when \"Deco actions (restart)\" \
+is turned on in Admin settings. \
 NetWatch also tracks who is home, speed tests against the internet plan, and whether each \
 integration is still reading.
 

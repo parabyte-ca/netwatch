@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.25.0] - 2026-11-17
+### Added
+- Restart a Deco, or the whole Wi-Fi network, from NetWatch. Off by default: turn on "Deco actions
+  (restart)" under Admin settings, Integrations. Admin, Deco mesh then has a Restart button for
+  each Deco and "Restart all Decos" (satellites first, the main Deco last). A diagnosis that
+  blames one Deco offers "Restart <name>" next to the cause. Every restart asks first and says
+  what will drop, goes in the security log, and is limited to one restart per Deco every five
+  minutes (one mesh restart every 15). When the Deco comes back the timeline says how long it took;
+  a restart you asked for is information, not a critical outage. Ask NetWatch knows about it
+  but cannot restart anything itself.
+
 ## [0.24.4] - 2026-11-17
 ### Changed
 - A laptop you monitor that drops off the network is no longer a warning. A laptop is usually
