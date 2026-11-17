@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.24.0-blue)
+![Version](https://img.shields.io/badge/version-0.24.1-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -160,8 +160,10 @@ per group or device (internet off at night, YouTube off during homework). See th
   with each device's and group's settings, schedules and always-allowed domains, integration
   health, speed against your plan and who's home) and can't change anything. Ask "why is
   example.com blocked on Sam's phone?" and it checks the settings, schedules, exceptions and the
-  phone's blocked lookups. Off until you save an Anthropic API key under Admin; uses Claude Opus 5.5 by
-  default (Sonnet or Haiku for lower cost), limited to 40 questions an hour.
+  phone's blocked lookups. The chat slides up from the bottom of the page; tap anywhere outside
+  it, press Esc or use ✕ and it slides back down (the conversation is kept). Off until you save
+  an Anthropic API key under Admin; uses Claude Opus 5.5 by default (Sonnet or Haiku for lower
+  cost), limited to 40 questions an hour.
 - **Patterns:** failures that repeat at a fixed interval (e.g. every 6 h) or cluster at a time of
   day are called out, since both point at something scheduled.
 - **Incident report for Bell:** a printable report (Print / save as PDF, or download Markdown)

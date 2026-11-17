@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.24.1] - 2026-11-17
+### Changed
+- The Ask NetWatch tray now slides up when opened and slides down when closed (no slide if your
+  device asks for reduced motion). Tapping anywhere outside it, pressing Esc or using the close
+  button slides it away; the tap still goes to whatever you tapped. Your conversation and half-typed
+  question are kept while it is down. Closed, it is skipped by keyboard focus and screen readers.
+
 ## [0.24.0] - 2026-11-16
 ### Added
 - **Always allowed** domains per device and per group, in the device's AdGuard Home settings and
