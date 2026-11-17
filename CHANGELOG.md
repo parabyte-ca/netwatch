@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.24.2] - 2026-11-17
+### Changed
+- On a phone the NetWatch header and its menu button stay at the top of the screen while you scroll,
+  so you can open the menu from anywhere on a long page. The open menu is a panel over the page
+  that fits the screen (and scrolls inside itself on a small phone), so opening it no longer
+  pushes the page down or moves your place. Things scrolled into view stay clear of the header.
+  On a computer the header scrolls away as before.
+
 ## [0.24.1] - 2026-11-17
 ### Changed
 - The Ask NetWatch tray now slides up when opened and slides down when closed (no slide if your
