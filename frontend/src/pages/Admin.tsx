@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { EventRow } from '../components/EventRow';
+import { ConfirmDialog, type Confirm } from '../components/ConfirmDialog';
+import { restartConfirm } from '../components/DecoRestart';
 import { api, type AdGuardStatus, type AssistantStatus, type DecoStatus, type DecoTestResult, type HubStatus, type SettingField, type SettingsResponse } from '../lib/api';
 import { fmtAgo, fmtBytes, fmtDurationMs, fmtTime } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
@@ -634,6 +636,8 @@ function DecoCard() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [test, setTest] = useState<DecoTestResult | null>(null);
+  const [ask, setAsk] = useState<Confirm | null>(null);
+  const [restartNote, setRestartNote] = useState<string | null>(null);
 
   const apply = (d: DecoStatus) => {
     setSt(d);
@@ -716,6 +720,44 @@ function DecoCard() {
             </button>
           )}
         </div>
+        <div className="space-y-2 border-t border-slate-800 pt-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Restart</h3>
+          {st.actions_enabled ? (
+            st.decos.length ? (
+              <>
+                <ul className="space-y-1">
+                  {st.decos.map((d) => (
+                    <li key={d.mac} className="flex flex-wrap items-center gap-2">
+                      <span className="min-w-0 flex-1 truncate">{d.name} <span className="text-xs text-slate-500">({d.role}{d.online ? '' : ', offline'})</span></span>
+                      <button className={`${btn} text-rose-300 ring-1 ring-slate-700 hover:bg-slate-800`} disabled={busy || !d.online}
+                        aria-label={`Restart ${d.name}`}
+                        onClick={() => setAsk(restartConfirm(d, async () => {
+                          await api.rebootDeco(d.mac);
+                          setRestartNote(`Restarting ${d.name}. It should be back in about two minutes.`);
+                        }))}>
+                        Restart
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <button className={`${btn} text-rose-300 ring-1 ring-slate-700 hover:bg-slate-800`} disabled={busy}
+                  onClick={() => setAsk(restartConfirm(null, async () => {
+                    const r = await api.rebootAllDecos();
+                    setRestartNote(`Restarting ${r.decos.join(', ')}. Wi-Fi should be back in a few minutes.`);
+                  }))}>
+                  Restart all Decos
+                </button>
+                {restartNote && <p className="text-emerald-300" role="status">{restartNote}</p>}
+              </>
+            ) : (
+              <p className="text-xs text-slate-500">No Decos read yet.</p>
+            )
+          ) : (
+            <p className="text-xs text-slate-500">
+              Off. Turn on "Deco actions (restart)" under Integrations in the settings above to restart a Deco from here.
+            </p>
+          )}
+        </div>
         <NotPolling state={st.state} needs="The map (devices under their Deco), Wi-Fi events and diagnosis" busy={busy} onEnable={() => { setEnabled(true); void save({ enabled: true }); }} />
         {error && <p className="text-rose-400">{error}</p>}
         {test && (test.ok ? (
@@ -735,6 +777,7 @@ function DecoCard() {
           )}
         </p>
       </div>
+      {ask && <ConfirmDialog confirm={ask} onClose={() => setAsk(null)} />}
     </Card>
   );
 }

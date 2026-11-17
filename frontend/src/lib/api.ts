@@ -641,6 +641,8 @@ export interface Cause {
   confidence: number;
   evidence: string[];
   next_steps: string[];
+  /** A button the cause may offer, today only restarting a Deco. */
+  action?: { kind: 'deco_reboot'; mac: string; name: string } | null;
 }
 
 export interface IncidentTarget {
@@ -1060,6 +1062,8 @@ export interface DecoStatus {
   state?: PollState;
   decos: DecoUnit[];
   clients: number;
+  /** The Admin switch "Deco actions (restart)" */
+  actions_enabled?: boolean;
   suggestions: { ip: string; label: string }[];
 }
 
@@ -1445,6 +1449,9 @@ export const api = {
   deco: () => request<DecoStatus>('/api/admin/deco'),
   saveDeco: (body: { host: string; enabled: boolean; password?: string; forget_password?: boolean }) =>
     request<DecoStatus>('/api/admin/deco', { method: 'PUT', body: JSON.stringify(body) }),
+  rebootDeco: (mac: string) =>
+    request<{ started_ms: number; decos: string[] }>(`/api/admin/deco/${encodeURIComponent(mac)}/reboot`, post()),
+  rebootAllDecos: () => request<{ started_ms: number; decos: string[] }>('/api/admin/deco/reboot-all', post()),
   testDeco: (host: string, password?: string) => request<DecoTestResult>('/api/admin/deco/test', post({ host, password })),
   adminSettings: () => request<SettingsResponse>('/api/admin/settings'),
   saveSettings: (changes: Record<string, unknown>) =>

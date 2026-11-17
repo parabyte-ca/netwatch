@@ -7,6 +7,7 @@ import { Admin } from './Admin';
 afterEach(() => {
   vi.restoreAllMocks();
   decoSaved = { host: '', enabled: false, password_set: false };
+  decoActions = false;
 });
 
 const f = (over: Partial<SettingField>): SettingField => ({
@@ -21,6 +22,11 @@ const fields = [
 ];
 
 let decoSaved: { host: string; enabled: boolean; password_set: boolean } = { host: '', enabled: false, password_set: false };
+let decoActions = false;
+const decoUnits = [
+  { mac: 'aa:bb:cc:00:00:01', name: 'Living Room', ip: null, model: null, firmware: null, role: 'main', online: true, backhaul: 'wired' },
+  { mac: 'aa:bb:cc:00:00:02', name: 'Office', ip: null, model: null, firmware: null, role: 'satellite', online: true, backhaul: '5 GHz' },
+];
 
 function mockApi(calls: { url: string; method: string; body?: unknown }[]) {
   vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -63,12 +69,14 @@ function mockApi(calls: { url: string; method: string; body?: unknown }[]) {
     if (url === '/api/admin/hub/test') {
       return json({ ok: true, method: 'sha512', snapshot: { model: 'Home Hub 4000', firmware: '2.13.1', uptime_s: 90000, optical: { status: 'Up', rx_dbm: -19.2, tx_dbm: 2.1 }, ppp: null, wan_ip: null } });
     }
+    if (url.startsWith('/api/admin/deco/') && url.endsWith('/reboot')) return json({ started_ms: 1, decos: ['Office'] });
+    if (url === '/api/admin/deco/reboot-all') return json({ started_ms: 1, decos: ['Office', 'Living Room'] });
     if (url === '/api/admin/deco/test') return json({ ok: false, error: 'wrong owner password (9 attempts left before lockout)' });
     if (url === '/api/admin/deco') {
       const saved = method === 'PUT' ? { ...JSON.parse(String(init?.body)), password_set: true } : decoSaved;
       const state = !saved.password_set ? 'off' : saved.enabled ? 'waiting' : 'not_polling';
       return json({ host: saved.host, enabled: saved.enabled, password_set: saved.password_set, last_poll_ms: null, last_ok_ms: null,
-        error: null, paused: null, state, decos: [], clients: 0, suggestions: [{ ip: '192.168.2.10', label: 'Deco Living Room' }] });
+        error: null, paused: null, state, decos: decoActions ? decoUnits : [], clients: 0, actions_enabled: decoActions, suggestions: [{ ip: '192.168.2.10', label: 'Deco Living Room' }] });
     }
     if (url === '/api/admin/restart') return json({ restarting: true }, 202);
     return json({});
@@ -130,6 +138,30 @@ describe('Admin', () => {
     expect(JSON.parse(String(put.body))).toEqual({ host: '192.168.2.10', enabled: true, password: 'pw' });
     expect(await screen.findByText(/Owner password \(saved\)/)).toBeInTheDocument();
     expect(screen.getByLabelText('Owner password')).toHaveValue('');
+  });
+
+  it('restarts a Deco or the whole mesh only after a confirmation, and only when actions are on', async () => {
+    const calls: { url: string; method: string; body?: unknown }[] = [];
+    mockApi(calls);
+    decoSaved = { host: '192.168.2.10', enabled: true, password_set: true };
+    const { unmount } = render(<MemoryRouter><Admin /></MemoryRouter>);
+    const card = () => within(screen.getByRole('region', { name: 'Deco mesh' }));
+    expect(await card().findByText(/Off\. Turn on "Deco actions \(restart\)"/)).toBeInTheDocument();
+    expect(card().queryByRole('button', { name: 'Restart Office' })).toBeNull();
+    unmount();
+
+    decoActions = true;
+    render(<MemoryRouter><Admin /></MemoryRouter>);
+    fireEvent.click(await card().findByRole('button', { name: 'Restart Office' }));
+    expect(calls.some((c) => c.url.endsWith('/reboot'))).toBe(false); // asked first
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Restart Office' }));
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith('/reboot') && c.method === 'POST')).toBe(true));
+    expect(await card().findByText(/Restarting Office/)).toBeInTheDocument();
+
+    fireEvent.click(card().getByRole('button', { name: 'Restart all Decos' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('satellites first');
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Restart all Decos' }));
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/admin/deco/reboot-all' && c.method === 'POST')).toBe(true));
   });
 
   it('warns when the Deco is saved but not polling, and turns polling on in one click', async () => {

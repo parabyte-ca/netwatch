@@ -1,4 +1,5 @@
 import type { Cause } from '../lib/api';
+import { DecoRestartButton } from './DecoRestart';
 
 function bar(confidence: number) {
   if (confidence >= 80) return 'bg-rose-500';
@@ -33,6 +34,7 @@ export function CauseList({ causes, limit = 3 }: { causes: Cause[]; limit?: numb
                 </ul>
               </div>
             )}
+            {i === 0 && c.action?.kind === 'deco_reboot' && <DecoRestartButton mac={c.action.mac} name={c.action.name} />}
           </div>
         </li>
       ))}
