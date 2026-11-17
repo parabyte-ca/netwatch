@@ -112,7 +112,7 @@ per group or device (internet off at night, YouTube off during homework). See th
   every failing device was on one Deco, a device dropped off Wi-Fi). The password is encrypted
   with a key file kept outside the database, so backups never contain it. Optionally (off by
   default, **Admin → Settings → Integrations → Deco actions**) it can restart one Deco or the
-  whole Wi-Fi network after you confirm, with a limit of one restart per Deco every 5 minutes;
+  whole Wi-Fi network after you confirm, with a limit of one single-Deco restart per Deco every 5 minutes and one whole-network restart every 15;
   a planned restart is logged as information, not as an outage.
 - **Live bandwidth per device:** who is using the internet right now and over the last day or
   week ("top talkers" on the Overview and the map), live traffic on every map link (busy links

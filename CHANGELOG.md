@@ -10,8 +10,8 @@ All notable changes to this project are documented here. The format follows
   (restart)" under Admin settings, Integrations. Admin, Deco mesh then has a Restart button for
   each Deco and "Restart all Decos" (satellites first, the main Deco last). A diagnosis that
   blames one Deco offers "Restart <name>" next to the cause. Every restart asks first and says
-  what will drop, goes in the security log, and is limited to one restart per Deco every five
-  minutes (one mesh restart every 15). When the Deco comes back the timeline says how long it took;
+  what will drop, goes in the security log, and is limited to one restart of a Deco every five
+  minutes and one whole-network restart every 15. When the Deco comes back the timeline says how long it took;
   a restart you asked for is information, not a critical outage. Ask NetWatch knows about it
   but cannot restart anything itself.
 
