@@ -1067,6 +1067,13 @@ export interface DecoStatus {
   suggestions: { ip: string; label: string }[];
 }
 
+/** `unconfirmed`: Decos that went quiet without replying, which is how a restart looks. */
+export interface RestartResult {
+  started_ms: number;
+  decos: string[];
+  unconfirmed: string[];
+}
+
 export interface DecoTestResult {
   ok: boolean;
   error?: string;
@@ -1254,11 +1261,14 @@ async function handle<T>(path: string, res: Response): Promise<T> {
     window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
   }
   if (!res.ok) {
-    let message = `${res.status} ${res.statusText}`;
+    let message = `${res.status} ${res.statusText}`.trim();
     try {
       message = describe((await res.json()).detail);
     } catch {
-      /* non-JSON error body */
+      // A non-JSON error body usually comes from a proxy in front of NetWatch, which can hide the reason.
+      if (res.status >= 500) {
+        message = `The server answered ${res.status}. A proxy in front of NetWatch may have hidden the reason; the Security log in Admin has it.`;
+      }
     }
     throw new ApiError(res.status, message);
   }
@@ -1450,8 +1460,8 @@ export const api = {
   saveDeco: (body: { host: string; enabled: boolean; password?: string; forget_password?: boolean }) =>
     request<DecoStatus>('/api/admin/deco', { method: 'PUT', body: JSON.stringify(body) }),
   rebootDeco: (mac: string) =>
-    request<{ started_ms: number; decos: string[] }>(`/api/admin/deco/${encodeURIComponent(mac)}/reboot`, post()),
-  rebootAllDecos: () => request<{ started_ms: number; decos: string[] }>('/api/admin/deco/reboot-all', post()),
+    request<RestartResult>(`/api/admin/deco/${encodeURIComponent(mac)}/reboot`, post()),
+  rebootAllDecos: () => request<RestartResult>('/api/admin/deco/reboot-all', post()),
   testDeco: (host: string, password?: string) => request<DecoTestResult>('/api/admin/deco/test', post({ host, password })),
   adminSettings: () => request<SettingsResponse>('/api/admin/settings'),
   saveSettings: (changes: Record<string, unknown>) =>

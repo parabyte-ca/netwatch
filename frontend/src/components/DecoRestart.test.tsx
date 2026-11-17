@@ -11,7 +11,7 @@ const units = [
   { mac: 'aa:bb:cc:00:00:02', name: 'Office', ip: null, model: null, firmware: null, role: 'satellite', online: true, backhaul: '5 GHz' },
 ];
 
-function mockDeco(actionsEnabled: boolean, calls: { url: string; method: string }[] = [], decos = units) {
+function mockDeco(actionsEnabled: boolean, calls: { url: string; method: string }[] = [], decos = units, reboot: 'ok' | 'quiet' | 'proxy' = 'ok') {
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = String(input);
     calls.push({ url, method: init?.method ?? 'GET' });
@@ -19,7 +19,10 @@ function mockDeco(actionsEnabled: boolean, calls: { url: string; method: string 
       return new Response(JSON.stringify({ host: '192.168.2.10', enabled: true, password_set: true, decos, clients: 3,
         actions_enabled: actionsEnabled, suggestions: [] }));
     }
-    if (url.endsWith('/reboot')) return new Response(JSON.stringify({ started_ms: 1, decos: ['Office'] }));
+    if (url.endsWith('/reboot')) {
+      if (reboot === 'proxy') return new Response('<html>Bad Gateway</html>', { status: 502 });
+      return new Response(JSON.stringify({ started_ms: 1, decos: ['Office'], unconfirmed: reboot === 'quiet' ? ['Office'] : [] }));
+    }
     return new Response('{}', { status: 404 });
   });
   return calls;
@@ -62,6 +65,24 @@ describe('DecoRestartButton', () => {
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Restart Office' }));
     await waitFor(() => expect(calls.some((c) => c.url === '/api/admin/deco/aa%3Abb%3Acc%3A00%3A00%3A02/reboot' && c.method === 'POST')).toBe(true));
     expect(await screen.findByText(/Restarting Office/)).toBeTruthy();
+  });
+});
+
+describe('a restart that does not go as usual', () => {
+  it('explains a Deco that went quiet', async () => {
+    mockDeco(true, [], units, 'quiet');
+    render(<DecoRestartButton mac="aa:bb:cc:00:00:02" name="Office" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Restart Office' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Restart Office' }));
+    expect(await screen.findByText(/stopped answering, which is how a restart looks/)).toBeTruthy();
+  });
+
+  it('says a proxy may have hidden the reason when the error body is not JSON', async () => {
+    mockDeco(true, [], units, 'proxy');
+    render(<DecoRestartButton mac="aa:bb:cc:00:00:02" name="Office" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Restart Office' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Restart Office' }));
+    expect(await screen.findByText(/The server answered 502.*Security log/)).toBeTruthy();
   });
 });
 
