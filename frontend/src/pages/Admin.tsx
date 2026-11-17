@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { EventRow } from '../components/EventRow';
 import { ConfirmDialog, type Confirm } from '../components/ConfirmDialog';
-import { restartConfirm } from '../components/DecoRestart';
+import { restartConfirm, restartNote } from '../components/DecoRestart';
 import { api, type AdGuardStatus, type AssistantStatus, type DecoStatus, type DecoTestResult, type HubStatus, type SettingField, type SettingsResponse } from '../lib/api';
 import { fmtAgo, fmtBytes, fmtDurationMs, fmtTime } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
@@ -637,7 +637,7 @@ function DecoCard() {
   const [error, setError] = useState<string | null>(null);
   const [test, setTest] = useState<DecoTestResult | null>(null);
   const [ask, setAsk] = useState<Confirm | null>(null);
-  const [restartNote, setRestartNote] = useState<string | null>(null);
+  const [restartMsg, setRestartMsg] = useState<string | null>(null);
 
   const apply = (d: DecoStatus) => {
     setSt(d);
@@ -732,8 +732,7 @@ function DecoCard() {
                       <button className={`${btn} text-rose-300 ring-1 ring-slate-700 hover:bg-slate-800`} disabled={busy || !d.online}
                         aria-label={`Restart ${d.name}`}
                         onClick={() => setAsk(restartConfirm(d, async () => {
-                          await api.rebootDeco(d.mac);
-                          setRestartNote(`Restarting ${d.name}. It should be back in about two minutes.`);
+                          setRestartMsg(restartNote(await api.rebootDeco(d.mac)));
                         }))}>
                         Restart
                       </button>
@@ -742,12 +741,11 @@ function DecoCard() {
                 </ul>
                 <button className={`${btn} text-rose-300 ring-1 ring-slate-700 hover:bg-slate-800`} disabled={busy}
                   onClick={() => setAsk(restartConfirm(null, async () => {
-                    const r = await api.rebootAllDecos();
-                    setRestartNote(`Restarting ${r.decos.join(', ')}. Wi-Fi should be back in a few minutes.`);
+                    setRestartMsg(restartNote(await api.rebootAllDecos()));
                   }))}>
                   Restart all Decos
                 </button>
-                {restartNote && <p className="text-emerald-300" role="status">{restartNote}</p>}
+                {restartMsg && <p className="text-emerald-300" role="status">{restartMsg}</p>}
               </>
             ) : (
               <p className="text-xs text-slate-500">No Decos read yet.</p>

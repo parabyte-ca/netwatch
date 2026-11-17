@@ -69,8 +69,8 @@ function mockApi(calls: { url: string; method: string; body?: unknown }[]) {
     if (url === '/api/admin/hub/test') {
       return json({ ok: true, method: 'sha512', snapshot: { model: 'Home Hub 4000', firmware: '2.13.1', uptime_s: 90000, optical: { status: 'Up', rx_dbm: -19.2, tx_dbm: 2.1 }, ppp: null, wan_ip: null } });
     }
-    if (url.startsWith('/api/admin/deco/') && url.endsWith('/reboot')) return json({ started_ms: 1, decos: ['Office'] });
-    if (url === '/api/admin/deco/reboot-all') return json({ started_ms: 1, decos: ['Office', 'Living Room'] });
+    if (url.startsWith('/api/admin/deco/') && url.endsWith('/reboot')) return json({ started_ms: 1, decos: ['Office'], unconfirmed: [] });
+    if (url === '/api/admin/deco/reboot-all') return json({ started_ms: 1, decos: ['Office', 'Living Room'], unconfirmed: [] });
     if (url === '/api/admin/deco/test') return json({ ok: false, error: 'wrong owner password (9 attempts left before lockout)' });
     if (url === '/api/admin/deco') {
       const saved = method === 'PUT' ? { ...JSON.parse(String(init?.body)), password_set: true } : decoSaved;

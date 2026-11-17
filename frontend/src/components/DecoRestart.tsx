@@ -1,8 +1,18 @@
 import { useEffect, useState } from 'react';
-import { api, type DecoUnit } from '../lib/api';
+import { api, type DecoUnit, type RestartResult } from '../lib/api';
 import { ConfirmDialog, type Confirm } from './ConfirmDialog';
 
 const btn = 'rounded-md px-2.5 py-1 text-xs font-medium disabled:opacity-50';
+
+const QUIET = 'stopped answering, which is how a restart looks. NetWatch warns you if it does not go offline.';
+
+/** What to tell the owner once a restart was sent. */
+export function restartNote(r: RestartResult): string {
+  const names = r.decos.join(', ');
+  return r.unconfirmed.length
+    ? `Restart sent to ${names}. ${r.unconfirmed.join(', ')} ${QUIET}`
+    : `Restarting ${names}. It should be back in a few minutes.`;
+}
 
 /** The confirmation for restarting one Deco, or every Deco when `deco` is null. */
 export function restartConfirm(deco: DecoUnit | { name: string; role?: string } | null, run: () => Promise<void>): Confirm {
@@ -67,8 +77,7 @@ export function DecoRestartButton({ mac, name }: { mac: string; name: string }) 
         onClick={() =>
           setAsk(
             restartConfirm(unit, async () => {
-              await api.rebootDeco(unit.mac);
-              setNote(`Restarting ${name}. It should be back in about two minutes.`);
+              setNote(restartNote(await api.rebootDeco(unit.mac)));
             }),
           )
         }

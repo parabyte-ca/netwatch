@@ -23,6 +23,7 @@ from netwatch.services.deco.service import (
     PASSWORD_KEY,
     REBOOT_GAP_S,
     REBOOT_WINDOW_MS,
+    UNCONFIRMED_MS,
     DecoActionError,
     DecoService,
     normalize_client,
@@ -64,6 +65,7 @@ class FakeDeco:
         self.expire_next = False
         self.reboots: list[list[str]] = []
         self.reboot_error = 0
+        self.reboot_fault: str | None = None  # "drop": no answer; "connect": never reached
         self.decos = [
             {
                 "mac": MAIN,
@@ -169,6 +171,10 @@ class FakeDeco:
             )
         if form == "system" and payload.get("operation") == "reboot":
             self.reboots.append([m["mac"] for m in payload["params"]["mac_list"]])
+            if self.reboot_fault == "drop":
+                raise httpx.ReadTimeout("no answer", request=req)
+            if self.reboot_fault == "connect":
+                raise httpx.ConnectError("refused", request=req)
             return self._reply({"error_code": self.reboot_error, "result": {}})
         return httpx.Response(404)
 
@@ -430,8 +436,64 @@ async def test_deco_error_is_reported_plainly(svc, fake):
     fake.reboot_error = -5
     with pytest.raises(DecoActionError) as e:
         await svc.reboot(SAT, now)
-    assert e.value.status == 502 and "the Deco did not restart: Deco error -5" in str(e.value)
+    assert e.value.status == 422 and "the Deco did not restart: Deco error -5" in str(e.value)
     assert "owner-pass" not in str(e.value)
+
+
+async def test_a_deco_that_goes_quiet_is_sent_once_and_watched(svc, fake):
+    now = 16_000_000
+    await svc.poll(now)
+    fake.reboot_fault = "drop"
+    out = await svc.reboot(SAT, now + 1000)
+    assert out["unconfirmed"] == ["Office"] and fake.reboots == [[SAT]]  # one request, not two
+    fake.decos[1]["group_status"] = "disconnected"
+    await svc.poll(now + 30_000)
+    assert [e["details"]["type"] for e in wifi(svc)] == ["reboot"] and not svc._unconfirmed
+    fake.decos[1]["group_status"] = "connected"
+    await svc.poll(now + 140_000)
+    (ev,) = wifi(svc)
+    assert ev["severity"] == "info" and ev["end_ms"] == now + 140_000
+
+
+async def test_a_restart_that_never_takes_effect_is_reported(svc, fake):
+    now = 17_000_000
+    await svc.poll(now)
+    fake.reboot_fault = "drop"
+    await svc.reboot(SAT, now)
+    await svc.poll(now + 60_000)
+    assert wifi(svc) == []  # still waiting
+    await svc.poll(now + UNCONFIRMED_MS + 1000)  # the Deco never went offline
+    (ev,) = wifi(svc)
+    assert ev["severity"] == "warning" and ev["details"]["type"] == "reboot_failed"
+    assert "Office did not restart" in ev["title"] and not svc._unconfirmed and not svc.rebooting
+
+
+async def test_restart_that_never_reached_the_deco_is_an_error(svc, fake):
+    now = 18_000_000
+    await svc.poll(now)
+    fake.reboot_fault = "connect"
+    with pytest.raises(DecoActionError) as e:
+        await svc.reboot(SAT, now)
+    assert (
+        e.value.status == 422 and "cannot reach the Deco" in str(e.value) and not svc._unconfirmed
+    )
+
+
+async def test_mesh_goes_on_after_a_quiet_satellite(svc, fake):
+    now = 19_000_000
+    await svc.poll(now)
+
+    async def no_sleep(_):
+        return None
+
+    svc._sleep = no_sleep
+    fake.reboot_fault = "drop"
+    out = await svc.reboot_mesh(now)
+    assert out["decos"] == ["Office", "Living Room"] and out["unconfirmed"] == [
+        "Office",
+        "Living Room",
+    ]
+    assert fake.reboots == [[SAT], [MAIN]]
 
 
 async def test_planned_restart_is_info_not_a_critical_outage(svc, fake):

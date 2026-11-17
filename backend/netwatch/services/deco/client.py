@@ -44,6 +44,10 @@ class DecoError(Exception):
     """Any failure talking to the Deco; the message is safe to show in the UI."""
 
 
+class DecoNoAnswer(DecoError):
+    """The request went out but no answer came back (a restarting Deco goes quiet at once)."""
+
+
 class DecoLoginError(DecoError):
     pass
 
@@ -180,9 +184,36 @@ class DecoClient:
         return clients
 
     async def reboot(self, raw_macs: list[str]) -> None:
-        """Restart the given Decos (the MACs as the Deco writes them). Raises DecoError."""
+        """Restart the given Decos (the MACs as the Deco writes them).
+
+        Sent once, never retried: a Deco that accepts the restart stops answering, and sending
+        it again could restart it twice. Raises DecoNoAnswer when the request went out but no
+        answer came back, and DecoError for anything that shows it did not run."""
         params = {"mac_list": [{"mac": m} for m in raw_macs]}
-        await self._call("admin/device", "system", {"operation": "reboot", "params": params})
+        payload = {"operation": "reboot", "params": params}
+        async with self._lock:
+            for attempt in (1, 2):
+                try:
+                    if self._stok is None:
+                        await self._login()
+                    await self._authed_post("admin/device", "system", payload)
+                    return
+                except _Reauth as exc:
+                    self._clear()
+                    if str(exc).startswith("error_code"):
+                        raise DecoError(f"the Deco refused the restart ({exc})") from exc
+                    if attempt == 2:
+                        raise DecoError(f"session rejected after signing in again: {exc}") from exc
+                except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                    raise DecoError(f"cannot reach the Deco: {scrub(str(exc))}") from exc
+                except (httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError) as exc:
+                    raise DecoNoAnswer("the Deco stopped answering") from exc
+                except httpx.TimeoutException as exc:
+                    raise DecoError("the Deco did not answer in time") from exc
+                except httpx.HTTPStatusError as exc:
+                    raise DecoError(f"the Deco answered HTTP {exc.response.status_code}") from exc
+                except httpx.HTTPError as exc:
+                    raise DecoError(f"cannot reach the Deco: {scrub(str(exc))}") from exc
 
     # ── request plumbing ─────────────────────────────────────────────────────
 
