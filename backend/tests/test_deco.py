@@ -531,6 +531,12 @@ async def test_diagnosis_shared_deco_and_wifi_disconnect(svc, store, fake):
     )
     causes = diag.incidents(now, now + 300_000)[0].causes
     assert causes[0].id == "deco_shared" and "Office" in causes[0].title
+    assert causes[0].action == {
+        "kind": "deco_reboot",
+        "mac": SAT.lower().replace("-", ":"),
+        "name": "Office",
+    }
+    assert all(c.action is None for c in causes[1:])
     # a monitored device that dropped off Wi-Fi
     svc.events.open(
         WIFI,
