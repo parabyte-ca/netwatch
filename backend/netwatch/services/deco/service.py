@@ -335,15 +335,18 @@ class DecoService:
                 {c["mac"]: (c["down_bps"], c["up_bps"]) for c in new_clients.values()}, now
             )
 
-    def _monitored(self) -> dict[str, str]:
-        """MAC → label for devices with a ping target (merged MACs included)."""
-        out: dict[str, str] = {}
+    def _monitored(self) -> dict[str, tuple[str, str | None]]:
+        """MAC → (label, type) for devices with a ping target (merged MACs included)."""
+        out: dict[str, tuple[str, str | None]] = {}
         rows = self.devices.all()
         by_id = {r["id"]: r for r in rows}
         for r in rows:
             primary = by_id.get(r["merged_into"]) or r
             if primary.get("target_id"):
-                out[r["mac"]] = device_label(primary)
+                out[r["mac"]] = (
+                    device_label(primary),
+                    primary.get("type_override") or primary.get("type"),
+                )
         return out
 
     def _deco_changes(self, new: dict[str, dict], now: int) -> None:
@@ -395,13 +398,17 @@ class DecoService:
                 )
 
     def _client_changes(
-        self, new: dict[str, dict], decos: dict[str, dict], monitored: dict[str, str], now: int
+        self,
+        new: dict[str, dict],
+        decos: dict[str, dict],
+        monitored: dict[str, tuple[str, str | None]],
+        now: int,
     ) -> None:
         def where(c: dict) -> str:
             d = decos.get(c["deco_mac"]) or self.decos.get(c["deco_mac"])
             return f"{d['name'] if d else 'unknown Deco'} ({c['connection']})"
 
-        for mac, label in monitored.items():
+        for mac, (label, kind) in monitored.items():
             old, cur = self.clients.get(mac), new.get(mac)
             if cur is not None:
                 self._gone_since.pop(mac, None)
@@ -425,15 +432,19 @@ class DecoService:
                     self._last_pos[mac] = where(old)
                 first = self._gone_since[mac]
                 if now - first >= DISCONNECT_AFTER_MS and mac not in self._wifi_events:
+                    # A laptop going quiet is usually switched off or carried out of the house.
+                    away = kind == "laptop"
                     self._wifi_events[mac] = self.events.open(
                         WIFI,
-                        "warning",
+                        "info" if away else "warning",
                         first,
-                        f"{label} disconnected from the Decos",
+                        f"{label} left the network (away or switched off)"
+                        if away
+                        else f"{label} disconnected from the Decos",
                         details={
                             "mac": mac,
                             "last_seen_on": self._last_pos.get(mac),
-                            "type": "disconnect",
+                            "type": "away" if away else "disconnect",
                         },
                     )
 

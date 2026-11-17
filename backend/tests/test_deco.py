@@ -327,6 +327,43 @@ async def test_roam_and_disconnect_of_monitored_device(svc, store, fake):
     assert disc["end_ms"] == now + 300_000 and "Living Room" in disc["details"]["back_on"]
 
 
+async def test_monitored_laptop_leaving_is_info_not_a_warning(svc, store, fake):
+    now = 3_000_000
+    await svc.poll(now)
+    monitor(svc, store, PHONE.lower())
+    dev = svc.devices.get_by_mac(PHONE.lower())
+    svc.devices.update(dev["id"], {"type": "laptop"})
+    fake.clients[MAIN] = []
+    fake.clients[SAT] = []
+    for i in range(1, 5):
+        await svc.poll(now + i * 30_000)
+    (ev,) = [e for e in wifi(svc) if e["details"]["type"] == "away"]
+    assert ev["severity"] == "info" and ev["title"].endswith(
+        "left the network (away or switched off)"
+    )
+    assert ev["end_ms"] is None and not [
+        e for e in wifi(svc) if e["details"]["type"] == "disconnect"
+    ]
+    fake.clients[MAIN] = [{"mac": PHONE, "online": True, "connection_type": "band2_4"}]
+    await svc.poll(now + 300_000)
+    (ev,) = [e for e in wifi(svc) if e["details"]["type"] == "away"]
+    assert ev["end_ms"] == now + 300_000
+
+
+async def test_laptop_override_beats_detected_type(svc, store, fake):
+    now = 4_000_000
+    await svc.poll(now)
+    monitor(svc, store, PHONE.lower())
+    dev = svc.devices.get_by_mac(PHONE.lower())
+    svc.devices.update(dev["id"], {"type": "laptop", "type_override": "phone"})
+    fake.clients[MAIN] = []
+    fake.clients[SAT] = []
+    for i in range(1, 5):
+        await svc.poll(now + i * 30_000)
+    (ev,) = wifi(svc)
+    assert ev["details"]["type"] == "disconnect" and ev["severity"] == "warning"
+
+
 async def test_poll_error_is_reported(svc, fake):
     fake.password = "changed"
     svc._client = None

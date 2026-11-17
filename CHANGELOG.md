@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.24.4] - 2026-11-17
+### Changed
+- A laptop you monitor that drops off the network is no longer a warning. A laptop is usually
+  switched off or taken to work, so the timeline now says "<name> left the network (away or
+  switched off)" as information, and closes it when the laptop is back. Phones, tablets and wired
+  devices still warn. Who's home already treated an offline laptop as away, and still does.
+
 ## [0.24.3] - 2026-11-17
 ### Fixed
 - A phone that had left home still showed as home. AdGuard Home keeps a client and a DHCP lease
