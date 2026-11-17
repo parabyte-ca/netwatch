@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.24.3] - 2026-11-17
+### Fixed
+- A phone that had left home still showed as home. AdGuard Home keeps a client and a DHCP lease
+  for every device it has met, and NetWatch counted each AdGuard poll as seeing the device. Names
+  and leases from AdGuard Home (and reverse DNS names) now only name a device; only the Deco, the
+  network itself and its traffic say it is on the network. A phone with an AdGuard profile now
+  goes away about 15 minutes after it leaves (the "Away after" setting in Who's home).
+
 ## [0.24.2] - 2026-11-17
 ### Changed
 - On a phone the NetWatch header and its menu button stay at the top of the screen while you scroll,

@@ -375,6 +375,30 @@ def test_adguard_observations_name_and_classify(inv):
     assert device_label(inv.store.get(d["id"])) == "Laptop"
 
 
+def test_adguard_and_rdns_names_do_not_count_as_a_sighting(inv):
+    mac = "aa:bb:cc:dd:ee:52"
+    inv.apply([Observation(1_000, "deco", mac, ip="192.168.2.102")])
+    # AdGuard keeps clients and DHCP leases for phones that left: naming data, not presence.
+    for ts in (200_000, 400_000, 900_000_000):
+        inv.apply([Observation(ts, "adguard", mac, ip="192.168.2.102",
+                               info={"hostname": "pixel", "lease": True,
+                                     "adguard_name": "Alan"})])  # fmt: skip
+        inv.apply([Observation(ts, "rdns", mac, info={"ptr": "pixel.lan"})])
+    d = inv.store.get_by_mac(mac)
+    assert d["last_seen_ms"] == 1_000
+    assert d["details"]["adguard_name"] == "Alan" and d["details"]["ptr"] == "pixel.lan"
+    # A real sighting still moves it.
+    inv.apply([Observation(900_000_001, "deco", mac, ip="192.168.2.102")])
+    assert inv.store.get_by_mac(mac)["last_seen_ms"] == 900_000_001
+
+
+def test_device_known_only_from_adguard_is_not_seen_later(inv):
+    mac = "aa:bb:cc:dd:ee:53"
+    inv.apply([Observation(5_000, "adguard", mac, info={"adguard_name": "Alan"})])
+    inv.apply([Observation(900_000_000, "adguard", mac, info={"adguard_name": "Alan"})])
+    assert inv.store.get_by_mac(mac)["last_seen_ms"] == 5_000
+
+
 def _rejoin(det, mac, ts, requested=None):
     opts = {50: socket.inet_aton(requested)} if requested else None
     for o in frames(dhcp_client_frame(mac, 3, options=opts), ts=ts):
