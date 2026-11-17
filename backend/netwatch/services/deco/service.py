@@ -19,7 +19,14 @@ from ..poll_state import poll_state
 from ..secrets import SecretBox
 from ..storage import Store
 from ..traffic import TrafficStore
-from .client import DecoClient, DecoError, DecoKeyChanged, DecoLoginError, DecoNoAnswer
+from .client import (
+    DecoClient,
+    DecoError,
+    DecoKeyChanged,
+    DecoLoginError,
+    DecoNoAnswer,
+    RestartReport,
+)
 
 log = logging.getLogger(__name__)
 
@@ -30,12 +37,28 @@ POLL_S = 30
 MAX_LOGIN_FAILURES = 3  # then stop, so a wrong password cannot lock the owner account out
 _MAC = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
 DISCONNECT_AFTER_MS = 60_000
+RESULTS_KEY = "deco_reboot_result"  # newest first: what each restart request saw
+MAX_RESULTS = 6
 REBOOT_KEY = "deco_reboot_last"  # {mac|"mesh": ms of the last restart NetWatch asked for}
 REBOOT_COOLDOWN_MS = 5 * 60_000  # one Deco
 MESH_COOLDOWN_MS = 15 * 60_000  # the whole mesh
 REBOOT_GAP_S = 10  # between Decos in a mesh restart
 REBOOT_WINDOW_MS = 15 * 60_000  # an outage this soon after our request is the planned restart
 UNCONFIRMED_MS = 3 * 60_000  # no answer to the request: it must have gone offline by then
+
+
+def describe_report(r: RestartReport) -> str:
+    """One plain sentence about what a restart request saw (no secrets)."""
+    mode = "web-UI session" if r.mode == "web-UI" else "app session"
+    secs = f"{r.elapsed_s:g} s"
+    if r.outcome == "replied":
+        return f"the Deco answered after {secs} ({mode})"
+    if r.outcome == "no_reply":
+        return f"no reply after {secs} ({mode})"
+    if r.outcome == "refused":
+        code = f" error {r.code}" if r.code else ""
+        return f"the Deco refused it{code} after {secs} ({mode})"
+    return f"could not reach the Deco ({secs})"
 
 
 class DecoActionError(Exception):
@@ -161,9 +184,8 @@ class DecoService:
         self._last_pos: dict[str, str] = {}  # monitored device mac → where it was last seen
         self._login_failures = 0
         self.rebooting: dict[str, int] = {}  # deco mac → when NetWatch asked it to restart
-        self._unconfirmed: dict[
-            str, int
-        ] = {}  # restart sent, no reply: waiting to see it go offline
+        # mac → (sent ms, got a reply): a restart not yet seen as the Deco going offline
+        self._awaiting: dict[str, tuple[int, bool]] = {}
         self._planned: set[str] = set()  # deco macs whose open outage event is a planned restart
         self._sleep = asyncio.sleep
         self.paused: str | None = None  # why polling stopped until the settings are saved
@@ -322,7 +344,7 @@ class DecoService:
         monitored = self._monitored()
         self._client_changes(new_clients, new_decos, monitored, now)
         self.decos, self.clients = new_decos, new_clients
-        self._check_unconfirmed(now)
+        self._check_awaiting(now)
         obs = []
         for d in new_decos.values():
             if d["mac"]:
@@ -377,7 +399,8 @@ class DecoService:
             offline = cur is None or not cur["online"]
             if offline and mac not in self._deco_events:
                 if self._planned_restart(mac, now):
-                    self._unconfirmed.pop(mac, None)
+                    self._awaiting.pop(mac, None)
+                    self._note_result(mac, "it went offline")
                     self._deco_events[mac] = self.events.open(
                         WIFI,
                         "info",
@@ -425,6 +448,7 @@ class DecoService:
                     self._planned.discard(mac)
                     started = self.rebooting.pop(mac, now)
                     extra = {"back_after_s": max(0, (now - started) // 1000)}
+                    self._note_result(mac, f"back after {extra['back_after_s']} s")
                 self.events.close(self._deco_events.pop(mac), now, extra)
             elif not cur["online"] and mac not in self.decos and mac not in self._deco_events:
                 self._deco_events[mac] = self.events.open(
@@ -510,9 +534,32 @@ class DecoService:
         last[key] = now
         self.store.kv_set(REBOOT_KEY, last)
 
+    def _results(self) -> list[dict]:
+        r = self.store.kv_get(RESULTS_KEY, []) or []
+        return [x for x in r if isinstance(x, dict)]
+
+    def _record_result(self, deco: dict, report: RestartReport | None, now: int) -> None:
+        """Keep what this restart request saw, newest first, so it can be read afterwards."""
+        entry = {
+            "ts_ms": now,
+            "mac": deco["mac"],
+            "target": deco["name"],
+            "summary": describe_report(report) if report else "not sent",
+        }
+        self.store.kv_set(RESULTS_KEY, ([entry, *self._results()])[:MAX_RESULTS])
+
+    def _note_result(self, mac: str, then: str) -> None:
+        """Add what happened to the Deco afterwards to its newest result."""
+        results = self._results()
+        for r in results:
+            if r.get("mac") == mac:
+                r["then"] = then
+                self.store.kv_set(RESULTS_KEY, results)
+                return
+
     async def _restart(self, decos: list[dict], now: int) -> bool:
         """Ask the Decos to restart. False when the Deco went quiet without a reply (usual for a
-        restart): it is then watched until it goes offline."""
+        restart). Either way it is watched until it is seen going offline."""
         cfg = self.config()
         pw = self.password()
         if not pw or not cfg["host"]:
@@ -525,28 +572,38 @@ class DecoService:
         except DecoNoAnswer:
             replied = False
         except DecoError as exc:
-            raise DecoActionError(422, f"the Deco did not restart: {exc}") from exc
+            for d in decos:
+                self._record_result(d, client.last_report, now)
+            rep = client.last_report
+            how = f" ({rep.elapsed_s:g} s, {rep.mode} session)" if rep else ""
+            raise DecoActionError(422, f"the Deco did not restart: {exc}{how}") from exc
         finally:
             await client.aclose()
         for d in decos:
+            self._record_result(d, client.last_report, now)
             self.rebooting[d["mac"]] = now
-            if not replied:
-                self._unconfirmed[d["mac"]] = now
+            self._awaiting[d["mac"]] = (now, replied)
         return replied
 
-    def _check_unconfirmed(self, now: int) -> None:
-        """A restart nobody answered must show as the Deco going offline; if not, say so."""
-        for mac, sent in list(self._unconfirmed.items()):
+    def _check_awaiting(self, now: int) -> None:
+        """A restart must show up as the Deco going offline; if it never does, say so."""
+        for mac, (sent, replied) in list(self._awaiting.items()):
             if now - sent < UNCONFIRMED_MS:
                 continue
-            self._unconfirmed.pop(mac, None)
+            self._awaiting.pop(mac, None)
             self.rebooting.pop(mac, None)
             name = (self.decos.get(mac) or {}).get("name") or mac
+            why = (
+                "the Deco accepted the request, but it never went offline"
+                if replied
+                else "no reply to the request, and it never went offline"
+            )
+            self._note_result(mac, "it never went offline")
             self.events.instant(
                 WIFI,
                 "warning",
                 now,
-                f"Deco {name} did not restart (no reply to the request, and it never went offline)",
+                f"Deco {name} did not restart ({why})",
                 details={"deco_mac": mac, "deco": name, "type": "reboot_failed"},
             )
 
@@ -561,10 +618,12 @@ class DecoService:
         self._check_cooldown(deco["mac"], REBOOT_COOLDOWN_MS, now, deco["name"])
         replied = await self._restart([deco], now)
         self._remember(deco["mac"], now)
+        note = f"{deco['name']}: {self._results()[0]['summary']}"
         return {
             "started_ms": now,
             "decos": [deco["name"]],
             "unconfirmed": [] if replied else [deco["name"]],
+            "notes": [note],
         }
 
     async def reboot_mesh(self, now_ms: int | None = None) -> dict:
@@ -577,6 +636,7 @@ class DecoService:
         order = sorted(online, key=lambda d: d["role"] == "main")  # False (satellite) first
         done: list[str] = []
         quiet: list[str] = []
+        notes: list[str] = []
         for i, d in enumerate(order):
             if i:
                 await self._sleep(REBOOT_GAP_S)
@@ -588,12 +648,13 @@ class DecoService:
                 note = f"; already restarted: {', '.join(done)}" if done else ""
                 raise DecoActionError(exc.status, f"{d['name']}: {exc}{note}") from exc
             done.append(d["name"])
+            notes.append(f"{d['name']}: {self._results()[0]['summary']}")
             if not replied:
                 quiet.append(d["name"])
         self._remember("mesh", now)
         for d in order:
             self._remember(d["mac"], now)
-        return {"started_ms": now, "decos": done, "unconfirmed": quiet}
+        return {"started_ms": now, "decos": done, "unconfirmed": quiet, "notes": notes}
 
     async def test(self, host: str, password: str, *, trust: bool = False) -> dict:
         """Try a sign-in. With ``trust`` (the owner typed the password for the saved Deco), a
@@ -643,5 +704,6 @@ class DecoService:
             "paused": self.paused,
             "state": self.state(),
             "decos": list(self.decos.values()),
+            "last_restarts": self._results()[:3],
             "clients": len(self.clients),
         }

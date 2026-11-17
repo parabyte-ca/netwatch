@@ -1064,6 +1064,8 @@ export interface DecoStatus {
   clients: number;
   /** The Admin switch "Deco actions (restart)" */
   actions_enabled?: boolean;
+  /** What the latest restart requests saw, newest first. */
+  last_restarts?: { ts_ms: number; mac: string; target: string; summary: string; then?: string }[];
   suggestions: { ip: string; label: string }[];
 }
 

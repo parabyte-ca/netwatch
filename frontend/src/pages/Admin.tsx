@@ -746,6 +746,15 @@ function DecoCard() {
                   Restart all Decos
                 </button>
                 {restartMsg && <p className="text-emerald-300" role="status">{restartMsg}</p>}
+                {st.last_restarts?.length ? (
+                  <ul aria-label="Last restart attempts" className="space-y-0.5 text-xs text-slate-400">
+                    {st.last_restarts.map((r) => (
+                      <li key={`${r.ts_ms}-${r.mac}`}>
+                        Last restart attempt: {r.target}, {fmtAgo(r.ts_ms, Date.now())}: {r.summary}{r.then ? `; ${r.then}` : ''}.
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </>
             ) : (
               <p className="text-xs text-slate-500">No Decos read yet.</p>

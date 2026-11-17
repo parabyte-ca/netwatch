@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.25.2] - 2026-11-17
+### Changed
+- Restarting a Deco from NetWatch did nothing on one home network, and NetWatch could not say
+  why. Each restart request now waits up to a minute for the Deco's reply (a satellite's restart
+  goes through the main Deco), and NetWatch keeps what it saw: whether the Deco answered, how long
+  it took, an error code if the Deco sent one, and which kind of Deco sign-in was used. Admin, Deco
+  mesh shows the last attempts ("no reply after 60 s (app session); it never went offline"), and
+  the Security log says the same. A restart the Deco accepted but never acted on is now reported
+  too, not only one that got no reply.
+
 ## [0.25.1] - 2026-11-17
 ### Fixed
 - Restarting a Deco showed an error ("502") even though a Deco that accepts a restart simply stops

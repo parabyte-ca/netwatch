@@ -76,7 +76,7 @@ function mockApi(calls: { url: string; method: string; body?: unknown }[]) {
       const saved = method === 'PUT' ? { ...JSON.parse(String(init?.body)), password_set: true } : decoSaved;
       const state = !saved.password_set ? 'off' : saved.enabled ? 'waiting' : 'not_polling';
       return json({ host: saved.host, enabled: saved.enabled, password_set: saved.password_set, last_poll_ms: null, last_ok_ms: null,
-        error: null, paused: null, state, decos: decoActions ? decoUnits : [], clients: 0, actions_enabled: decoActions, suggestions: [{ ip: '192.168.2.10', label: 'Deco Living Room' }] });
+        error: null, paused: null, state, decos: decoActions ? decoUnits : [], clients: 0, actions_enabled: decoActions, last_restarts: decoActions ? [{ ts_ms: Date.now() - 5000, mac: 'aa:bb:cc:00:00:02', target: 'Office', summary: 'no reply after 60 s (app session)', then: 'it never went offline' }] : [], suggestions: [{ ip: '192.168.2.10', label: 'Deco Living Room' }] });
     }
     if (url === '/api/admin/restart') return json({ restarting: true }, 202);
     return json({});
@@ -157,6 +157,10 @@ describe('Admin', () => {
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Restart Office' }));
     await waitFor(() => expect(calls.some((c) => c.url.endsWith('/reboot') && c.method === 'POST')).toBe(true));
     expect(await card().findByText(/Restarting Office/)).toBeInTheDocument();
+
+    expect(card().getByRole('list', { name: 'Last restart attempts' })).toHaveTextContent(
+      /Last restart attempt: Office, \d+s ago: no reply after 60 s \(app session\); it never went offline\./,
+    );
 
     fireEvent.click(card().getByRole('button', { name: 'Restart all Decos' }));
     expect(screen.getByRole('dialog')).toHaveTextContent('satellites first');

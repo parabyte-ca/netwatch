@@ -22,6 +22,8 @@ import logging
 import math
 import re
 import secrets
+import time
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -43,6 +45,10 @@ _ERROR_DECODING = re.compile(r"^<Error Decoding (.*)>$")
 class DecoError(Exception):
     """Any failure talking to the Deco; the message is safe to show in the UI."""
 
+    def __init__(self, message: str, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code  # the Deco's own error code, when it sent one
+
 
 class DecoNoAnswer(DecoError):
     """The request went out but no answer came back (a restarting Deco goes quiet at once)."""
@@ -55,6 +61,19 @@ class DecoLoginError(DecoError):
 class DecoKeyChanged(DecoLoginError):
     """The Deco presented a different sign-in key than the one trusted before."""
 
+
+@dataclass(frozen=True)
+class RestartReport:
+    """What one restart request saw, for the log: no secrets."""
+
+    outcome: str  # replied | no_reply | refused | unreachable
+    elapsed_s: float
+    mode: str  # "app" (the Deco app's protocol) or "web-UI"
+    mac: str  # as sent
+    code: str | None = None  # the Deco's error code, if it answered with one
+
+
+RESTART_TIMEOUT_S = 60.0  # a satellite's restart goes through the main Deco, which may wait for it
 
 _STOK = re.compile(r";stok=[^/?#\s]*")
 
@@ -141,6 +160,8 @@ class DecoClient:
             transport=transport,
         )
         self._lock = asyncio.Lock()
+        self._call_timeout: float | None = None  # per-call override of the read timeout
+        self.last_report: RestartReport | None = None
         # The password is RSA-encrypted to a key the Deco sends, so anyone impersonating the
         # Deco on the LAN could ask for it. Once a key is trusted it is pinned (by hash) and a
         # different one is refused instead of being sent the password.
@@ -187,33 +208,64 @@ class DecoClient:
         """Restart the given Decos (the MACs as the Deco writes them).
 
         Sent once, never retried: a Deco that accepts the restart stops answering, and sending
-        it again could restart it twice. Raises DecoNoAnswer when the request went out but no
-        answer came back, and DecoError for anything that shows it did not run."""
+        it again could restart it twice. Waits up to RESTART_TIMEOUT_S for the answer. Raises
+        DecoNoAnswer when the request went out but no answer came back, and DecoError for
+        anything that shows it did not run. ``last_report`` says what was seen either way."""
         params = {"mac_list": [{"mac": m} for m in raw_macs]}
         payload = {"operation": "reboot", "params": params}
+        started = time.monotonic()
+        sent = ",".join(raw_macs)
+
+        def report(outcome: str, code: str | None = None) -> None:
+            self.last_report = RestartReport(
+                outcome, round(time.monotonic() - started, 1),
+                "web-UI" if self._outer else "app", sent, code,
+            )  # fmt: skip
+
         async with self._lock:
-            for attempt in (1, 2):
-                try:
-                    if self._stok is None:
-                        await self._login()
-                    await self._authed_post("admin/device", "system", payload)
-                    return
-                except _Reauth as exc:
-                    self._clear()
-                    if str(exc).startswith("error_code"):
-                        raise DecoError(f"the Deco refused the restart ({exc})") from exc
-                    if attempt == 2:
-                        raise DecoError(f"session rejected after signing in again: {exc}") from exc
-                except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-                    raise DecoError(f"cannot reach the Deco: {scrub(str(exc))}") from exc
-                except (httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError) as exc:
-                    raise DecoNoAnswer("the Deco stopped answering") from exc
-                except httpx.TimeoutException as exc:
-                    raise DecoError("the Deco did not answer in time") from exc
-                except httpx.HTTPStatusError as exc:
-                    raise DecoError(f"the Deco answered HTTP {exc.response.status_code}") from exc
-                except httpx.HTTPError as exc:
-                    raise DecoError(f"cannot reach the Deco: {scrub(str(exc))}") from exc
+            self._call_timeout = RESTART_TIMEOUT_S
+            try:
+                for attempt in (1, 2):
+                    try:
+                        if self._stok is None:
+                            await self._login()
+                        await self._authed_post("admin/device", "system", payload)
+                        report("replied")
+                        return
+                    except _Reauth as exc:
+                        self._clear()
+                        if str(exc).startswith("error_code"):
+                            code = str(exc).removeprefix("error_code").strip()
+                            report("refused", code)
+                            raise DecoError(f"the Deco refused the restart ({exc})", code) from exc
+                        if attempt == 2:
+                            report("refused")
+                            raise DecoError(
+                                f"session rejected after signing in again: {exc}"
+                            ) from exc
+                    except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                        report("unreachable")
+                        raise DecoError(f"cannot reach the Deco: {scrub(str(exc))}") from exc
+                    except (httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError) as exc:
+                        report("no_reply")
+                        raise DecoNoAnswer("the Deco stopped answering") from exc
+                    except httpx.TimeoutException as exc:
+                        report("unreachable")
+                        raise DecoError("the Deco did not answer in time") from exc
+                    except httpx.HTTPStatusError as exc:
+                        report("refused", str(exc.response.status_code))
+                        raise DecoError(
+                            f"the Deco answered HTTP {exc.response.status_code}",
+                            str(exc.response.status_code),
+                        ) from exc
+                    except DecoError as exc:
+                        report("refused", exc.code)
+                        raise
+                    except httpx.HTTPError as exc:
+                        report("unreachable")
+                        raise DecoError(f"cannot reach the Deco: {scrub(str(exc))}") from exc
+            finally:
+                self._call_timeout = None
 
     # ── request plumbing ─────────────────────────────────────────────────────
 
@@ -263,6 +315,8 @@ class DecoClient:
 
     async def _send(self, url: str, **kw) -> httpx.Response:
         """POST, following one redirect only if it upgrades the same host to https."""
+        if self._call_timeout is not None:
+            kw.setdefault("timeout", self._call_timeout)
         r = await self._http.post(url, **kw)
         if r.is_redirect and httpx.URL(url).scheme == "http":
             loc = httpx.URL(url).join(r.headers.get("location", ""))
@@ -316,7 +370,7 @@ class DecoClient:
             raise _Reauth("undecodable data") from exc
         err = data.get("error_code") or data.get("errorcode")
         if err:
-            raise DecoError(f"Deco error {err}")
+            raise DecoError(f"Deco error {err}", code=str(err))
         return data
 
     def _encode(self, payload: dict) -> str:
@@ -473,5 +527,5 @@ class DecoClient:
             raise _Reauth("undecodable web-UI answer") from exc
         err = data.get("error_code") or data.get("errorcode")
         if err:
-            raise DecoError(f"Deco error {err}")
+            raise DecoError(f"Deco error {err}", code=str(err))
         return data
