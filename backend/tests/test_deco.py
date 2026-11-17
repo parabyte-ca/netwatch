@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import math
@@ -34,7 +35,7 @@ from netwatch.services.netinfo import DefaultRoute
 from netwatch.services.pathtest import PathStore
 from netwatch.services.secrets import SecretBox
 
-from .conftest import make_target
+from .conftest import CSRF, make_target
 
 PASSWORD = "owner-pass"
 MAIN, SAT = "AA-BB-CC-00-00-01", "AA-BB-CC-00-00-02"
@@ -576,6 +577,46 @@ def test_deco_admin_api(client, fake):
         "/api/admin/deco", json={"host": "192.168.2.10", "enabled": False, "forget_password": True}
     )
     assert not r.json()["password_set"]
+
+
+def test_deco_reboot_api(client, fake):
+    st = client.app.state
+    st.deco.client_factory = lambda host, pw: client_for(fake, pw)
+
+    async def no_sleep(_):
+        return None
+
+    st.deco._sleep = no_sleep
+    client.put(
+        "/api/admin/deco", json={"host": "192.168.2.10", "enabled": True, "password": PASSWORD}
+    )
+    assert client.get("/api/admin/deco").json()["actions_enabled"] is False
+    r = client.post(f"/api/admin/deco/{SAT}/reboot")
+    assert r.status_code == 403 and "turned off" in r.text and fake.reboots == []
+    r = client.put("/api/admin/settings", json={"changes": {"deco_actions": True}})
+    assert r.status_code == 200, r.text
+    assert client.get("/api/admin/deco").json()["actions_enabled"] is True
+    # Needs the same-origin header, like every write.
+    assert (
+        client.post(f"/api/admin/deco/{SAT}/reboot", headers={"X-Requested-With": ""}).status_code
+        == 403
+    )
+    asyncio.run(st.deco.poll())
+    assert client.post("/api/admin/deco/de:ad:be:ef:00:01/reboot").status_code == 404
+    r = client.post(f"/api/admin/deco/{SAT.lower()}/reboot")
+    assert r.status_code == 200 and r.json()["decos"] == ["Office"] and fake.reboots == [[SAT]]
+    assert client.post(f"/api/admin/deco/{SAT}/reboot").status_code == 429
+    r = client.post("/api/admin/deco/reboot-all")
+    assert r.status_code == 200 and r.json()["decos"] == ["Office", "Living Room"]
+    assert fake.reboots[-2:] == [[SAT], [MAIN]]
+    assert client.post("/api/admin/deco/reboot-all").status_code == 429
+    log = [e["title"] for e in client.get("/api/admin/security-log").json()]
+    assert "Deco: restarted Office" in log and any("could not restart" in x for x in log)
+    assert PASSWORD not in json.dumps(log)
+
+
+def test_deco_reboot_api_needs_sign_in(anon_client):
+    assert anon_client.post("/api/admin/deco/reboot-all", headers=CSRF).status_code == 401
 
 
 def test_map_api_and_layout(client, fake):

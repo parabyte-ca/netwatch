@@ -105,6 +105,10 @@ FIELDS: tuple[Editable, ...] = (
     Editable("adguard_actions", "integrations", "AdGuard Home actions",
              "Lets NetWatch pause protection, allow or block domains and switch the upstream DNS "
              "of AdGuard Home, each after you confirm it. Off: NetWatch only reads.", True),
+    Editable("deco_actions", "integrations", "Deco actions (restart)",
+             "Lets NetWatch restart one Deco or the whole Wi-Fi network from Admin, each after "
+             "you confirm it. Restarting drops Wi-Fi for a few minutes. Off: NetWatch only "
+             "reads.", True),
     Editable("assistant_dns_details", "integrations", "Ask NetWatch: DNS lookups per device",
              "Lets Ask NetWatch read which domains a device looked up or had blocked, to explain "
              "blocks. Those domain names are sent to Anthropic with your question. Off: it still "
