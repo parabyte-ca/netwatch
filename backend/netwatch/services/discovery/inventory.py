@@ -19,6 +19,9 @@ from .packets import Observation, usable_ip
 log = logging.getLogger(__name__)
 
 ONLINE_MS = 15 * 60_000  # seen within this long = online
+# Sources that say what a device is called, not that it is on the network now: AdGuard Home keeps
+# clients and DHCP leases for devices that left, so these must not refresh "last seen".
+NAMING_ONLY = frozenset({"adguard", "rdns"})
 MAX_CACHE = 4096  # devices kept in memory (least recently seen dropped first)
 MAX_NEW_PER_MINUTE = 30  # new devices recorded per minute at most (flood guard)
 WRITE_EVERY_MS = 60_000  # last-seen timestamps are written at most this often per device
@@ -401,7 +404,8 @@ class Inventory:
                 upd["merged_into"] = primary
 
         if upd or obs.ts_ms - c.last_write_ms >= WRITE_EVERY_MS:
-            upd["last_seen_ms"] = max(obs.ts_ms, row.get("last_seen_ms") or 0)
+            if obs.proto not in NAMING_ONLY:
+                upd["last_seen_ms"] = max(obs.ts_ms, row.get("last_seen_ms") or 0)
             self.store.update(c.id, upd)
             c.last_write_ms = obs.ts_ms
             row.update(upd)
