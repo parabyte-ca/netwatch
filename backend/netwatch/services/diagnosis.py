@@ -111,6 +111,8 @@ class Cause:
     confidence: int
     evidence: list[str] = field(default_factory=list)
     next_steps: list[str] = field(default_factory=list)
+    # A button the UI may offer, e.g. {"kind": "deco_reboot", "mac": ..., "name": ...}.
+    action: dict | None = None
 
 
 @dataclass
@@ -793,6 +795,7 @@ def diagnose(inc: Incident, now_ms: int) -> list[Cause]:
                             "Restart that Deco and watch whether the drops follow it.",
                             "Check its backhaul (wire it if possible) and its placement.",
                         ],
+                        {"kind": "deco_reboot", "mac": mac, "name": deco or mac},
                     )
                 )
     failing_macs = {m: v["name"] for v in inc.failing.values() for m in v.get("macs") or []}

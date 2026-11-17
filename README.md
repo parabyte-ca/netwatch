@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.24.4-blue)
+![Version](https://img.shields.io/badge/version-0.25.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -110,7 +110,10 @@ per group or device (internet off at night, YouTube off during homework). See th
   Wi-Fi events to the timeline (Deco offline/online, backhaul changes, roaming and Wi-Fi
   disconnects over a minute for monitored devices) and diagnosis causes (a Deco went offline,
   every failing device was on one Deco, a device dropped off Wi-Fi). The password is encrypted
-  with a key file kept outside the database, so backups never contain it.
+  with a key file kept outside the database, so backups never contain it. Optionally (off by
+  default, **Admin → Settings → Integrations → Deco actions**) it can restart one Deco or the
+  whole Wi-Fi network after you confirm, with a limit of one single-Deco restart per Deco every 5 minutes and one whole-network restart every 15;
+  a planned restart is logged as information, not as an outage.
 - **Live bandwidth per device:** who is using the internet right now and over the last day or
   week ("top talkers" on the Overview and the map), live traffic on every map link (busy links
   are thicker and animated), and a bandwidth chart on each device page. Measured by the Decos,
@@ -322,6 +325,13 @@ NetWatch out (it signs in again on its next poll). To avoid that tug-of-war, inv
 account as a **manager** in the Deco app (Me → Managers) and use that one on your phone; leave
 the owner account to NetWatch. Only LAN addresses are accepted, so the password never leaves
 the network.
+
+**Restarting a Deco (optional).** Turn on **Deco actions (restart)** in the Admin settings
+(Integrations). Admin → Deco mesh then lists a **Restart** button per Deco and **Restart all
+Decos** (satellites first, the main Deco last), and a diagnosis that blames one Deco offers
+**Restart <name>** beside it. Every restart asks first, names what will drop, and goes in the
+security log. Restarting the main Deco drops Wi-Fi for the whole network for a few minutes,
+and NetWatch itself may go quiet if it sits behind that Deco.
 
 **No data on the map or the DNS page?** An integration saved with polling unticked reads
 nothing. From 0.18.1 the Poll box starts ticked for a new set-up, and the Overview, the DNS page

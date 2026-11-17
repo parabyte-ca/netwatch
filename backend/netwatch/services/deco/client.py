@@ -179,6 +179,11 @@ class DecoClient:
             c["name"] = decode_name(c.get("name"))
         return clients
 
+    async def reboot(self, raw_macs: list[str]) -> None:
+        """Restart the given Decos (the MACs as the Deco writes them). Raises DecoError."""
+        params = {"mac_list": [{"mac": m} for m in raw_macs]}
+        await self._call("admin/device", "system", {"operation": "reboot", "params": params})
+
     # ── request plumbing ─────────────────────────────────────────────────────
 
     async def _call(self, path: str, form: str, payload: dict) -> dict:

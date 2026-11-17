@@ -30,6 +30,20 @@ POLL_S = 30
 MAX_LOGIN_FAILURES = 3  # then stop, so a wrong password cannot lock the owner account out
 _MAC = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
 DISCONNECT_AFTER_MS = 60_000
+REBOOT_KEY = "deco_reboot_last"  # {mac|"mesh": ms of the last restart NetWatch asked for}
+REBOOT_COOLDOWN_MS = 5 * 60_000  # one Deco
+MESH_COOLDOWN_MS = 15 * 60_000  # the whole mesh
+REBOOT_GAP_S = 10  # between Decos in a mesh restart
+REBOOT_WINDOW_MS = 15 * 60_000  # an outage this soon after our request is the planned restart
+
+
+class DecoActionError(Exception):
+    """A restart that cannot or must not happen; ``status`` is the HTTP status to answer with."""
+
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+
 
 BAND_LABEL = {
     "band2_4": "2.4 GHz",
@@ -145,6 +159,9 @@ class DecoService:
         self._wifi_events: dict[str, int] = {}  # monitored device mac → open disconnect event
         self._last_pos: dict[str, str] = {}  # monitored device mac → where it was last seen
         self._login_failures = 0
+        self.rebooting: dict[str, int] = {}  # deco mac → when NetWatch asked it to restart
+        self._planned: set[str] = set()  # deco macs whose open outage event is a planned restart
+        self._sleep = asyncio.sleep
         self.paused: str | None = None  # why polling stopped until the settings are saved
 
     # ── configuration ────────────────────────────────────────────────────────
@@ -354,18 +371,28 @@ class DecoService:
             cur = new.get(mac)
             offline = cur is None or not cur["online"]
             if offline and mac not in self._deco_events:
-                self._deco_events[mac] = self.events.open(
-                    WIFI,
-                    "critical",
-                    now,
-                    f"Deco {old['name']} offline",
-                    details={
-                        "deco_mac": mac,
-                        "deco": old["name"],
-                        "role": old["role"],
-                        "type": "deco_offline",
-                    },
-                )
+                if self._planned_restart(mac, now):
+                    self._deco_events[mac] = self.events.open(
+                        WIFI,
+                        "info",
+                        now,
+                        f"Deco {old['name']} restarted from NetWatch",
+                        details={"deco_mac": mac, "deco": old["name"], "type": "reboot"},
+                    )
+                    self._planned.add(mac)
+                else:
+                    self._deco_events[mac] = self.events.open(
+                        WIFI,
+                        "critical",
+                        now,
+                        f"Deco {old['name']} offline",
+                        details={
+                            "deco_mac": mac,
+                            "deco": old["name"],
+                            "role": old["role"],
+                            "type": "deco_offline",
+                        },
+                    )
             if (
                 cur is not None
                 and cur["online"]
@@ -387,7 +414,12 @@ class DecoService:
                 )
         for mac, cur in new.items():
             if cur["online"] and mac in self._deco_events:
-                self.events.close(self._deco_events.pop(mac), now)
+                extra = None
+                if mac in self._planned:
+                    self._planned.discard(mac)
+                    started = self.rebooting.pop(mac, now)
+                    extra = {"back_after_s": max(0, (now - started) // 1000)}
+                self.events.close(self._deco_events.pop(mac), now, extra)
             elif not cur["online"] and mac not in self.decos and mac not in self._deco_events:
                 self._deco_events[mac] = self.events.open(
                     WIFI,
@@ -449,6 +481,80 @@ class DecoService:
                     )
 
     # ── test and status ──────────────────────────────────────────────────────
+
+    # ── actions (opt-in, see the deco_actions setting) ───────────────────────
+
+    def _planned_restart(self, mac: str, now: int) -> bool:
+        started = self.rebooting.get(mac)
+        if started is None:
+            return False
+        if now - started > REBOOT_WINDOW_MS:
+            self.rebooting.pop(mac, None)
+            return False
+        return True
+
+    def _check_cooldown(self, key: str, window_ms: int, now: int, what: str) -> None:
+        last = (self.store.kv_get(REBOOT_KEY, {}) or {}).get(key)
+        if isinstance(last, int) and now - last < window_ms:
+            wait = (window_ms - (now - last) + 59_999) // 60_000
+            raise DecoActionError(429, f"{what} was restarted a moment ago; wait {wait} min")
+
+    def _remember(self, key: str, now: int) -> None:
+        last = dict(self.store.kv_get(REBOOT_KEY, {}) or {})
+        last[key] = now
+        self.store.kv_set(REBOOT_KEY, last)
+
+    async def _restart(self, decos: list[dict], now: int) -> None:
+        cfg = self.config()
+        pw = self.password()
+        if not pw or not cfg["host"]:
+            raise DecoActionError(409, "the Deco is not set up, or its password cannot be read")
+        client = self.client_factory(cfg["host"], pw)
+        client.key_pin = await asyncio.to_thread(self.pin, cfg["host"])
+        try:
+            await client.reboot([d["raw_mac"] or d["mac"] for d in decos])
+        except DecoError as exc:
+            raise DecoActionError(502, f"the Deco did not restart: {exc}") from exc
+        finally:
+            await client.aclose()
+        for d in decos:
+            self.rebooting[d["mac"]] = now
+
+    async def reboot(self, mac: str, now_ms: int | None = None) -> dict:
+        """Restart one Deco. Raises DecoActionError (404 unknown, 409 offline, 429 too soon)."""
+        now = now_ms or int(time.time() * 1000)
+        deco = self.decos.get(norm_mac(mac))
+        if deco is None:
+            raise DecoActionError(404, "no such Deco")
+        if not deco["online"]:
+            raise DecoActionError(409, f"{deco['name']} is offline, so it cannot be restarted")
+        self._check_cooldown(deco["mac"], REBOOT_COOLDOWN_MS, now, deco["name"])
+        await self._restart([deco], now)
+        self._remember(deco["mac"], now)
+        return {"started_ms": now, "decos": [deco["name"]]}
+
+    async def reboot_mesh(self, now_ms: int | None = None) -> dict:
+        """Restart every online Deco, satellites first and the main Deco last."""
+        now = now_ms or int(time.time() * 1000)
+        online = [d for d in self.decos.values() if d["online"]]
+        if not online:
+            raise DecoActionError(409, "no Deco is online")
+        self._check_cooldown("mesh", MESH_COOLDOWN_MS, now, "The Wi-Fi network")
+        order = sorted(online, key=lambda d: d["role"] == "main")  # False (satellite) first
+        done: list[str] = []
+        for i, d in enumerate(order):
+            if i:
+                await self._sleep(REBOOT_GAP_S)
+            try:
+                await self._restart([d], int(time.time() * 1000) if now_ms is None else now)
+            except DecoActionError as exc:
+                note = f"; already restarted: {', '.join(done)}" if done else ""
+                raise DecoActionError(exc.status, f"{d['name']}: {exc}{note}") from exc
+            done.append(d["name"])
+        self._remember("mesh", now)
+        for d in order:
+            self._remember(d["mac"], now)
+        return {"started_ms": now, "decos": done}
 
     async def test(self, host: str, password: str, *, trust: bool = False) -> dict:
         """Try a sign-in. With ``trust`` (the owner typed the password for the saved Deco), a

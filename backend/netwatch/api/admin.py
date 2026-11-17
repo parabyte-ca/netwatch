@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .. import __version__
 from ..auth import COOKIE_NAME, token_hash
+from ..services.deco.service import DecoActionError
 from ..services.detector import DetectorConfig
 from ..services.events import SECURITY
 from ..services.restore import (
@@ -345,7 +346,8 @@ def _deco_body(request: Request) -> dict:
         and d["online"]
         and (d["type"] == "access_point" or "tp-link" in (d.get("vendor") or "").lower())
     ]
-    return {**st.deco.status(), "suggestions": suggestions[:10]}
+    actions = bool(getattr(st.settings, "deco_actions", False))
+    return {**st.deco.status(), "actions_enabled": actions, "suggestions": suggestions[:10]}
 
 
 @router.get("/deco")
@@ -382,6 +384,31 @@ async def put_deco(body: DecoIn, request: Request) -> dict:
         await security_event(request, "info", "Deco integration changed: " + "; ".join(what))
     deco.kick()
     return await asyncio.to_thread(_deco_body, request)
+
+
+async def _deco_restart(request: Request, what: str, coro) -> dict:
+    """Run a Deco restart: off by default, every attempt in the security log."""
+    if not getattr(request.app.state.settings, "deco_actions", False):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Deco actions are turned off in Admin")
+    try:
+        out = await coro
+    except DecoActionError as exc:
+        await security_event(request, "warning", f"Deco: could not restart {what}: {exc}",
+                             {"action": "deco_reboot", "ok": False})  # fmt: skip
+        raise HTTPException(exc.status, str(exc)) from None
+    await security_event(request, "warning", f"Deco: restarted {', '.join(out['decos'])}",
+                         {"action": "deco_reboot", "ok": True, "decos": out["decos"]})  # fmt: skip
+    return out
+
+
+@router.post("/deco/reboot-all")
+async def reboot_all_decos(request: Request) -> dict:
+    return await _deco_restart(request, "the Wi-Fi network", request.app.state.deco.reboot_mesh())
+
+
+@router.post("/deco/{mac}/reboot")
+async def reboot_deco(mac: str, request: Request) -> dict:
+    return await _deco_restart(request, f"Deco {mac}", request.app.state.deco.reboot(mac))
 
 
 class DecoTestIn(BaseModel):

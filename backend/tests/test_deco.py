@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import math
@@ -20,6 +21,9 @@ from netwatch.services.deco.client import (
 from netwatch.services.deco.service import (
     DISCONNECT_AFTER_MS,
     PASSWORD_KEY,
+    REBOOT_GAP_S,
+    REBOOT_WINDOW_MS,
+    DecoActionError,
     DecoService,
     normalize_client,
     normalize_deco,
@@ -31,7 +35,7 @@ from netwatch.services.netinfo import DefaultRoute
 from netwatch.services.pathtest import PathStore
 from netwatch.services.secrets import SecretBox
 
-from .conftest import make_target
+from .conftest import CSRF, make_target
 
 PASSWORD = "owner-pass"
 MAIN, SAT = "AA-BB-CC-00-00-01", "AA-BB-CC-00-00-02"
@@ -58,6 +62,8 @@ class FakeDeco:
         self.aes: tuple[bytes, bytes] | None = None
         self.logins = 0
         self.expire_next = False
+        self.reboots: list[list[str]] = []
+        self.reboot_error = 0
         self.decos = [
             {
                 "mac": MAIN,
@@ -161,6 +167,9 @@ class FakeDeco:
             return self._reply(
                 {"error_code": 0, "result": {"client_list": self.clients.get(mac, [])}}
             )
+        if form == "system" and payload.get("operation") == "reboot":
+            self.reboots.append([m["mac"] for m in payload["params"]["mac_list"]])
+            return self._reply({"error_code": self.reboot_error, "result": {}})
         return httpx.Response(404)
 
 
@@ -364,6 +373,92 @@ async def test_laptop_override_beats_detected_type(svc, store, fake):
     assert ev["details"]["type"] == "disconnect" and ev["severity"] == "warning"
 
 
+async def test_client_reboot_sends_the_macs(fake):
+    c = client_for(fake)
+    await c.reboot([SAT])
+    assert fake.reboots == [[SAT]]
+    fake.reboot_error = -1
+    with pytest.raises(DecoError, match="Deco error -1"):
+        await c.reboot([SAT])
+    await c.aclose()
+
+
+async def test_reboot_one_deco_and_its_limits(svc, fake):
+    now = 10_000_000
+    await svc.poll(now)
+    out = await svc.reboot(SAT.lower(), now + 1000)
+    assert out["decos"] == ["Office"] and fake.reboots == [[SAT]]
+    with pytest.raises(DecoActionError) as e:
+        await svc.reboot(SAT, now + 60_000)
+    assert e.value.status == 429 and "wait 5 min" in str(e.value)
+    with pytest.raises(DecoActionError) as e:
+        await svc.reboot("de:ad:be:ef:00:01", now)
+    assert e.value.status == 404
+    await svc.reboot(SAT, now + 6 * 60_000)  # past the 5 minute limit
+    assert len(fake.reboots) == 2
+
+
+async def test_reboot_offline_deco_is_refused(svc, fake):
+    now = 11_000_000
+    fake.decos[1]["group_status"] = "disconnected"
+    await svc.poll(now)
+    with pytest.raises(DecoActionError) as e:
+        await svc.reboot(SAT, now)
+    assert e.value.status == 409 and fake.reboots == []
+
+
+async def test_reboot_mesh_goes_satellites_first_then_main(svc, fake):
+    now = 12_000_000
+    await svc.poll(now)
+    pauses = []
+
+    async def no_sleep(s):
+        pauses.append(s)
+
+    svc._sleep = no_sleep
+    out = await svc.reboot_mesh(now)
+    assert fake.reboots == [[SAT], [MAIN]] and out["decos"] == ["Office", "Living Room"]
+    assert pauses == [REBOOT_GAP_S]
+    with pytest.raises(DecoActionError) as e:
+        await svc.reboot_mesh(now + 60_000)
+    assert e.value.status == 429
+
+
+async def test_deco_error_is_reported_plainly(svc, fake):
+    now = 13_000_000
+    await svc.poll(now)
+    fake.reboot_error = -5
+    with pytest.raises(DecoActionError) as e:
+        await svc.reboot(SAT, now)
+    assert e.value.status == 502 and "the Deco did not restart: Deco error -5" in str(e.value)
+    assert "owner-pass" not in str(e.value)
+
+
+async def test_planned_restart_is_info_not_a_critical_outage(svc, fake):
+    now = 14_000_000
+    await svc.poll(now)
+    await svc.reboot(SAT, now + 1000)
+    fake.decos[1]["group_status"] = "disconnected"
+    await svc.poll(now + 30_000)
+    evs = wifi(svc)
+    assert [e["details"]["type"] for e in evs] == ["reboot"]
+    assert evs[0]["severity"] == "info" and evs[0]["title"] == "Deco Office restarted from NetWatch"
+    fake.decos[1]["group_status"] = "connected"
+    await svc.poll(now + 151_000)
+    (ev,) = wifi(svc)
+    assert ev["end_ms"] == now + 151_000 and ev["details"]["back_after_s"] == 150
+
+
+async def test_unplanned_outage_is_still_critical_and_old_requests_expire(svc, fake):
+    now = 15_000_000
+    await svc.poll(now)
+    await svc.reboot(SAT, now)
+    fake.decos[1]["group_status"] = "disconnected"
+    await svc.poll(now + REBOOT_WINDOW_MS + 60_000)  # far too late to be our restart
+    (ev,) = wifi(svc)
+    assert ev["severity"] == "critical" and ev["details"]["type"] == "deco_offline"
+
+
 async def test_poll_error_is_reported(svc, fake):
     fake.password = "changed"
     svc._client = None
@@ -436,6 +531,12 @@ async def test_diagnosis_shared_deco_and_wifi_disconnect(svc, store, fake):
     )
     causes = diag.incidents(now, now + 300_000)[0].causes
     assert causes[0].id == "deco_shared" and "Office" in causes[0].title
+    assert causes[0].action == {
+        "kind": "deco_reboot",
+        "mac": SAT.lower().replace("-", ":"),
+        "name": "Office",
+    }
+    assert all(c.action is None for c in causes[1:])
     # a monitored device that dropped off Wi-Fi
     svc.events.open(
         WIFI,
@@ -482,6 +583,46 @@ def test_deco_admin_api(client, fake):
         "/api/admin/deco", json={"host": "192.168.2.10", "enabled": False, "forget_password": True}
     )
     assert not r.json()["password_set"]
+
+
+def test_deco_reboot_api(client, fake):
+    st = client.app.state
+    st.deco.client_factory = lambda host, pw: client_for(fake, pw)
+
+    async def no_sleep(_):
+        return None
+
+    st.deco._sleep = no_sleep
+    client.put(
+        "/api/admin/deco", json={"host": "192.168.2.10", "enabled": True, "password": PASSWORD}
+    )
+    assert client.get("/api/admin/deco").json()["actions_enabled"] is False
+    r = client.post(f"/api/admin/deco/{SAT}/reboot")
+    assert r.status_code == 403 and "turned off" in r.text and fake.reboots == []
+    r = client.put("/api/admin/settings", json={"changes": {"deco_actions": True}})
+    assert r.status_code == 200, r.text
+    assert client.get("/api/admin/deco").json()["actions_enabled"] is True
+    # Needs the same-origin header, like every write.
+    assert (
+        client.post(f"/api/admin/deco/{SAT}/reboot", headers={"X-Requested-With": ""}).status_code
+        == 403
+    )
+    asyncio.run(st.deco.poll())
+    assert client.post("/api/admin/deco/de:ad:be:ef:00:01/reboot").status_code == 404
+    r = client.post(f"/api/admin/deco/{SAT.lower()}/reboot")
+    assert r.status_code == 200 and r.json()["decos"] == ["Office"] and fake.reboots == [[SAT]]
+    assert client.post(f"/api/admin/deco/{SAT}/reboot").status_code == 429
+    r = client.post("/api/admin/deco/reboot-all")
+    assert r.status_code == 200 and r.json()["decos"] == ["Office", "Living Room"]
+    assert fake.reboots[-2:] == [[SAT], [MAIN]]
+    assert client.post("/api/admin/deco/reboot-all").status_code == 429
+    log = [e["title"] for e in client.get("/api/admin/security-log").json()]
+    assert "Deco: restarted Office" in log and any("could not restart" in x for x in log)
+    assert PASSWORD not in json.dumps(log)
+
+
+def test_deco_reboot_api_needs_sign_in(anon_client):
+    assert anon_client.post("/api/admin/deco/reboot-all", headers=CSRF).status_code == 401
 
 
 def test_map_api_and_layout(client, fake):
