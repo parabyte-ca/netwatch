@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.26.0] - 2026-11-18
+### Added
+- Admin, Servers: a short list of the machines you log in to (AdGuard Home, TrueNAS and so on) with
+  a name, an address on your network, a port and a user. Each one has "Open in SSH app", a link that
+  opens an SSH app on your phone or computer, and "Copy command". The address box suggests machines
+  NetWatch already knows. NetWatch stores no password or key and has no terminal of its own; adding,
+  changing and removing a server goes in the security log. Needs the database to update (one new
+  table, added automatically).
+
 ## [0.25.2] - 2026-11-17
 ### Changed
 - Restarting a Deco from NetWatch did nothing on one home network, and NetWatch could not say

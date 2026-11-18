@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.25.2-blue)
+![Version](https://img.shields.io/badge/version-0.26.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -116,6 +116,10 @@ per group or device (internet off at night, YouTube off during homework). See th
   a planned restart is logged as information, not as an outage, and a Deco that never goes
   offline after a restart request is reported, with what the Deco answered shown under the
   buttons.
+- **Servers (SSH app link):** Admin → Servers keeps a short list of machines you log in to, such as
+  AdGuard Home or TrueNAS (name, address on your network, port and user). Each has **Open in SSH
+  app**, an `ssh://` link that opens an SSH app on your phone or computer, and **Copy command**.
+  NetWatch stores no password or key for them and has no terminal of its own.
 - **Live bandwidth per device:** who is using the internet right now and over the last day or
   week ("top talkers" on the Overview and the map), live traffic on every map link (busy links
   are thicker and animated), and a bandwidth chart on each device page. Measured by the Decos,
@@ -334,6 +338,14 @@ Decos** (satellites first, the main Deco last), and a diagnosis that blames one 
 **Restart <name>** beside it. Every restart asks first, names what will drop, and goes in the
 security log. Restarting the main Deco drops Wi-Fi for the whole network for a few minutes,
 and NetWatch itself may go quiet if it sits behind that Deco.
+
+### Servers
+Under **Admin → Servers**, press **Add a server**, then give it a name, an address, a port (22 unless
+you changed it) and the user you log in as. The address box suggests machines NetWatch already knows
+(AdGuard Home, the Decos, the Home Hub and online devices). Only addresses on your network are
+accepted. **Open in SSH app** hands an `ssh://user@host` link to whatever SSH app is installed
+(Termius, Blink, JuiceSSH and similar), which asks for your key or password. **Copy command** copies
+`ssh user@host -p 22` for a terminal. NetWatch never sees or stores the login.
 
 **No data on the map or the DNS page?** An integration saved with polling unticked reads
 nothing. From 0.18.1 the Poll box starts ticked for a new set-up, and the Overview, the DNS page
