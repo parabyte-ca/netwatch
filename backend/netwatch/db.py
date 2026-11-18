@@ -263,6 +263,20 @@ people_devices = Table(
     sqlite_with_rowid=False,
 )
 
+# Saved servers (v0.26): where to open an SSH app. No login is stored here.
+servers = Table(
+    "servers",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("name", String(40), nullable=False, unique=True),
+    Column("host", String(253), nullable=False),
+    Column("port", Integer, nullable=False, default=22),
+    Column("username", String(32), nullable=False),
+    Column("notes", String(200)),
+    Column("sort", Integer, nullable=False, default=0),
+    Column("created_ms", Integer, nullable=False),
+)
+
 device_ips = Table(
     "device_ips",
     metadata,
