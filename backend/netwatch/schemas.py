@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Kind = Literal["icmp", "dns", "tcp", "http"]
-Group = Literal["gateway", "mesh", "public", "dns", "device", "custom"]
+Group = Literal["gateway", "mesh", "public", "dns", "device", "remote", "custom"]
 
 _LABEL = re.compile(r"^(?!-)[A-Za-z0-9_-]{1,63}(?<!-)$")
 MIN_INTERVAL = {"icmp": 1.0, "dns": 5.0, "tcp": 5.0, "http": 10.0}

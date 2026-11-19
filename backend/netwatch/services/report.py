@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 
 from .. import __version__
-from .diagnosis import INTERNET, ISP, LAYER_LABEL, Diagnoser, Incident
+from .diagnosis import INTERNET, ISP, LAYER_LABEL, REMOTE, Diagnoser, Incident
 from .stats import loss_pct
 from .throughput import ThroughputStore
 
@@ -50,7 +50,7 @@ def build_report(
     targets = []
     for t in diag.store.list_targets():
         st = diag.window_stats(t["id"], start_ms, end_ms, now)
-        if not st["count"]:
+        if not st["count"] or diag.layer(t, gw) == REMOTE:  # remote servers are not the network
             continue
         targets.append(
             {

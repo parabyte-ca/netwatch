@@ -22,6 +22,7 @@ from .diagnosis import (
     LAN,
     MESH,
     PUBLIC_DNS,
+    REMOTE,
     target_layer,
 )
 from .events import LOSS, OUTAGE, WIFI
@@ -198,6 +199,20 @@ class NetMap:
         edges[-1]["label"] = "internet"
         edge("hub", "switch")
         edge("switch", "truenas", median_ms=h["median_ms"], loss_pct=h["loss_pct"])
+
+        # Servers of yours outside the network: beyond the Internet node, never part of the chain.
+        for t in by_layer[REMOTE]:
+            v = tview.get(t["id"], {})
+            nid = f"remote:{t['id']}"
+            node(
+                nid,
+                "remote",
+                t["name"],
+                state=v.get("state", "unknown"),
+                members=[member(t)],
+                info={"host": t["host"], "check": t["kind"], "target_id": t["id"]},
+            )
+            edge("internet", nid, "logical", **self._edge_stats(t, tview))
 
         # Devices from the inventory (merged groups resolved)
         rows = st.discovery.inventory.listing(now)
