@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.28.2] - 2026-11-19
+### Added
+- **Ask NetWatch types its answers out.** A new answer rolls onto the screen as if quickly typed
+  (never more than about 5 seconds), with a blinking cursor, and the tray stays scrolled to the
+  end. Tap the answer to show the rest at once. With reduced motion turned on, answers appear whole.
+
 ## [0.28.1] - 2026-11-19
 ### Fixed
 - A remote server is now drawn straight above the Internet tile (centred over it, or in a row

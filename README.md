@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.28.1-blue)
+![Version](https://img.shields.io/badge/version-0.28.2-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -516,6 +516,7 @@ card in **Groups at a glance** to show only that group's devices.
 Create an API key at [console.anthropic.com](https://console.anthropic.com) (usage is billed to
 that account), then under **Admin → Ask NetWatch** paste it, pick the model and effort, press
 **Test key** and **Save**. An **Ask NetWatch** button appears at the bottom right of every page.
+Answers type themselves out quickly (tap one to show it whole; with reduced motion on, they appear at once).
 The key is encrypted like the Hub and Deco passwords. Each question sends the question and the
 data Claude looks up (target and device names and addresses, incident history) to Anthropic.
 That can include the domains a device looked up when you ask about one; turn off **Ask NetWatch:
