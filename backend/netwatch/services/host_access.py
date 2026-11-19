@@ -130,14 +130,20 @@ def hosts_of(ip: str | None, hostname: str | None) -> frozenset[str]:
     return frozenset(out)
 
 
-def view(row: dict | None, services: list[dict], ip: str | None) -> dict:
-    """What the profile shows: the SSH link and the web pages, from the scan and the saved row."""
+def view(row: dict | None, services: list[dict], ip: str | None, *, scanned: bool = True) -> dict:
+    """What the profile shows: the SSH link and the web pages, from the scan and the saved row.
+
+    ``scanned`` False is a remote server, which is never scanned: SSH then shows unless hidden,
+    and the only admin page is the address you saved."""
     row = row or {}
     mode = row.get("ssh_mode") or "auto"
     user = row.get("ssh_user")
     port = row.get("ssh_port") or SSH_PORT
     ssh_seen = next((s for s in services if s["port"] == SSH_PORT), None)
-    available = mode == "on" or (mode == "auto" and ssh_seen is not None)
+    if scanned:
+        available = mode == "on" or (mode == "auto" and ssh_seen is not None)
+    else:
+        available = mode != "off"
     ssh = {
         "available": available and bool(ip),
         "mode": mode,
@@ -170,6 +176,7 @@ def view(row: dict | None, services: list[dict], ip: str | None) -> dict:
     seen = [s["last_seen_ms"] for s in services if s.get("last_seen_ms")]
     return {
         "ip": ip,
+        "scanned": scanned,
         "ssh": ssh,
         "web": {"primary": primary, "others": others},
         "admin_url": override,

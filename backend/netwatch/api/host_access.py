@@ -38,6 +38,57 @@ async def _view(request: Request, device: dict) -> dict:
     return view(row, services, device.get("last_ip"))
 
 
+targets_router = APIRouter(prefix="/api/targets")
+
+
+async def _remote(request: Request, target_id: int) -> dict:
+    t = await asyncio.to_thread(request.app.state.store.get_target, target_id)
+    if t is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "target not found")
+    if t["group"] != "remote":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "only remote servers have access")
+    return t
+
+
+async def _target_view(request: Request, t: dict) -> dict:
+    row = await asyncio.to_thread(request.app.state.access.get, target_id=t["id"])
+    return view(row, [], t["host"], scanned=False)
+
+
+@targets_router.get("/{target_id}/access")
+async def get_target_access(target_id: int, request: Request) -> dict:
+    return await _target_view(request, await _remote(request, target_id))
+
+
+@targets_router.put("/{target_id}/access")
+async def put_target_access(target_id: int, body: AccessIn, request: Request) -> dict:
+    t = await _remote(request, target_id)
+    changes = body.model_dump(exclude_unset=True)
+    store = request.app.state.access
+    before = await asyncio.to_thread(store.get, target_id=t["id"]) or {}
+    try:
+        await asyncio.to_thread(
+            lambda: store.save(target_id=t["id"], hosts=hosts_of(t["host"], None), **changes)
+        )
+    except AccessError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    what = sorted(k for k, v in changes.items() if _changed(before, k, v))
+    if what:
+        await security_event(
+            request, "info", f"Access: changed {', '.join(what)} for {t['name']}",
+            {"action": "access_changed", "target_id": t["id"]},
+        )  # fmt: skip
+    return await _target_view(request, t)
+
+
+_DEFAULTS = {"ssh_port": 22, "ssh_mode": "auto"}
+
+
+def _changed(before: dict, key: str, value) -> bool:
+    new = (value.strip() if isinstance(value, str) else value) or None
+    return (before.get(key, _DEFAULTS.get(key)) or None) != new
+
+
 @router.get("/{device_id}/access")
 async def get_access(device_id: int, request: Request) -> dict:
     d, _members = await _primary(request, device_id)
@@ -50,12 +101,6 @@ async def put_access(device_id: int, body: AccessIn, request: Request) -> dict:
     changes = body.model_dump(exclude_unset=True)
     hosts = hosts_of(d.get("last_ip"), d.get("hostname"))
     before = await asyncio.to_thread(request.app.state.access.get, device_id=d["id"]) or {}
-    defaults = {"ssh_port": 22, "ssh_mode": "auto"}
-
-    def changed(k: str, v) -> bool:
-        return (before.get(k, defaults.get(k)) or None) != (
-            (v.strip() if isinstance(v, str) else v) or None
-        )
 
     try:
         await asyncio.to_thread(
@@ -63,7 +108,7 @@ async def put_access(device_id: int, body: AccessIn, request: Request) -> dict:
         )
     except AccessError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
-    what = sorted(k for k, v in changes.items() if changed(k, v))
+    what = sorted(k for k, v in changes.items() if _changed(before, k, v))
     if what:
         await security_event(
             request, "info",

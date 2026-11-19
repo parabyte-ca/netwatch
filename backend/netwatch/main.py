@@ -583,6 +583,7 @@ def create_app(
     app.include_router(device_groups.router)
     app.include_router(people_api.router)
     app.include_router(host_access_api.router)
+    app.include_router(host_access_api.targets_router)
     app.include_router(speed_api.router)
     app.include_router(netmap.router)
     app.include_router(traffic.router)

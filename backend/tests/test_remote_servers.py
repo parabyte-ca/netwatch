@@ -123,3 +123,63 @@ def test_map_replay_draws_the_remote_server_with_its_state_back_then(client):
     n = next(x for x in g["nodes"] if x["id"] == f"remote:{t['id']}")
     assert n["state"] == "down"
     assert g["at_ms"] is not None
+
+
+def test_remote_access_is_manual_ssh_user_and_an_admin_address_on_the_servers_own_host(client):
+    st = client.app.state
+    t = make_target(st.store, name="Cloud VPS", host="vps.example.com", group="remote")
+    v = client.get(f"/api/targets/{t['id']}/access").json()
+    assert v["scanned"] is False and v["ip"] == "vps.example.com"
+    assert v["ssh"]["available"] and v["ssh"]["ssh_url"] is None  # no user saved yet
+    assert v["web"] == {"primary": None, "others": []}  # nothing is scanned out there
+    r = client.put(
+        f"/api/targets/{t['id']}/access",
+        json={
+            "ssh_user": "ubuntu",
+            "ssh_port": 2222,
+            "admin_url": "https://vps.example.com:9443/ui",
+        },
+        headers=CSRF,
+    )
+    assert r.status_code == 200, r.text
+    v = r.json()
+    assert v["ssh"]["ssh_url"] == "ssh://ubuntu@vps.example.com:2222"
+    assert v["ssh"]["ssh_command"] == "ssh ubuntu@vps.example.com -p 2222"
+    assert v["web"]["primary"]["url"] == "https://vps.example.com:9443/ui"
+    hide = client.put(f"/api/targets/{t['id']}/access", json={"ssh_mode": "off"}, headers=CSRF)
+    assert hide.json()["ssh"]["available"] is False
+    log = [e["title"] for e in client.get("/api/admin/security-log").json()]
+    assert any(
+        x.startswith("Access: changed admin_url, ssh_port, ssh_user for Cloud VPS") for x in log
+    )
+
+
+def test_remote_access_guards(client):
+    st = client.app.state
+    t = make_target(st.store, name="Cloud VPS", host="203.0.113.7", group="remote")
+    lan = make_target(st.store, name="Hub", host="192.168.2.1", group="gateway")
+    path = f"/api/targets/{t['id']}/access"
+    assert client.get("/api/targets/9999/access").status_code == 404
+    assert client.get(f"/api/targets/{lan['id']}/access").status_code == 422  # not a remote server
+    assert (
+        client.put(path, json={"ssh_user": "a"}, headers={"X-Requested-With": ""}).status_code
+        == 403
+    )
+    for bad in ({"ssh_user": "Bad User"}, {"ssh_port": 0}, {"admin_url": "http://evil.example/"},
+                {"admin_url": "ftp://203.0.113.7/"}, {"nope": 1}):  # fmt: skip
+        assert client.put(path, json=bad, headers=CSRF).status_code == 422, bad
+    # Saving what is already saved is not a change and is not logged.
+    client.put(path, json={"ssh_user": "alan"}, headers=CSRF)
+    n = len(client.get("/api/admin/security-log").json())
+    client.put(path, json={"ssh_user": "alan"}, headers=CSRF)
+    assert len(client.get("/api/admin/security-log").json()) == n
+
+
+def test_remote_access_goes_with_the_target_and_needs_sign_in(client, anon_client):
+    st = client.app.state
+    t = make_target(st.store, name="Cloud VPS", host="203.0.113.7", group="remote")
+    client.put(f"/api/targets/{t['id']}/access", json={"ssh_user": "alan"}, headers=CSRF)
+    assert st.access.get(target_id=t["id"]) is not None
+    assert client.delete(f"/api/targets/{t['id']}", headers=CSRF).status_code in (200, 204)
+    assert st.access.get(target_id=t["id"]) is None
+    assert anon_client.get("/api/targets/1/access").status_code == 401
