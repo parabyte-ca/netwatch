@@ -424,24 +424,37 @@ export interface SpeedPlanView {
   open_event_id: number | null;
 }
 
-export interface SavedServer {
-  id: number;
-  name: string;
-  host: string;
-  port: number;
-  username: string;
-  notes: string | null;
-  /** ssh://user@host[:port], opened by an SSH app */
-  ssh_url: string;
-  ssh_command: string;
+export interface WebPage {
+  /** null for an address you saved yourself */
+  port: number | null;
+  scheme: string;
+  url: string;
+  label: string;
 }
 
-export interface ServerInput {
-  name: string;
-  host: string;
-  port: number;
-  username: string;
-  notes: string | null;
+export interface DeviceAccess {
+  ip: string | null;
+  ssh: {
+    available: boolean;
+    mode: 'auto' | 'on' | 'off';
+    /** port 22 was open at the last scan */
+    detected: boolean;
+    banner: string | null;
+    user: string | null;
+    port: number;
+    ssh_url: string | null;
+    ssh_command: string | null;
+  };
+  web: { primary: WebPage | null; others: WebPage[] };
+  admin_url: string | null;
+  scanned_ms: number | null;
+}
+
+export interface DeviceAccessInput {
+  ssh_user: string | null;
+  ssh_port: number;
+  ssh_mode: 'auto' | 'on' | 'off';
+  admin_url: string | null;
 }
 
 export interface Person {
@@ -1362,12 +1375,10 @@ export const api = {
     request<{ groups_created: number; devices: number; unknown_macs: string[] }>('/api/device-groups/import', post(data)),
   integrationHealth: () => request<{ rows: IntegrationRow[]; problems: number }>('/api/admin/integrations/health'),
   speedPlan: (days = 90) => request<SpeedPlanView>(`/api/speed-plan?days=${days}`),
-  servers: () => request<{ servers: SavedServer[] }>('/api/admin/servers'),
-  serverSuggestions: () => request<{ suggestions: { host: string; label: string }[] }>('/api/admin/servers/suggestions'),
-  createServer: (body: ServerInput) => request<SavedServer>('/api/admin/servers', post(body)),
-  saveServer: (id: number, body: Partial<ServerInput>) =>
-    request<SavedServer>(`/api/admin/servers/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
-  deleteServer: (id: number) => request<{ removed: string }>(`/api/admin/servers/${id}`, { method: 'DELETE' }),
+  deviceAccess: (id: number) => request<DeviceAccess>(`/api/devices/${id}/access`),
+  saveDeviceAccess: (id: number, body: Partial<DeviceAccessInput>) =>
+    request<DeviceAccess>(`/api/devices/${id}/access`, { method: 'PUT', body: JSON.stringify(body) }),
+  checkDeviceAccess: (id: number) => request<DeviceAccess>(`/api/devices/${id}/access/check`, post()),
   people: () => request<PeopleList>('/api/people'),
   createPerson: (body: { name: string; colour: string; device_ids: number[] }) => request<Person>('/api/people', post(body)),
   editPerson: (id: number, body: Partial<{ name: string; colour: string; device_ids: number[] }>) =>
