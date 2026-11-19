@@ -37,8 +37,8 @@ from .api import (
     updates,
 )
 from .api import auth as auth_api
+from .api import host_access as host_access_api
 from .api import people as people_api
-from .api import servers as servers_api
 from .api import speed as speed_api
 from .auth import COOKIE_NAME, CSRF_HEADER, CSRF_VALUE, AuthStore, LoginThrottle, issue_setup_token
 from .config import Settings, get_settings
@@ -62,6 +62,7 @@ from .services.events import MONITOR, SECURITY, EventLog, IncidentRecorder, star
 from .services.exposure import ExposureScanner, ExposureStore
 from .services.group_stats import group_stats
 from .services.health import HealthService
+from .services.host_access import AccessStore
 from .services.hub.service import POLL_S as HUB_POLL_S
 from .services.hub.service import HubService, HubStore
 from .services.integration_health import IntegrationHealth, Poller
@@ -77,7 +78,6 @@ from .services.runtime_settings import OVERRIDES_KEY, apply_values, load_overrid
 from .services.scheduler import Monitor
 from .services.secrets import SecretBox
 from .services.seed import seed_defaults
-from .services.servers import ServerStore
 from .services.speed_plan import SpeedPlan
 from .services.storage import Store
 from .services.throughput import ThroughputStore, ThroughputTester
@@ -416,7 +416,8 @@ def create_app(
         app.state.presence = PresenceService(
             PeopleStore(engine), events, store.kv_get, store.kv_set, tz=lambda: settings.tz
         )
-        app.state.servers = ServerStore(engine)
+        app.state.access = AccessStore(engine)
+        app.state.access_checks = {}
         app.state.health = HealthService(
             engine,
             health_report,
@@ -581,7 +582,7 @@ def create_app(
     app.include_router(adguard_actions.router)
     app.include_router(device_groups.router)
     app.include_router(people_api.router)
-    app.include_router(servers_api.router)
+    app.include_router(host_access_api.router)
     app.include_router(speed_api.router)
     app.include_router(netmap.router)
     app.include_router(traffic.router)

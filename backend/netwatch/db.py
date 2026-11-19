@@ -9,6 +9,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     Engine,
     Float,
@@ -263,18 +264,19 @@ people_devices = Table(
     sqlite_with_rowid=False,
 )
 
-# Saved servers (v0.26): where to open an SSH app. No login is stored here.
-servers = Table(
-    "servers",
+# How to reach a device or a remote server (v0.27): SSH user and port, an admin page override.
+# No login is stored here. Exactly one of device_id (primary device row) and target_id is set.
+host_access = Table(
+    "host_access",
     metadata,
     Column("id", Integer, primary_key=True),
-    Column("name", String(40), nullable=False, unique=True),
-    Column("host", String(253), nullable=False),
-    Column("port", Integer, nullable=False, default=22),
-    Column("username", String(32), nullable=False),
-    Column("notes", String(200)),
-    Column("sort", Integer, nullable=False, default=0),
-    Column("created_ms", Integer, nullable=False),
+    Column("device_id", Integer, ForeignKey("devices.id", ondelete="CASCADE"), unique=True),
+    Column("target_id", Integer, ForeignKey("targets.id", ondelete="CASCADE"), unique=True),
+    Column("ssh_user", String(32)),
+    Column("ssh_port", Integer, nullable=False, default=22),
+    Column("ssh_mode", String(4), nullable=False, default="auto"),  # auto | on | off
+    Column("admin_url", String(200)),
+    CheckConstraint("(device_id IS NULL) != (target_id IS NULL)", name="ck_host_access_owner"),
 )
 
 device_ips = Table(
