@@ -110,8 +110,7 @@ describe('NetworkMap', () => {
     expect(panel).toHaveTextContent('Outside your network');
     expect(panel).toHaveTextContent('Port check');
     expect(panel).toHaveTextContent('vps.example.com');
-    expect(within(panel).getByRole('link', { name: /Open server page/ }).getAttribute('href')).toBe('/targets/9');
-  });
+    expect(within(panel).getByRole('link', { name: /Open server page/ }).getAttribute('href')).toBe('/targets/9');  });
 
   it('says why every device is under the Hub when Deco polling is off', async () => {
     mockApi([], { ...graph, deco_api: false, deco: { state: 'not_polling', paused: null } });

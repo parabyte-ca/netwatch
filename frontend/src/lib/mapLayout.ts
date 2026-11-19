@@ -75,6 +75,16 @@ export function layoutMap(nodes: MapNode[], edges: MapEdge[], saved: MapPosition
       out[id] = { x: Math.round(left + (i % COLS) * (NODE_W + GAP_X)), y: Math.round(top + Math.floor(i / COLS) * (NODE_H + GAP_Y)) };
     });
   }
+  // Remote servers sit in one row straight above the Internet node, centred on it.
+  const remotes = nodes.filter((n) => n.kind === 'remote' && out[n.id]).map((n) => n.id).sort();
+  const net = out.internet;
+  if (net && remotes.length) {
+    const step = NODE_W + GAP_X;
+    const left = net.x - ((remotes.length - 1) * step) / 2;
+    remotes.forEach((id, i) => {
+      out[id] = { x: Math.round(left + i * step), y: net.y - NODE_H - 70 };
+    });
+  }
   for (const id of Object.keys(out)) if (saved[id]) out[id] = saved[id]!;
   return out;
 }

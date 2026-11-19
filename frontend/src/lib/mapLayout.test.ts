@@ -23,6 +23,18 @@ describe('layoutMap with remote servers', () => {
     expect(Math.abs(p['remote:1']!.x - p['remote:2']!.x)).toBeGreaterThan(100);
   });
 
+  it('centres one remote server straight above the Internet node, and a row of them around it', () => {
+    const wide = [...nodes.slice(0, 3), node('dev', 'host'), node('dev2', 'host'), node('remote:1', 'remote')];
+    const e = [edge('hub', 'isp'), edge('isp', 'internet'), edge('hub', 'dev'), edge('hub', 'dev2'), edge('internet', 'remote:1')];
+    const one = layoutMap(wide, e);
+    expect(one['remote:1']!.x).toBe(one.internet!.x);
+    expect(one['remote:1']!.y).toBeLessThan(one.internet!.y);
+    const three = layoutMap([...wide, node('remote:2', 'remote'), node('remote:3', 'remote')], [...e, edge('internet', 'remote:2'), edge('internet', 'remote:3')]);
+    const xs = ['remote:1', 'remote:2', 'remote:3'].map((id) => three[id]!.x).sort((a, b) => a - b);
+    expect(xs[1]).toBe(three.internet!.x);
+    expect(xs[1]! - xs[0]!).toBeGreaterThanOrEqual(184);
+  });
+
   it('leaves the map as before when there are none, and honours a dragged position', () => {
     const plain = layoutMap(nodes.slice(0, 3), edges.slice(0, 2));
     expect(Object.keys(plain)).toEqual(['internet', 'isp', 'hub']);
