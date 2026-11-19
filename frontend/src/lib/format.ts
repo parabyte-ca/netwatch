@@ -66,10 +66,11 @@ export const GROUP_LABEL: Record<string, string> = {
   public: 'Internet',
   dns: 'DNS',
   device: 'Devices',
+  remote: 'Remote servers',
   custom: 'Custom',
 };
 
-export const GROUP_ORDER = ['gateway', 'mesh', 'public', 'dns', 'device', 'custom'];
+export const GROUP_ORDER = ['gateway', 'mesh', 'public', 'dns', 'device', 'remote', 'custom'];
 
 /** Human duration from milliseconds: "45 s", "12 min", "3 h 05 min", "2 d 4 h". */
 export function fmtDurationMs(ms: number | null | undefined): string {

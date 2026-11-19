@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { DeviceAccess } from '../components/DeviceAccess';
 import { SmokeChart } from '../components/SmokeChart';
 import { StatusBadge } from '../components/StatusBadge';
 import { api, type ProbeResult } from '../lib/api';
@@ -120,6 +121,8 @@ export function TargetDetail() {
           </p>
         )}
       </div>
+
+      {t.group === 'remote' && <DeviceAccess id={t.id} remote />}
 
       {sum && (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">

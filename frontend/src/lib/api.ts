@@ -1,5 +1,5 @@
 export type Kind = 'icmp' | 'dns' | 'tcp' | 'http';
-export type Group = 'gateway' | 'mesh' | 'public' | 'dns' | 'device' | 'custom';
+export type Group = 'gateway' | 'mesh' | 'public' | 'dns' | 'device' | 'remote' | 'custom';
 export type State = 'up' | 'degraded' | 'down' | 'unknown';
 
 export interface Target {
@@ -434,6 +434,8 @@ export interface WebPage {
 
 export interface DeviceAccess {
   ip: string | null;
+  /** false for a remote server, which is never scanned */
+  scanned: boolean;
   ssh: {
     available: boolean;
     mode: 'auto' | 'on' | 'off';
@@ -969,7 +971,7 @@ export interface HubStatus {
   suggestion?: string | null;
 }
 
-export type MapNodeKind = 'internet' | 'isp' | 'hub' | 'switch' | 'host' | 'deco' | 'device' | 'group' | 'devgroup';
+export type MapNodeKind = 'internet' | 'isp' | 'hub' | 'switch' | 'host' | 'deco' | 'device' | 'group' | 'devgroup' | 'remote';
 
 export interface MapMember {
   target_id: number;
@@ -1021,6 +1023,10 @@ export interface MapNode {
     tags?: string[];
     parent?: string;
     collapsed?: string[];
+    /** a remote server: its address, how it is checked, and the target behind it */
+    host?: string;
+    check?: string;
+    target_id?: number;
   };
 }
 
@@ -1378,6 +1384,9 @@ export const api = {
   deviceAccess: (id: number) => request<DeviceAccess>(`/api/devices/${id}/access`),
   saveDeviceAccess: (id: number, body: Partial<DeviceAccessInput>) =>
     request<DeviceAccess>(`/api/devices/${id}/access`, { method: 'PUT', body: JSON.stringify(body) }),
+  targetAccess: (id: number) => request<DeviceAccess>(`/api/targets/${id}/access`),
+  saveTargetAccess: (id: number, body: Partial<DeviceAccessInput>) =>
+    request<DeviceAccess>(`/api/targets/${id}/access`, { method: 'PUT', body: JSON.stringify(body) }),
   checkDeviceAccess: (id: number) => request<DeviceAccess>(`/api/devices/${id}/access/check`, post()),
   people: () => request<PeopleList>('/api/people'),
   createPerson: (body: { name: string; colour: string; device_ids: number[] }) => request<Person>('/api/people', post(body)),

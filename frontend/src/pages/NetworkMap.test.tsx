@@ -91,6 +91,28 @@ describe('NetworkMap', () => {
     expect(calls.some((c) => c.url === '/api/map')).toBe(true);
   });
 
+  it('draws a remote server beyond the Internet node and opens its details with a link to its page', async () => {
+    const remote = n('remote:9', 'remote', 'Cloud VPS', {
+      members: [{ target_id: 9, name: 'Cloud VPS', host: 'vps.example.com', state: 'up', median_ms: 38, loss_pct: 0 }],
+      info: { host: 'vps.example.com', check: 'tcp', target_id: 9 },
+    });
+    const g: NetworkMapResponse = {
+      ...graph,
+      nodes: [...graph.nodes, remote],
+      edges: [...graph.edges, { id: 'internet>remote:9', source: 'internet', target: 'remote:9', medium: 'logical', median_ms: 38, loss_pct: 0, label: null }],
+    };
+    mockApi([], g);
+    render(<MemoryRouter initialEntries={['/map']}><NetworkMap /></MemoryRouter>);
+    expect(await screen.findByText('Cloud VPS')).toBeInTheDocument();
+    expect(screen.getByTestId('node-remote:9')).toHaveTextContent('vps.example.com');
+    fireEvent.click(screen.getByTestId('node-remote:9'));
+    const panel = await screen.findByRole('complementary', { name: 'Node details' });
+    expect(panel).toHaveTextContent('Outside your network');
+    expect(panel).toHaveTextContent('Port check');
+    expect(panel).toHaveTextContent('vps.example.com');
+    expect(within(panel).getByRole('link', { name: /Open server page/ }).getAttribute('href')).toBe('/targets/9');
+  });
+
   it('says why every device is under the Hub when Deco polling is off', async () => {
     mockApi([], { ...graph, deco_api: false, deco: { state: 'not_polling', paused: null } });
     render(<MemoryRouter initialEntries={['/map']}><NetworkMap /></MemoryRouter>);
