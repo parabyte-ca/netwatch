@@ -6,8 +6,9 @@ const btn = 'rounded-md px-2.5 py-1 text-xs font-medium disabled:opacity-50';
 const input = 'rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 focus:border-sky-500 focus:outline-none';
 const err = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/** How to reach this device: an SSH link and its admin web page, from the exposure scan. NetWatch never logs in. */
-export function DeviceAccess({ id }: { id: number }) {
+/** How to reach this device: an SSH link and its admin web page, from the exposure scan. NetWatch never logs in.
+ * A remote server (a monitored target outside the network) is never scanned, so there everything is saved by hand. */
+export function DeviceAccess({ id, remote = false }: { id: number; remote?: boolean }) {
   const [acc, setAcc] = useState<Access | null>(null);
   const [editing, setEditing] = useState(false);
   const [user, setUser] = useState('');
@@ -27,8 +28,8 @@ export function DeviceAccess({ id }: { id: number }) {
     setAdmin(a.admin_url ?? '');
   };
   useEffect(() => {
-    api.deviceAccess(id).then(apply, (e) => setError(err(e)));
-  }, [id]);
+    (remote ? api.targetAccess(id) : api.deviceAccess(id)).then(apply, (e) => setError(err(e)));
+  }, [id, remote]);
 
   async function run(fn: () => Promise<Access>, done?: () => void) {
     setBusy(true);
@@ -44,7 +45,7 @@ export function DeviceAccess({ id }: { id: number }) {
   }
   const save = () =>
     run(
-      () => api.saveDeviceAccess(id, { ssh_user: user.trim() || null, ssh_port: Number(port) || 22, ssh_mode: mode, admin_url: admin.trim() || null }),
+      () => (remote ? api.saveTargetAccess : api.saveDeviceAccess)(id, { ssh_user: user.trim() || null, ssh_port: Number(port) || 22, ssh_mode: mode, admin_url: admin.trim() || null }),
       () => setEditing(false),
     );
   const check = () => run(() => api.checkDeviceAccess(id));
@@ -97,7 +98,9 @@ export function DeviceAccess({ id }: { id: number }) {
               )}
             </div>
           ) : (
-            <p className="mt-1 text-slate-500">No web interface found at the last scan.</p>
+            <p className="mt-1 text-slate-500">
+              {acc.scanned ? 'No web interface found at the last scan.' : 'No admin page address saved. Add one under Settings.'}
+            </p>
           )}
         </div>
         <div>
@@ -112,7 +115,8 @@ export function DeviceAccess({ id }: { id: number }) {
             </div>
           ) : askUser ? (
             <p className="mt-1 text-slate-300">
-              SSH is open{ssh.banner ? ` (${ssh.banner})` : ''}. Open <button className="text-sky-400 hover:underline" onClick={() => setEditing(true)}>Settings</button> and
+              {acc.scanned ? `SSH is open${ssh.banner ? ` (${ssh.banner})` : ''}. Open ` : 'Open '}
+              <button className="text-sky-400 hover:underline" onClick={() => setEditing(true)}>Settings</button> and
               enter the user you log in as.
             </p>
           ) : (
@@ -138,26 +142,34 @@ export function DeviceAccess({ id }: { id: number }) {
               <label className="flex flex-col gap-1">
                 <span className="text-xs text-slate-400">Show SSH</span>
                 <select aria-label="Show SSH" className={input} value={mode} onChange={(e) => setMode(e.target.value as 'auto' | 'on' | 'off')}>
-                  <option value="auto">When found by the scan</option>
-                  <option value="on">Always</option>
+                  {acc.scanned ? (
+                    <>
+                      <option value="auto">When found by the scan</option>
+                      <option value="on">Always</option>
+                    </>
+                  ) : (
+                    <option value="auto">Show</option>
+                  )}
                   <option value="off">Hide</option>
                 </select>
               </label>
             </div>
             <label className="flex flex-col gap-1">
-              <span className="text-xs text-slate-400">Admin page address (optional, on this device's own address)</span>
+              <span className="text-xs text-slate-400">Admin page address (optional, on {remote ? "this server's" : "this device's"} own address)</span>
               <input aria-label="Admin page address" className={`${input} w-full`} maxLength={200} autoCapitalize="none"
-                value={admin} placeholder={`http://${acc.ip}:8080/ui`} onChange={(e) => setAdmin(e.target.value)} />
+                value={admin} placeholder={acc.scanned ? `http://${acc.ip}:8080/ui` : `https://${acc.ip}/`} onChange={(e) => setAdmin(e.target.value)} />
             </label>
             <button className={`${btn} bg-sky-600 text-white hover:bg-sky-500`} disabled={busy} onClick={() => void save()}>Save</button>
           </div>
         )}
-        <div className="flex flex-wrap items-center gap-2 border-t border-slate-800 pt-2 text-xs text-slate-500">
-          <span>{acc.scanned_ms ? `Last scanned ${fmtAgo(acc.scanned_ms, Date.now())}.` : 'Not scanned yet.'}</span>
-          <button className={`${btn} text-sky-300 ring-1 ring-slate-700 hover:bg-slate-800`} disabled={busy} onClick={() => void check()}>
-            Check now
-          </button>
-        </div>
+        {acc.scanned && (
+          <div className="flex flex-wrap items-center gap-2 border-t border-slate-800 pt-2 text-xs text-slate-500">
+            <span>{acc.scanned_ms ? `Last scanned ${fmtAgo(acc.scanned_ms, Date.now())}.` : 'Not scanned yet.'}</span>
+            <button className={`${btn} text-sky-300 ring-1 ring-slate-700 hover:bg-slate-800`} disabled={busy} onClick={() => void check()}>
+              Check now
+            </button>
+          </div>
+        )}
         {error && <p className="text-rose-400" role="alert">{error}</p>}
       </div>
     </section>

@@ -79,6 +79,12 @@ export function TargetForm({ initial, submitLabel, onSubmit, onCancel }: Props) 
             <option key={g} value={g}>{GROUP_LABEL[g]}</option>
           ))}
         </select>
+        {v.group === 'remote' && (
+          <p className="mt-1 text-xs text-slate-400">
+            A server of yours outside this network. It is drawn beyond the Internet on the map, and never counted in the
+            diagnosis of your network or Bell.
+          </p>
+        )}
       </div>
 
       {v.kind === 'http' ? (

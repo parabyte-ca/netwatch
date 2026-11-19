@@ -48,6 +48,9 @@ HOST, LAN, GATEWAY, GATEWAY_DNS, MESH, DEVICE, ISP, INTERNET, PUBLIC_DNS = (
     "host", "lan", "gateway", "gateway_dns", "mesh", "device", "isp", "internet", "public_dns",
 )  # fmt: skip
 LOCAL_DNS = "local_dns"  # AdGuard Home (or another resolver on the LAN)
+# A server of yours outside the network (a VPS, a remote house). Shown on the map and monitored like
+# any target, but never evidence about the home network, Bell or the internet.
+REMOTE = "remote"
 DNS_LAYERS = frozenset({GATEWAY_DNS, PUBLIC_DNS, LOCAL_DNS})
 # AdGuard Home reports that start an incident on their own (DNS can fail with every probe fine).
 DNS_SEED_TYPES = frozenset({"adguard_unreachable", "upstream_failing"})
@@ -63,6 +66,7 @@ LAYER_LABEL = {
     INTERNET: "Internet destinations",
     PUBLIC_DNS: "Public DNS",
     LOCAL_DNS: "AdGuard Home",
+    REMOTE: "Remote servers",
 }
 
 # Tree for the UI: (layer, parent)
@@ -84,6 +88,8 @@ def target_layer(
     t: dict, gateway_ip: str | None, local_dns: frozenset[str] | set[str] = frozenset()
 ) -> str:
     g, host = t["group"], t["host"]
+    if g == "remote":
+        return REMOTE
     if t["kind"] == "dns":
         if host in local_dns:
             return LOCAL_DNS
@@ -215,6 +221,8 @@ class Diagnoser:
             for e in self.events.list(start_ms, end_ms, kinds=[DNS], limit=2000)
             if e["details"].get("type") in DNS_SEED_TYPES
         ]
+        remote_ids = {t["id"] for t in self.store.list_targets() if t["group"] == "remote"}
+        failures = [e for e in failures if e.get("target_id") not in remote_ids]
         failures.sort(key=lambda e: e["start_ms"])
         groups: list[Incident] = []
         for ev in failures:
@@ -296,7 +304,7 @@ class Diagnoser:
             if "macs" not in entry:
                 entry.update(wifi.get(t["id"], _NO_WIFI))
         for t in targets.values():
-            if t["id"] in inc.failing:
+            if t["id"] in inc.failing or t["group"] == "remote":
                 continue
             n, lost = self.window_loss(t["id"], start, end, now)
             lp = round(100 * lost / n, 2) if n else None

@@ -7,6 +7,7 @@ afterEach(() => vi.restoreAllMocks());
 
 const base: Access = {
   ip: '192.168.2.5',
+  scanned: true,
   ssh: { available: true, mode: 'auto', detected: true, banner: 'SSH-2.0-OpenSSH_9.2', user: null, port: 22, ssh_url: null, ssh_command: null },
   web: {
     primary: { port: 443, scheme: 'https', url: 'https://192.168.2.5', label: 'HTTPS' },
@@ -127,5 +128,65 @@ describe('DeviceAccess', () => {
     const { container } = render(<DeviceAccess id={7} />);
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
     expect(container.querySelector('section')).toBeNull();
+  });
+});
+
+describe('DeviceAccess for a remote server', () => {
+  const remote: Access = {
+    ip: 'vps.example.com',
+    scanned: false,
+    ssh: { available: true, mode: 'auto', detected: false, banner: null, user: null, port: 22, ssh_url: null, ssh_command: null },
+    web: { primary: null, others: [] },
+    admin_url: null,
+    scanned_ms: null,
+  };
+
+  function mockRemote(initial: Access, afterSave?: Access) {
+    const calls: Call[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      calls.push({ url, method, body: init?.body as string | undefined });
+      const body = method === 'PUT' && afterSave ? afterSave : initial;
+      return new Response(JSON.stringify(url === '/api/targets/7/access' ? body : {}));
+    });
+    return calls;
+  }
+
+  it('is saved by hand: no scan text, no Check now, an address hint, and Show or Hide only', async () => {
+    const calls = mockRemote(remote);
+    render(<DeviceAccess id={7} remote />);
+    expect(await screen.findByText('No admin page address saved. Add one under Settings.')).toBeTruthy();
+    expect(calls[0]!.url).toBe('/api/targets/7/access');
+    expect(screen.queryByRole('button', { name: 'Check now' })).toBeNull();
+    expect(screen.queryByText(/scanned/i)).toBeNull();
+    expect(screen.getByText(/enter the user you log in as/)).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Settings' })[0]!);
+    const options = within(screen.getByLabelText('Show SSH')).getAllByRole('option').map((o) => o.textContent);
+    expect(options).toEqual(['Show', 'Hide']);
+    expect(screen.getByLabelText('Admin page address').getAttribute('placeholder')).toBe('https://vps.example.com/');
+    expect(screen.getByText(/this server's own address/)).toBeTruthy();
+  });
+
+  it('saves the user and an admin address to the target, then offers both links', async () => {
+    const saved: Access = {
+      ...remote,
+      ssh: { ...remote.ssh, user: 'ubuntu', port: 2222, ssh_url: 'ssh://ubuntu@vps.example.com:2222', ssh_command: 'ssh ubuntu@vps.example.com -p 2222' },
+      web: { primary: { port: null, scheme: 'https', url: 'https://vps.example.com:9443/ui', label: 'Saved address' }, others: [] },
+      admin_url: 'https://vps.example.com:9443/ui',
+    };
+    const calls = mockRemote(remote, saved);
+    render(<DeviceAccess id={7} remote />);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]!);
+    fireEvent.change(screen.getByLabelText('SSH user'), { target: { value: 'ubuntu' } });
+    fireEvent.change(screen.getByLabelText('SSH port'), { target: { value: '2222' } });
+    fireEvent.change(screen.getByLabelText('Admin page address'), { target: { value: 'https://vps.example.com:9443/ui' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true));
+    const put = calls.find((c) => c.method === 'PUT')!;
+    expect(put.url).toBe('/api/targets/7/access');
+    expect(JSON.parse(put.body!)).toEqual({ ssh_user: 'ubuntu', ssh_port: 2222, ssh_mode: 'auto', admin_url: 'https://vps.example.com:9443/ui' });
+    expect((await screen.findByRole('link', { name: 'Open in SSH app' })).getAttribute('href')).toBe('ssh://ubuntu@vps.example.com:2222');
+    expect(screen.getByRole('link', { name: 'Open admin page' }).getAttribute('href')).toBe('https://vps.example.com:9443/ui');
   });
 });

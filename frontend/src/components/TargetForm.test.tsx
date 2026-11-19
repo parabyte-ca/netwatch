@@ -17,6 +17,13 @@ describe('TargetForm', () => {
     expect(onSubmit.mock.calls[0]![0]).toMatchObject({ name: 'NAS SSH', kind: 'tcp', host: '192.168.2.15', port: 22, interval_s: 30 });
   });
 
+  it('explains the Remote servers group where it is chosen', () => {
+    render(<TargetForm initial={EMPTY_TARGET} submitLabel="Add" onSubmit={vi.fn()} />);
+    expect(screen.queryByText(/outside this network/)).toBeNull();
+    fireEvent.change(screen.getByLabelText('Group'), { target: { value: 'remote' } });
+    expect(screen.getByText(/drawn beyond the Internet on the map, and never counted in the diagnosis/)).toBeInTheDocument();
+  });
+
   it('shows server errors', async () => {
     const onSubmit = vi.fn().mockRejectedValue(new Error('host: must be an IP address or a valid hostname'));
     render(<TargetForm initial={{ ...EMPTY_TARGET, name: 'x', host: 'bad host' }} submitLabel="Add" onSubmit={onSubmit} />);

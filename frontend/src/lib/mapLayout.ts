@@ -53,7 +53,8 @@ export function layoutMap(nodes: MapNode[], edges: MapEdge[], saved: MapPosition
   // The Internet sits above the Hub, so lay that part out in reverse (parent above child).
   for (const e of edges) {
     if (inGrid.has(e.target)) continue;
-    const up = e.target === 'isp' || e.target === 'internet';
+    // A remote server sits above the Internet node, outside the network.
+    const up = e.target === 'isp' || e.target === 'internet' || byId.get(e.target)?.kind === 'remote';
     if (up) g.setEdge(e.target, e.source);
     else g.setEdge(e.source, e.target);
   }

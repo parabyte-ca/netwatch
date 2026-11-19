@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.28.0] - 2026-11-19
+### Added
+- **Remote servers on the map.** Add a server of yours outside the network (a VPS, a friend's NAS,
+  a public IP) as a target with the group **Remote server**. It is probed by ping, a TCP port or a
+  web page like any target, and drawn on the map beyond the Internet node with its live status and
+  latency, in replay too. Its page has an Access card: save the SSH user and port, and an admin page
+  address, by hand (remote servers are never scanned).
+### Changed
+- Remote servers are kept out of the diagnosis: a remote server that is down opens its own event, but
+  never changes the Internet, Bell or Home Hub verdict, the health score or the Bell report.
+
 ## [0.27.0] - 2026-11-19
 ### Added
 - Device pages have an **Access** card. "Open admin page" appears for a device whose web interface

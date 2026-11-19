@@ -43,8 +43,11 @@ def _topology(request: Request) -> list[dict]:
     gw = route.gateway if route else None
     members: dict[str, list[dict]] = {layer: [] for layer, _ in TOPOLOGY}
     for t in st.store.list_targets(enabled_only=True):
+        layer = st.diagnoser.layer(t, gw)
+        if layer not in members:  # remote servers are not part of the home network's layers
+            continue
         s = st.monitor.target_status(t["id"], now)
-        members[st.diagnoser.layer(t, gw)].append(
+        members[layer].append(
             {"target_id": t["id"], "name": t["name"], "host": t["host"], "state": s["state"]}
         )
 

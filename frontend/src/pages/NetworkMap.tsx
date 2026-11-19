@@ -37,6 +37,7 @@ const ICON: Record<MapNode['kind'], string> = {
   device: '💻',
   group: '⋯',
   devgroup: '▣',
+  remote: '☁️',
 };
 
 type MapNodeData = { node: MapNode; mark: 'cause' | 'failing' | null; accent: string | null; faded: boolean };
@@ -50,7 +51,7 @@ function subline(n: MapNode): string {
   if (n.traffic) return rates(n.traffic);
   if (n.kind === 'group' || n.kind === 'devgroup') return 'tap to list';
   const m = n.members.find((x) => x.median_ms != null);
-  const parts = [n.info.ip, n.info.backhaul && n.kind === 'deco' ? n.info.backhaul : null, m ? fmtMs(m.median_ms) : null];
+  const parts = [n.info.ip ?? n.info.host, n.info.backhaul && n.kind === 'deco' ? n.info.backhaul : null, m ? fmtMs(m.median_ms) : null];
   return parts.filter(Boolean).join(' · ') || (n.inferred ? 'inferred' : '');
 }
 
@@ -137,12 +138,17 @@ function toFlow(g: { nodes: MapNode[]; edges: MapEdge[] }, pos: MapPositions, hl
   return { nodes, edges };
 }
 
+const CHECK_LABEL: Record<string, string> = { icmp: 'Ping', tcp: 'Port check', http: 'Web page', dns: 'DNS query' };
+
 function Details({ n, onClose }: { n: MapNode; onClose: () => void }) {
   const st = STATE_STYLE[n.state];
   const i = n.info;
   const rows: [string, React.ReactNode][] = [
     ['State', <span className={st.text}>{st.label}</span>],
     ['IP', i.ip],
+    ['Address', i.host],
+    ['Check', i.check && (CHECK_LABEL[i.check] ?? i.check)],
+    ['Where', n.kind === 'remote' && 'Outside your network'],
     ['MAC', i.mac && <span className="font-mono">{i.mac}</span>],
     ['Model', i.model],
     ['Role', i.role && (i.role === 'main' ? 'Main Deco' : 'Satellite')],
@@ -203,6 +209,9 @@ function Details({ n, onClose }: { n: MapNode; onClose: () => void }) {
       )}
       {i.device_id != null && (
         <Link to={`/devices/${i.device_id}`} className="inline-block text-sky-400 hover:underline">Open device</Link>
+      )}
+      {n.kind === 'remote' && i.target_id != null && (
+        <Link to={`/targets/${i.target_id}`} className="inline-block text-sky-400 hover:underline">Open server page (history, SSH, admin page)</Link>
       )}
     </aside>
   );
