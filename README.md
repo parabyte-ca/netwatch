@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.26.0-blue)
+![Version](https://img.shields.io/badge/version-0.27.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -116,10 +116,12 @@ per group or device (internet off at night, YouTube off during homework). See th
   a planned restart is logged as information, not as an outage, and a Deco that never goes
   offline after a restart request is reported, with what the Deco answered shown under the
   buttons.
-- **Servers (SSH app link):** Admin → Servers keeps a short list of machines you log in to, such as
-  AdGuard Home or TrueNAS (name, address on your network, port and user). Each has **Open in SSH
-  app**, an `ssh://` link that opens an SSH app on your phone or computer, and **Copy command**.
-  NetWatch stores no password or key for them and has no terminal of its own.
+- **Device access (SSH and admin page):** a device's page has an **Access** card. When the exposure
+  scan found a web interface (ports 80, 443, 8080, 8443, 5000, 8123 or 32400) it offers **Open admin
+  page**; when it found SSH (port 22) it offers **Open in SSH app**, an `ssh://` link for an app on
+  your phone or computer, and **Copy command**, once you have saved the user you log in as. A switch
+  per device can always show or hide SSH, and **Check now** re-scans just that device. NetWatch
+  stores no password or key and has no terminal of its own.
 - **Live bandwidth per device:** who is using the internet right now and over the last day or
   week ("top talkers" on the Overview and the map), live traffic on every map link (busy links
   are thicker and animated), and a bandwidth chart on each device page. Measured by the Decos,
@@ -339,13 +341,16 @@ Decos** (satellites first, the main Deco last), and a diagnosis that blames one 
 security log. Restarting the main Deco drops Wi-Fi for the whole network for a few minutes,
 and NetWatch itself may go quiet if it sits behind that Deco.
 
-### Servers
-Under **Admin → Servers**, press **Add a server**, then give it a name, an address, a port (22 unless
-you changed it) and the user you log in as. The address box suggests machines NetWatch already knows
-(AdGuard Home, the Decos, the Home Hub and online devices). Only addresses on your network are
-accepted. **Open in SSH app** hands an `ssh://user@host` link to whatever SSH app is installed
-(Termius, Blink, JuiceSSH and similar), which asks for your key or password. **Copy command** copies
-`ssh user@host -p 22` for a terminal. NetWatch never sees or stores the login.
+### Device access
+Open a device (Devices, then its name) and find the **Access** card. **Open admin page** appears when the
+last scan found a web interface on the device; **Open in SSH app** appears when it found SSH. For SSH,
+open **Settings**, enter the user you log in as (and the port if it is not 22); the link then opens
+whatever SSH app is installed (Termius, Blink, JuiceSSH and similar), which asks for your key or
+password. **Copy command** copies `ssh user@host -p 22` for a terminal. If the scan has not seen a
+service you know is there, press **Check now** (it probes only that device, a few ports), or set
+**Show SSH** to Always. An admin page that lives at an address other than the usual ports can be
+saved under Settings (it must be on the device's own address). NetWatch never sees or stores the login.
+Servers you saved under Admin → Servers in 0.26.0 move onto the matching devices when NetWatch updates.
 
 **No data on the map or the DNS page?** An integration saved with polling unticked reads
 nothing. From 0.18.1 the Poll box starts ticked for a new set-up, and the Overview, the DNS page

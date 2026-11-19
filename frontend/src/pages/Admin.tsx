@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { EventRow } from '../components/EventRow';
 import { ConfirmDialog, type Confirm } from '../components/ConfirmDialog';
 import { restartConfirm, restartNote } from '../components/DecoRestart';
-import { ServersCard } from '../components/ServersCard';
 import { api, type AdGuardStatus, type AssistantStatus, type DecoStatus, type DecoTestResult, type HubStatus, type SettingField, type SettingsResponse } from '../lib/api';
 import { fmtAgo, fmtBytes, fmtDurationMs, fmtTime } from '../lib/format';
 import { usePolling } from '../lib/usePolling';
@@ -843,7 +842,6 @@ export function Admin() {
       <HubCard />
       <AdGuardCard />
       <DecoCard />
-      <ServersCard />
       <AssistantCard />
       <SessionsCard />
       <BackupsCard onRestart={() => void waitForRestart(setNote)} />

@@ -174,6 +174,35 @@ class ExposureStore:
                     )
                 )
 
+    def record_checked(
+        self, device_id: int, found: dict[int, str], checked: list[int], now_ms: int
+    ) -> None:
+        """One device re-checked on some ports: store those found open and drop only the checked
+        ports that are now closed, leaving the rest of its scan untouched."""
+        with self.engine.begin() as conn:
+            for port, banner in found.items():
+                stmt = sqlite_insert(device_services).values(
+                    device_id=device_id,
+                    port=port,
+                    first_seen_ms=now_ms,
+                    last_seen_ms=now_ms,
+                    banner=banner or None,
+                )
+                conn.execute(
+                    stmt.on_conflict_do_update(
+                        index_elements=["device_id", "port"],
+                        set_={"last_seen_ms": now_ms, "banner": stmt.excluded.banner},
+                    )
+                )
+            closed = [p for p in checked if p not in found]
+            if closed:
+                conn.execute(
+                    delete(device_services).where(
+                        device_services.c.device_id == device_id,
+                        device_services.c.port.in_(closed),
+                    )
+                )
+
     def purge(self, cutoff_ms: int) -> int:
         with self.engine.begin() as conn:
             n = conn.execute(delete(exposure_scans).where(exposure_scans.c.ts_ms < cutoff_ms))
@@ -284,6 +313,17 @@ class ExposureScanner:
         self._task: asyncio.Task | None = None
         self._manual: asyncio.Task | None = None
         self.progress: dict | None = None
+
+    async def check_device(self, device_id: int, ip: str, ports: list[int]) -> dict[int, str]:
+        """Probe a few ports on one LAN device now and keep what is found. {port: banner}."""
+        if not _private(ip):
+            raise ValueError("only addresses on the LAN are checked")
+        results = await asyncio.gather(*(self.probe(ip, p) for p in ports))
+        found = {p: banner for p, (ok, banner) in zip(ports, results, strict=True) if ok}
+        await asyncio.to_thread(
+            self.store.record_checked, device_id, found, list(ports), int(time.time() * 1000)
+        )
+        return found
 
     @property
     def running(self) -> bool:

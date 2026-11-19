@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.27.0] - 2026-11-19
+### Added
+- Device pages have an **Access** card. "Open admin page" appears for a device whose web interface
+  the scan found (ports 80, 443, 8080, 8443, 5000, 8123, 32400; the usual ports first, the rest
+  listed under it). "Open in SSH app" and "Copy command" appear for a device with SSH open: save the
+  user you log in as (and the port) under Settings. A per-device switch can always show or hide SSH,
+  an admin page address can be saved, and "Check now" re-scans just that device.
+### Changed
+- The Admin, Servers list from 0.26.0 is gone: SSH belongs on the device. When NetWatch updates, each
+  saved server moves onto the device with its address; one that matches no device is noted in the
+  Security log. Needs the database to update (added and removed tables, automatic).
+
 ## [0.26.0] - 2026-11-18
 ### Added
 - Admin, Servers: a short list of the machines you log in to (AdGuard Home, TrueNAS and so on) with
