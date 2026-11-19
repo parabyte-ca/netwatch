@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.27.0-blue)
+![Version](https://img.shields.io/badge/version-0.28.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -116,6 +116,10 @@ per group or device (internet off at night, YouTube off during homework). See th
   a planned restart is logged as information, not as an outage, and a Deco that never goes
   offline after a restart request is reported, with what the Deco answered shown under the
   buttons.
+- **Remote servers:** add a server outside your network (a VPS, a relative's NAS, a public IP) as a
+  target with the group **Remote server**. It is drawn on the map beyond the Internet node with live
+  status, has its own SSH and admin-page links, and never counts toward the diagnosis of your network
+  or Bell.
 - **Device access (SSH and admin page):** a device's page has an **Access** card. When the exposure
   scan found a web interface (ports 80, 443, 8080, 8443, 5000, 8123 or 32400) it offers **Open admin
   page**; when it found SSH (port 22) it offers **Open in SSH app**, an `ssh://` link for an app on
@@ -340,6 +344,13 @@ Decos** (satellites first, the main Deco last), and a diagnosis that blames one 
 **Restart <name>** beside it. Every restart asks first, names what will drop, and goes in the
 security log. Restarting the main Deco drops Wi-Fi for the whole network for a few minutes,
 and NetWatch itself may go quiet if it sits behind that Deco.
+
+### Remote servers
+Open **Targets**, add a target and choose the group **Remote server**; the check can be a ping, a TCP
+port or a web page. The server appears on the **Map** above the Internet node, coloured by its state,
+and tapping it opens its page. There, the **Access** card holds the SSH user and port and an optional
+admin page address (saved by hand, since NetWatch never scans outside your network). If a remote
+server goes down NetWatch records its own event, but the Internet, Bell and score are unaffected.
 
 ### Device access
 Open a device (Devices, then its name) and find the **Access** card. **Open admin page** appears when the
