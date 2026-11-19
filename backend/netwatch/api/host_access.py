@@ -49,16 +49,25 @@ async def put_access(device_id: int, body: AccessIn, request: Request) -> dict:
     d, _members = await _primary(request, device_id)
     changes = body.model_dump(exclude_unset=True)
     hosts = hosts_of(d.get("last_ip"), d.get("hostname"))
+    before = await asyncio.to_thread(request.app.state.access.get, device_id=d["id"]) or {}
+    defaults = {"ssh_port": 22, "ssh_mode": "auto"}
+
+    def changed(k: str, v) -> bool:
+        return (before.get(k, defaults.get(k)) or None) != (
+            (v.strip() if isinstance(v, str) else v) or None
+        )
+
     try:
         await asyncio.to_thread(
             lambda: request.app.state.access.save(device_id=d["id"], hosts=hosts, **changes)
         )
     except AccessError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
-    if changes:
+    what = sorted(k for k, v in changes.items() if changed(k, v))
+    if what:
         await security_event(
             request, "info",
-            f"Access: changed {', '.join(sorted(changes))} for {device_label(d)}",
+            f"Access: changed {', '.join(what)} for {device_label(d)}",
             {"action": "access_changed", "device_id": d["id"]},
         )  # fmt: skip
     return await _view(request, d)

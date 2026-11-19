@@ -281,6 +281,13 @@ def test_api_get_put_and_log(client):
     log = [e["title"] for e in client.get("/api/admin/security-log").json()]
     assert any(x.startswith("Access: changed ssh_port, ssh_user for") for x in log)
     assert "alan" not in " ".join(log)  # field names only
+    # Saving the same values again, as the page does, is not a change and is not logged.
+    before = len(log)
+    same = {"ssh_user": "alan", "ssh_port": 2222, "ssh_mode": "off",
+            "admin_url": "http://192.168.2.5:8080/ui"}  # fmt: skip
+    assert client.put(f"/api/devices/{did}/access", json=same, headers=CSRF).status_code == 200
+    log = [e["title"] for e in client.get("/api/admin/security-log").json()]
+    assert len(log) == before
 
 
 def test_api_merged_device_uses_its_primary(client):
