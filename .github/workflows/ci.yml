@@ -63,7 +63,8 @@ jobs:
 
   layout:
     # Every page must fit a 390 px phone screen, also with 1.3x text (scripts/ci-layout.sh).
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, which Playwright 1.56.1 cannot install Chromium on.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
