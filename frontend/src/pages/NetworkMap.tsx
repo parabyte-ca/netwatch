@@ -118,10 +118,13 @@ function toFlow(g: { nodes: MapNode[]; edges: MapEdge[] }, pos: MapPositions, hl
     const down = byId.get(e.target)?.state === 'down' || byId.get(e.source)?.state === 'down';
     const colour = down ? '#ef4444' : e.loss_pct != null ? lossColour(e.loss_pct) : '#475569';
     const flow = e.traffic ? e.traffic.down_bps + e.traffic.up_bps : 0;
+    // A remote server is drawn above the Internet node, so its link runs from the remote's
+    // bottom handle to Internet's top handle (no loop over the top of the tile).
+    const flip = byId.get(e.target)?.kind === 'remote';
     return {
       id: e.id,
-      source: e.source,
-      target: e.target,
+      source: flip ? e.target : e.source,
+      target: flip ? e.source : e.target,
       label: edgeLabel(e),
       labelStyle: { fill: '#cbd5e1', fontSize: 11 },
       labelBgStyle: { fill: '#0f172a' },

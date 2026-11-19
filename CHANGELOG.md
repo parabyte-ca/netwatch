@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.28.1] - 2026-11-19
+### Fixed
+- A remote server is now drawn straight above the Internet tile (centred over it, or in a row
+  when there are several), and its link runs down to the tile instead of looping over it.
+
 ## [0.28.0] - 2026-11-19
 ### Added
 - **Remote servers on the map.** Add a server of yours outside the network (a VPS, a friend's NAS,
