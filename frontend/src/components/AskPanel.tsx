@@ -23,7 +23,52 @@ const TOOL_LABEL: Record<string, string> = {
   path_tests: 'traceroutes',
 };
 
-type Msg = AskTurn & { tools?: string[] };
+type Msg = AskTurn & { tools?: string[]; typing?: boolean };
+
+const TYPE_MIN_CPS = 80; // characters a second for a short answer
+const TYPE_MAX_S = 5; // a long answer speeds up so none takes longer than this
+
+const reducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+/** An answer that types itself out. Tap it to show the rest at once; reduced motion shows it whole. */
+export function TypedText({ text, onTick, onDone }: { text: string; onTick?: () => void; onDone?: () => void }) {
+  const chars = useRef<string[]>([]);
+  if (chars.current.join('') !== text) chars.current = Array.from(text);
+  const total = chars.current.length;
+  const [shown, setShown] = useState(() => (reducedMotion() ? total : 0));
+  const done = shown >= total;
+  const tick = useRef(onTick);
+  const fin = useRef(onDone);
+  tick.current = onTick;
+  fin.current = onDone;
+
+  useEffect(() => {
+    if (shown >= total) return;
+    const cps = Math.max(TYPE_MIN_CPS, total / TYPE_MAX_S);
+    const start = Date.now() - (shown / cps) * 1000;
+    const id = window.setInterval(() => {
+      setShown(Math.min(total, Math.ceil(((Date.now() - start) / 1000) * cps)));
+    }, 30);
+    return () => window.clearInterval(id);
+    // Restarting on `shown` would reset the pace, so only the text decides.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text]);
+  useEffect(() => {
+    tick.current?.();
+    if (done) fin.current?.();
+  }, [shown, done]);
+
+  if (done) return <>{text}</>;
+  return (
+    <span onClick={() => setShown(total)} className="cursor-pointer">
+      <span className="sr-only">{text}</span>
+      <span aria-hidden="true">
+        {chars.current.slice(0, shown).join('')}
+        <span className="animate-pulse text-sky-400">▍</span>
+      </span>
+    </span>
+  );
+}
 
 /** "Ask NetWatch": a chat panel, shown only once an Anthropic API key is saved. */
 export function AskPanel() {
@@ -66,15 +111,19 @@ export function AskPanel() {
     if (open) field.current?.focus({ preventScroll: true });
   }, [open]);
   // Scroll only the conversation, never the page (scrollIntoView also moves the page on phones).
-  useEffect(() => {
+  const toBottom = () => {
     const el = log.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [msgs, busy, error]);
+  };
+  useEffect(toBottom, [msgs, busy, error]);
+  const finishTyping = (i: number) =>
+    setMsgs((cur) => (cur[i]?.typing ? cur.map((m, j) => (j === i ? { ...m, typing: false } : m)) : cur));
 
   async function send(q: string) {
     const question = q.trim();
     if (!question || busy) return;
-    const history: Msg[] = [...msgs, { role: 'user', content: question }];
+    // A new question finishes any answer still typing.
+    const history: Msg[] = [...msgs.map((m) => (m.typing ? { ...m, typing: false } : m)), { role: 'user', content: question }];
     setMsgs(history);
     setText('');
     setBusy(true);
@@ -82,7 +131,7 @@ export function AskPanel() {
     try {
       const r = await api.ask(history.map(({ role, content }) => ({ role, content })));
       const answer = typeof r?.answer === 'string' && r.answer ? r.answer : '(no answer)';
-      setMsgs([...history, { role: 'assistant', content: answer, tools: Array.isArray(r?.tools) ? r.tools : [] }]);
+      setMsgs([...history, { role: 'assistant', content: answer, tools: Array.isArray(r?.tools) ? r.tools : [], typing: true }]);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setMsgs(msgs); // drop the unanswered question so it can be asked again
@@ -136,8 +185,10 @@ export function AskPanel() {
           )}
           {msgs.map((m, i) => (
             <div key={i} className={m.role === 'user' ? 'ml-8 rounded-lg bg-sky-900/50 px-3 py-2 text-slate-100' : 'mr-4 text-slate-200'}>
-              <div className="whitespace-pre-wrap break-words">{m.content}</div>
-              {m.tools && m.tools.length > 0 && (
+              <div className="whitespace-pre-wrap break-words">
+                {m.typing ? <TypedText text={m.content} onTick={toBottom} onDone={() => finishTyping(i)} /> : m.content}
+              </div>
+              {!m.typing && m.tools && m.tools.length > 0 && (
                 <div className="mt-1 text-[11px] text-slate-500">Looked at: {[...new Set(m.tools)].map((t) => TOOL_LABEL[t] ?? t).join(', ')}</div>
               )}
             </div>

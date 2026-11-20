@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AskPanel } from './AskPanel';
 
@@ -25,7 +25,7 @@ describe('AskPanel', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Ask NetWatch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Which device uses the most bandwidth?' }));
     expect(await screen.findByText('The living-room TV: 24 Mb/s.')).toBeInTheDocument();
-    expect(screen.getByText('Looked at: bandwidth')).toBeInTheDocument();
+    expect(await screen.findByText('Looked at: bandwidth')).toBeInTheDocument();
     expect(f).toHaveBeenCalledWith('/api/ask', expect.objectContaining({ method: 'POST' }));
   });
 });
@@ -108,5 +108,73 @@ describe('AskPanel tray', () => {
     render(<AskPanel />);
     await screen.findByRole('button', { name: 'Ask NetWatch' });
     expect(add.mock.calls.some(([type]) => type === 'pointerdown')).toBe(false);
+  });
+});
+
+describe('AskPanel typing', () => {
+  const ANSWER = 'The living-room TV is the busiest device right now, at 24 Mb/s.';
+  const mock = () =>
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) =>
+      init?.method === 'POST'
+        ? new Response(JSON.stringify({ answer: ANSWER, tools: ['bandwidth'], model: 'x', usage: {}, stop_reason: 'end_turn' }))
+        : new Response(JSON.stringify({ available: true, model: 'x' })),
+    );
+  const ask = async () => {
+    render(<AskPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Ask NetWatch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Which device uses the most bandwidth?' }));
+  };
+  const visible = () => document.querySelector('[aria-hidden="true"]:not(aside)')?.textContent ?? '';
+  afterEach(() => vi.useRealTimers());
+
+  it('types the answer out gradually, then shows what it looked at', async () => {
+    mock();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await ask();
+    await screen.findByText(ANSWER, { selector: '.sr-only' });
+    const early = visible();
+    expect(early.length).toBeLessThan(ANSWER.length);
+    expect(screen.queryByText('Looked at: bandwidth')).toBeNull();
+    await act(async () => {
+      vi.advanceTimersByTime(1500);
+    });
+    expect(await screen.findByText('Looked at: bandwidth')).toBeInTheDocument();
+    expect(screen.getByText(ANSWER)).toBeInTheDocument();
+  });
+
+  it('shows the whole answer when you tap it', async () => {
+    mock();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await ask();
+    const full = await screen.findByText(ANSWER, { selector: '.sr-only' });
+    fireEvent.click(full.parentElement!);
+    expect(screen.getByText(ANSWER)).toBeInTheDocument();
+    expect(screen.getByText('Looked at: bandwidth')).toBeInTheDocument();
+  });
+
+  it('shows the answer at once with reduced motion', async () => {
+    mock();
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: q.includes('reduce'), addEventListener() {}, removeEventListener() {} }));
+    try {
+      await ask();
+      expect(await screen.findByText(ANSWER)).toBeInTheDocument();
+      expect(document.querySelector('.sr-only')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('finishes a typing answer when the next question is sent', async () => {
+    mock();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await ask();
+    await screen.findByText(ANSWER, { selector: '.sr-only' });
+    fireEvent.change(screen.getByLabelText('Question'), { target: { value: 'And the quietest?' } });
+    fireEvent.submit(screen.getByLabelText('Question').closest('form')!);
+    await screen.findByText('And the quietest?');
+    // The first answer is now plain text; only the newest one may still be typing.
+    const first = document.querySelectorAll('div.whitespace-pre-wrap')[1] as HTMLElement;
+    expect(first.textContent).toBe(ANSWER);
+    expect(first.querySelector('.sr-only')).toBeNull();
   });
 });
