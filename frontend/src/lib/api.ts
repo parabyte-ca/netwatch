@@ -859,6 +859,18 @@ export interface Reservation {
 }
 
 export type AdGuardProfileName = 'default' | 'no_blocking' | 'strict';
+export type CopyItem = 'allow' | 'apps' | 'filtering' | 'schedules';
+export interface CopyDeviceBody {
+  from_device_id: number;
+  also_to: number[];
+  items: CopyItem[];
+  mode: 'merge' | 'replace';
+  preview?: boolean;
+}
+export interface CopyDeviceResult {
+  preview: boolean;
+  destinations: { device_id: number; label: string; applied: string[]; skipped: string[] }[];
+}
 export type YouTubeSetting = 'default' | 'restricted' | 'blocked' | 'allowed';
 
 export interface AdGuardSettings {
@@ -1452,6 +1464,8 @@ export const api = {
     request<unknown>(`/api/adguard/actions/profiles/device/${id}`, { method: 'PUT', body: JSON.stringify(settings) }),
   setAllowed: (kind: 'device' | 'group', id: number, domains: string[]) =>
     request<{ allow: string[] }>(`/api/adguard/actions/profiles/${kind}/${id}/allow`, { method: 'PUT', body: JSON.stringify({ domains }) }),
+  copyDeviceSettings: (id: number, body: CopyDeviceBody) =>
+    request<CopyDeviceResult>(`/api/adguard/actions/profiles/device/${id}/copy`, post(body)),
   setGroupProfile: (id: number, settings: AdGuardSettings) =>
     request<unknown>(`/api/adguard/actions/profiles/group/${id}`, { method: 'PUT', body: JSON.stringify(settings) }),
   adguardReserve: (mac: string, ip: string, hostname?: string) =>
