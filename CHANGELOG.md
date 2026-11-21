@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.29.0] - 2026-11-21
+### Added
+- **Copy a device's DNS settings.** A device's AdGuard Home settings card has **Copy from another
+  device**: choose a source, tick what to copy (always-allowed domains, blocked apps, filtering
+  and YouTube, Internet-off schedules), choose Merge or Replace, and optionally add more devices
+  to copy to. A preview shows the result for each device before you confirm; AdGuard Home is
+  updated once, and each device is noted in the Security log.
+
 ## [0.28.2] - 2026-11-19
 ### Added
 - **Ask NetWatch types its answers out.** A new answer rolls onto the screen as if quickly typed
