@@ -41,6 +41,7 @@ FULL_SYNC_S = 300  # also re-check everything this often (drift)
 SCHEDULE_RULES_KEY = "adguard_schedule_rules"  # NetWatch's own $client lines (internet off, allow)
 ALLOW_KEY = "adguard_allow"  # {"device:12" | "group:3": [domains always allowed]}
 MAX_ALLOW = 50  # domains per device or group
+COPY_ITEMS = ("allow", "apps", "filtering", "schedules")  # what a device copy can carry
 MAX_ALLOW_LINES = 500
 _ENGINES = ("bing", "duckduckgo", "ecosia", "google", "pixabay", "yandex", "youtube")
 
@@ -59,6 +60,16 @@ def normalize_settings(v) -> dict:
 
 def is_default(s: dict) -> bool:
     return normalize_settings(s) == DEFAULT_SETTINGS
+
+
+def _counts(noun: str, added: int, removed: int) -> str:
+    """ "2 blocked apps added, 1 removed" for a copy summary."""
+    parts = []
+    if added:
+        parts.append(f"{added} {noun}{'' if added == 1 else 's'} added")
+    if removed:
+        parts.append(f"{removed} removed")
+    return ", ".join(parts)
 
 
 def describe(s: dict, names: dict[str, str] | None = None) -> str:
@@ -567,6 +578,97 @@ class ProfileSync:
         await self._check_apps(s)
         await asyncio.to_thread(self._save, "groups", group_id, s)
         return await self.reconcile()
+
+    async def copy_device(self, source_id: int, dest_ids: list[int], items: list[str],
+                          mode: str, by: str = "", preview: bool = False) -> dict:  # fmt: skip
+        """Copy one device's own always-allowed domains, blocked apps, filtering and YouTube, and
+        schedules to other devices. ``merge`` adds to what a device has (its own filtering and
+        YouTube win where they are not "default"); ``replace`` makes it match the source. The
+        source's group settings are never copied. Everything is checked before anything is
+        stored, and AdGuard Home is updated once. ``preview`` stores nothing."""
+        if not self.actions.enabled():
+            raise ActionsDisabled("AdGuard Home actions are turned off (Admin settings)")
+        wanted = [i for i in COPY_ITEMS if i in set(items or [])]
+        if not wanted:
+            raise ActionError("choose what to copy")
+        if mode not in ("merge", "replace"):
+            raise ActionError("mode must be merge or replace")
+        try:
+            src = (await asyncio.to_thread(self.groups.primaries, [source_id]))[0]
+            dests = await asyncio.to_thread(self.groups.primaries, list(dest_ids))
+        except Exception:  # GroupError: an unknown device
+            raise ActionError("no such device") from None
+        if not dests:
+            raise ActionError("choose a device to copy to")
+        if src in dests:
+            raise ActionError("a device cannot be copied onto itself")
+        prof = await asyncio.to_thread(self.profiles)
+        allow = await asyncio.to_thread(self.allow_lists)
+        src_set = prof["devices"].get(str(src))  # None: it uses its group's settings
+        src_allow = allow.get(f"device:{src}", [])
+        report: dict[int, dict] = {d: {"device_id": d, "applied": [], "skipped": []} for d in dests}
+
+        if src_set is None and ("filtering" in wanted or "apps" in wanted):
+            note = "uses its group's settings, so there is no filtering, YouTube or app choice"
+            for d in dests:
+                report[d]["skipped"].append(f"The source {note}")
+        for d in dests:
+            cur = prof["devices"].get(str(d)) or dict(DEFAULT_SETTINGS)
+            new = dict(cur)
+            if src_set is not None and "filtering" in wanted:
+                for f in ("filtering", "youtube"):
+                    keep = mode == "merge" and cur[f] != "default"
+                    new[f] = cur[f] if keep else src_set[f]
+                if (new["filtering"], new["youtube"]) != (cur["filtering"], cur["youtube"]):
+                    report[d]["applied"].append("filtering or YouTube changed")
+            if src_set is not None and "apps" in wanted:
+                svc = sorted(set(cur["services"]) | set(src_set["services"])
+                             if mode == "merge" else src_set["services"])  # fmt: skip
+                if len(svc) > MAX_SERVICES:
+                    raise ActionError(f"at most {MAX_SERVICES} blocked apps each")
+                new["services"] = svc
+                gained, lost = set(svc) - set(cur["services"]), set(cur["services"]) - set(svc)
+                if gained or lost:
+                    report[d]["applied"].append(_counts("blocked app", len(gained), len(lost)))
+            if new != cur:
+                prof["devices"][str(d)] = normalize_settings(new)
+                if is_default(prof["devices"][str(d)]):
+                    prof["devices"].pop(str(d), None)
+            if "allow" in wanted:
+                have = allow.get(f"device:{d}", [])
+                dom = sorted(set(have) | set(src_allow) if mode == "merge" else src_allow)
+                if len(dom) > MAX_ALLOW:
+                    raise ActionError(f"at most {MAX_ALLOW} always-allowed domains each")
+                if dom:
+                    allow[f"device:{d}"] = dom
+                else:
+                    allow.pop(f"device:{d}", None)
+                gained, lost = set(dom) - set(have), set(have) - set(dom)
+                if gained or lost:
+                    report[d]["applied"].append(
+                        _counts("always-allowed domain", len(gained), len(lost))
+                    )
+        if sum(len(v) for v in allow.values()) > MAX_ALLOW_LINES:
+            raise ActionError(f"at most {MAX_ALLOW_LINES} always-allowed domains in total")
+        if "apps" in wanted:
+            fresh = {x for d in dests for x in prof["devices"].get(str(d), {}).get("services", [])}
+            await self._check_apps({"services": sorted(fresh)})
+        if "schedules" in wanted:
+            if self.schedules is None:
+                for d in dests:
+                    report[d]["skipped"].append("Schedules are not available")
+            else:
+                done = await asyncio.to_thread(self.schedules.copy_device, src, dests, mode,
+                                               by, not preview)  # fmt: skip
+                for d, c in done.items():
+                    if c["added"] or c["removed"]:
+                        report[d]["applied"].append(_counts("schedule", c["added"], c["removed"]))
+        result = {"preview": preview, "destinations": [report[d] for d in dests]}
+        if preview:
+            return result
+        await asyncio.to_thread(self.store.kv_set, PROFILES_KEY, prof)
+        await asyncio.to_thread(self.store.kv_set, ALLOW_KEY, allow)
+        return {**result, **await self.reconcile()}
 
     def state(self) -> dict:
         return {

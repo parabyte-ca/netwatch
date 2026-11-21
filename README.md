@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.28.2-blue)
+![Version](https://img.shields.io/badge/version-0.29.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -465,6 +465,14 @@ AdGuard Home actions** to get a **Controls** section on the DNS page:
   its filtering. On the device's DNS card, **Allow here** next to a blocked domain fills it in.
   Internet off schedules still win. NetWatch adds them as `@@||site^$client='NetWatch: …'`
   rules next to your own and removes only its own.
+- **Copy a device's DNS settings:** on a device's page, **Copy from another device** takes the
+  source's own always-allowed domains, blocked apps, filtering and YouTube choice, and
+  Internet-off schedules (tick what you want) and puts them on this device, and on more devices
+  if you tick them under "Also copy to". **Merge** (the default) adds to what a device already has
+  and keeps its own filtering and YouTube choice; **Replace** makes it match the source. A preview
+  shows what would change for each device first, and nothing is stored until you confirm. Only
+  the source's own settings are copied, never what it inherits from its group; temporary
+  "off until" changes and one-off internet-off windows are not copied.
 - **Schedules per group or device:** for example "School nights: internet off 21:00 to 07:00,
   Sunday to Thursday" or "Homework: YouTube and games off 16:00 to 18:00 on weekdays". Set them in
   a group's AdGuard Home dialog (Devices → Groups…) or on a device's page, from a preset (School

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { api, type AdGuardProfileName, type AdGuardProfiles, type AdGuardSettings, type YouTubeSetting } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { ConfirmDialog, type Confirm } from './ConfirmDialog';
+import { CopyDeviceSettings } from './CopyDeviceSettings';
 import { TargetSchedules } from './Schedules';
 
 const select = 'rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 focus:border-sky-500 focus:outline-none';
@@ -223,6 +224,7 @@ export function DeviceProfile({ d }: { d: { id: number; label: string; group: { 
         {own && <button className={`${btn} text-slate-300 ring-1 ring-slate-700 hover:bg-slate-800`} onClick={() => save(DEFAULT_SETTINGS)}>
           {fallback ? "Use the group's settings" : 'Remove own settings'}</button>}
       </div>
+      <CopyDeviceSettings d={d} onDone={refresh} />
       {conflict && (
         <p className="text-xs text-amber-300">
           Not applied: this device is already in your AdGuard Home client "{conflict.client}". Remove it there to let NetWatch manage it.
