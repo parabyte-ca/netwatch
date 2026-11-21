@@ -1883,3 +1883,170 @@ async def test_clients_also_list_the_current_ip_so_adguard_matches_without_its_d
     p.inventory.forget()
     await p.reconcile()
     assert _clients(p)["NetWatch: Alan's iPhone"]["ids"] == ["192.168.2.61", "da:11:22:00:00:21"]
+
+
+# ── copy a device's DNS settings (0.29.0) ────────────────────────────────────
+
+
+async def _source_and_two(p):
+    """A source with two always-allowed domains, one app, Strict, YouTube blocked and a schedule."""
+    src = _dev(p, "00:11:22:00:00:31", "Kid phone", last_ip="192.168.2.31")
+    tab = _dev(p, "00:11:22:00:00:32", "Tablet", last_ip="192.168.2.32")
+    tv = _dev(p, "00:11:22:00:00:33", "Spare TV", last_ip="192.168.2.33")
+    await p.set_device(src, {"filtering": "strict", "youtube": "blocked", "services": ["tiktok"]})
+    await p.set_allow("device", src, ["school.ca", "khanacademy.org"])
+    start, end = _window_now()
+    nightly = {"name": "Bedtime", "target": {"kind": "device", "id": src}}
+    nightly["days"] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    p.schedules.add(
+        {**nightly, "start": start, "end": end, "effects": {"internet_off": True}}, "admin"
+    )
+    return src, tab, tv
+
+
+ALL = ["allow", "apps", "filtering", "schedules"]
+
+
+async def test_copy_merges_into_what_the_destination_already_has(sprof):
+    p = sprof
+    src, tab, tv = await _source_and_two(p)
+    await p.set_device(
+        tab, {"filtering": "no_blocking", "youtube": "default", "services": ["roblox"]}
+    )
+    await p.set_allow("device", tab, ["netflix.com"])
+    r = await p.copy_device(src, [tab, tv], ALL, "merge", "admin")
+    assert [d["device_id"] for d in r["destinations"]] == sorted([tab, tv])
+    s = p.profiles()["devices"]
+    # The tablet keeps its own No blocking, gains YouTube blocked and adds TikTok to Roblox.
+    assert s[str(tab)] == {
+        "filtering": "no_blocking",
+        "youtube": "blocked",
+        "services": ["roblox", "tiktok"],
+    }
+    assert s[str(tv)] == {"filtering": "strict", "youtube": "blocked", "services": ["tiktok"]}
+    assert p.allow_lists()[f"device:{tab}"] == ["khanacademy.org", "netflix.com", "school.ca"]
+    assert p.allow_lists()[f"device:{tv}"] == ["khanacademy.org", "school.ca"]
+    own = lambda d: [x for x in p.schedules.list() if x["target"] == {"kind": "device", "id": d}]  # noqa: E731
+    assert [x["name"] for x in own(tab)] == ["Bedtime"] and [x["name"] for x in own(tv)] == [
+        "Bedtime"
+    ]
+    # Copying again adds nothing: an identical schedule is not duplicated.
+    again = await p.copy_device(src, [tab], ALL, "merge", "admin")
+    assert again["destinations"][0]["applied"] == [] and len(own(tab)) == 1
+    # AdGuard Home got the client rules in one pass.
+    rules = p.fake.user_rules
+    assert "@@||school.ca^$client='NetWatch: Tablet'" in rules
+    assert "||*^$client='NetWatch: Tablet',important" in rules
+
+
+async def test_copy_replace_makes_the_destination_match_the_source(sprof):
+    p = sprof
+    src, tab, _tv = await _source_and_two(p)
+    await p.set_device(
+        tab, {"filtering": "no_blocking", "youtube": "allowed", "services": ["roblox"]}
+    )
+    await p.set_allow("device", tab, ["netflix.com"])
+    start, end = _window_now()
+    old = {"name": "Old", "target": {"kind": "device", "id": tab}, "days": ["mon"]}
+    p.schedules.add({**old, "start": start, "end": end, "effects": {"youtube_off": True}}, "admin")
+    await p.copy_device(src, [tab], ALL, "replace", "admin")
+    assert p.profiles()["devices"][str(tab)] == p.profiles()["devices"][str(src)]
+    assert p.allow_lists()[f"device:{tab}"] == p.allow_lists()[f"device:{src}"]
+    names = [x["name"] for x in p.schedules.list() if x["target"] == {"kind": "device", "id": tab}]
+    assert names == ["Bedtime"]
+
+
+async def test_copy_only_the_ticked_items_and_a_preview_changes_nothing(sprof):
+    p = sprof
+    src, tab, _tv = await _source_and_two(p)
+    pre = await p.copy_device(src, [tab], ALL, "merge", "admin", preview=True)
+    assert pre["preview"] and pre["destinations"][0]["applied"]
+    assert str(tab) not in p.profiles()["devices"] and f"device:{tab}" not in p.allow_lists()
+    assert not [x for x in p.schedules.list() if x["target"] == {"kind": "device", "id": tab}]
+    await p.copy_device(src, [tab], ["allow"], "merge", "admin")
+    assert p.allow_lists()[f"device:{tab}"] == ["khanacademy.org", "school.ca"]
+    assert str(tab) not in p.profiles()["devices"]
+
+
+async def test_copy_skips_filtering_when_the_source_uses_its_group(sprof):
+    p = sprof
+    kids = p.gs.create("Kids", "rose", "child")["id"]
+    src = _dev(p, "00:11:22:00:00:41", "Group phone", last_ip="192.168.2.41")
+    tab = _dev(p, "00:11:22:00:00:42", "Tablet", last_ip="192.168.2.42")
+    p.gs.assign([src], kids)
+    await p.set_group(kids, "strict")
+    await p.set_allow("device", src, ["school.ca"])
+    r = await p.copy_device(src, [tab], ["allow", "filtering", "apps"], "merge", "admin")
+    assert "group" in r["destinations"][0]["skipped"][0]
+    assert (
+        p.allow_lists()[f"device:{tab}"] == ["school.ca"]
+        and str(tab) not in p.profiles()["devices"]
+    )
+
+
+async def test_copy_refuses_bad_requests_and_changes_nothing(sprof):
+    from netwatch.services.adguard.actions import ActionError, ActionsDisabled
+
+    p = sprof
+    src, tab, tv = await _source_and_two(p)
+    for args in (
+        (src, [src], ALL, "merge"),  # onto itself
+        (src, [tab], [], "merge"),  # nothing ticked
+        (src, [tab], ALL, "swap"),  # unknown mode
+        (src, [999999], ALL, "merge"),  # no such device
+        (src, [], ALL, "merge"),  # no destination
+    ):
+        with pytest.raises(ActionError):
+            await p.copy_device(*args)
+    # More than 50 always-allowed domains in the merge: nothing is stored for any destination.
+    await p.set_allow("device", tab, [f"site{i}.ca" for i in range(49)])
+    with pytest.raises(ActionError):
+        await p.copy_device(src, [tv, tab], ["allow"], "merge")
+    assert f"device:{tv}" not in p.allow_lists()
+    p.actions.store.kv_set("adguard_actions", False)
+    p.actions.enabled = lambda: False
+    with pytest.raises(ActionsDisabled):
+        await p.copy_device(src, [tab], ALL, "merge")
+
+
+def test_copy_api_guards_preview_and_security_log(client):
+    from netwatch.services.events import SECURITY
+
+    st = client.app.state
+    fake = FakeAdGuard()
+    st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
+    st.adguard.save(HOST, PORT, False, USER, True, PASSWORD)
+    now = int(time.time() * 1000)
+
+    def dev(mac, name):
+        return st.device_store.insert(
+            {"mac": mac, "first_seen_ms": 0, "last_seen_ms": now, "name": name}
+        )
+
+    src, tab = dev("00:11:22:00:00:51", "Kid phone"), dev("00:11:22:00:00:52", "Tablet")
+    url = f"/api/adguard/actions/profiles/device/{tab}/copy"
+    body = {"from_device_id": src, "items": ["allow", "apps"], "mode": "merge"}
+    assert client.post(url, json=body).status_code == 403  # actions off
+    client.put("/api/admin/settings", json={"changes": {"adguard_actions": True}})
+    st.discovery.inventory.forget()
+    assert client.put(f"/api/adguard/actions/profiles/device/{src}/allow",
+                      json={"domains": ["school.ca"]}).status_code == 200  # fmt: skip
+    assert client.post(url, json=body, headers={"X-Requested-With": ""}).status_code == 403
+    pre = client.post(url, json={**body, "preview": True})
+    assert pre.status_code == 200, pre.text
+    assert pre.json()["destinations"][0]["label"] == "Tablet"
+    assert client.get("/api/adguard/actions/profiles").json()["allow"] == {
+        f"device:{src}": ["school.ca"]
+    }
+    ok = client.post(url, json=body)
+    assert ok.status_code == 200, ok.text
+    assert client.get("/api/adguard/actions/profiles").json()["allow"][f"device:{tab}"] == [
+        "school.ca"
+    ]
+    assert client.post(url, json={**body, "from_device_id": tab}).status_code == 422  # itself
+    assert client.post(url, json={**body, "from_device_id": 9999}).status_code == 404
+    assert client.post(url, json={**body, "items": []}).status_code == 422
+    log = [e["title"] for e in st.events.list(0, 10**14, kinds=[SECURITY])]
+    assert any(
+        t.startswith("AdGuard Home: copied settings from Kid phone to Tablet (merge)") for t in log
+    )

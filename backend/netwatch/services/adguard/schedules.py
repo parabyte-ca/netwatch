@@ -206,6 +206,44 @@ class ScheduleStore:
         self._save(d)
         return cur
 
+    def copy_device(
+        self, source: int, dests: list[int], mode: str, by: str, save: bool = True
+    ) -> dict:
+        """Copy one device's own schedules to other devices. ``merge`` adds the ones a device
+        does not already have, ``replace`` deletes its own first. Temporary "off until" exceptions
+        and manual windows are never copied. Nothing is stored unless ``save`` (a preview).
+        Returns {dest id: {"added": n, "removed": n}}; raises ActionError past the limit."""
+        d = self._load()
+        mine = {"kind": "device", "id": source}
+        src = [s for s in d["schedules"] if s["target"] == mine]
+
+        def sig(s: dict) -> tuple:
+            eff = repr(sorted(s["effects"].items()))
+            return (s["name"], tuple(s["days"]), s["start"], s["end"], eff, s.get("enabled", True))
+
+        out: dict[int, dict] = {}
+        for dest in dests:
+            to = {"kind": "device", "id": dest}
+            own = [s for s in d["schedules"] if s["target"] == to]
+            if mode == "replace":
+                gone = {s["id"] for s in own}
+                d["schedules"] = [s for s in d["schedules"] if s["id"] not in gone]
+                for sid in gone:
+                    d["exceptions"].pop(sid, None)
+                own = []
+            have = {sig(s) for s in own}
+            fresh = [s for s in src if sig(s) not in have]
+            now = int(time.time() * 1000)
+            for s in fresh:
+                d["schedules"].append({**s, "id": secrets.token_hex(4), "target": to,
+                                       "created_ms": now, "by": by})  # fmt: skip
+            out[dest] = {"added": len(fresh), "removed": len(gone) if mode == "replace" else 0}
+        if len(d["schedules"]) > MAX_SCHEDULES:
+            raise ActionError(f"at most {MAX_SCHEDULES} schedules")
+        if save:
+            self._save(d)
+        return out
+
     def drop_target(self, kind: str, tid: int) -> int:
         """Remove the schedules and manual windows of a deleted group or device."""
         d = self._load()

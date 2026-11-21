@@ -442,6 +442,50 @@ async def set_group_allow(group_id: int, body: AllowIn, request: Request) -> dic
     return await _set_allow(request, "group", group_id, body)
 
 
+class CopyIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    from_device_id: int
+    also_to: list[int] = Field(default_factory=list, max_length=20)
+    items: list[Literal["allow", "apps", "filtering", "schedules"]] = Field(min_length=1)
+    mode: Literal["merge", "replace"] = "merge"
+    preview: bool = False
+
+
+@router.post("/profiles/device/{device_id}/copy")
+async def copy_device_settings(device_id: int, body: CopyIn, request: Request) -> dict:
+    """Copy another device's own DNS settings onto this device (and optionally more)."""
+    _gate(request)
+    p = _profiles(request)
+    store = request.app.state.device_store
+    ids = list(dict.fromkeys([device_id, *body.also_to]))
+    labels: dict[int, str] = {}
+    for i in [body.from_device_id, *ids]:
+        dev = await asyncio.to_thread(store.get, i)
+        if dev is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such device")
+        labels[i] = device_label(dev)[:60]
+    prim = await asyncio.to_thread(request.app.state.groups.primaries, ids)
+    who = {pid: labels.get(i, "a device") for i, pid in zip(ids, prim, strict=False)}
+    src_label = labels[body.from_device_id]
+    r = await _run(request, f"copy settings from {src_label}",
+                   p.copy_device(body.from_device_id, ids, body.items, body.mode,
+                                 _who(request), body.preview))  # fmt: skip
+    for d in r["destinations"]:
+        d["label"] = who.get(d["device_id"], "a device")
+    if not body.preview:
+        for d in r["destinations"]:
+            done = "; ".join(d["applied"]) or "nothing needed changing"
+            await security_event(
+                request, "info",
+                f"AdGuard Home: copied settings from {src_label} to {d['label']} "
+                f"({body.mode}): {done}",
+                {"action": "adguard_copy", "from": body.from_device_id, "to": d["device_id"],
+                 "mode": body.mode, "items": body.items},
+            )  # fmt: skip
+        r["state"] = p.state()
+    return r
+
+
 # ── schedules ───────────────────────────────────────────────────────────────
 
 
