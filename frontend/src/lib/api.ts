@@ -871,6 +871,21 @@ export interface CopyDeviceResult {
   preview: boolean;
   destinations: { device_id: number; label: string; applied: string[]; skipped: string[] }[];
 }
+export interface MergeSide {
+  id: number;
+  label: string;
+  online: boolean;
+  last_seen_ms: number;
+  last_ip: string | null;
+  monitored: boolean;
+}
+/** Two devices that look like one machine (a new network card): `new` is online, `old` went quiet. */
+export interface MergeSuggestion {
+  new: MergeSide;
+  old: MergeSide;
+  reasons: string[];
+  both_monitored: boolean;
+}
 export type YouTubeSetting = 'default' | 'restricted' | 'blocked' | 'allowed';
 
 export interface AdGuardSettings {
@@ -1382,6 +1397,9 @@ export const api = {
   editGroup: (id: number, body: Partial<{ name: string; colour: string; icon: string; sort: number; quiet: boolean }>) =>
     request<DeviceGroup>(`/api/device-groups/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteGroup: (id: number) => request<{ ungrouped: number }>(`/api/device-groups/${id}`, { method: 'DELETE' }),
+  mergeSuggestions: () => request<MergeSuggestion[]>('/api/devices/merge-suggestions'),
+  dismissMergeSuggestion: (a: number, b: number) =>
+    request<{ dismissed: number }>('/api/devices/merge-suggestions/dismiss', post({ a, b })),
   groupSuggestions: () => request<GroupSuggestion[]>('/api/device-groups/suggestions'),
   acceptSuggestion: (group_name: string, device_ids: number[]) =>
     request<DeviceGroup>('/api/device-groups/suggestions/accept', post({ group_name, device_ids })),

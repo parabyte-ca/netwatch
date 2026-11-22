@@ -13,6 +13,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..services.device_groups import GroupError
 from ..services.discovery.classify import TYPES
 from ..services.discovery.inventory import device_label, summarise_group
+from ..services.discovery.merge_suggest import (
+    DISMISSED_KEY,
+    MAX_DISMISSED,
+    merge_suggestions,
+    pair_key,
+)
 from ..services.events import ANOMALY, DEVICE, EXPOSURE
 from ..services.exposure import describe_port
 
@@ -57,6 +63,21 @@ async def list_devices(
         lambda: inv.listing(now, q=q, group_id=group_id, tag=(tag or None))
     )
     return {"now_ms": now, "devices": rows}
+
+
+@router.get("/devices/merge-suggestions")
+async def merge_suggestion_list(request: Request) -> list[dict]:
+    """Devices that look like the same machine (a new network card, say). Nothing is merged."""
+    st = _state(request)
+    inv = st.discovery.inventory
+    now = _now_ms()
+
+    def run() -> list[dict]:
+        rows = inv.listing(now)
+        dismissed = set(st.store.kv_get(DISMISSED_KEY, None) or [])
+        return merge_suggestions(rows, dismissed)
+
+    return await asyncio.to_thread(run)
 
 
 @router.get("/devices/{device_id}")
@@ -143,6 +164,31 @@ async def edit_device(device_id: int, body: DeviceEdit, request: Request) -> dic
                 st.store.update_target, d["target_id"], {"name": values["name"]}
             )
     return await device_detail(d["id"], request)
+
+
+class DismissIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    a: int
+    b: int
+
+
+@router.post("/devices/merge-suggestions/dismiss")
+async def dismiss_merge_suggestion(body: DismissIn, request: Request) -> dict:
+    """ "Not the same": never suggest this pair again."""
+    st = _state(request)
+    for i in (body.a, body.b):
+        if await asyncio.to_thread(st.device_store.get, i) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
+
+    def run() -> int:
+        keys = list(st.store.kv_get(DISMISSED_KEY, None) or [])
+        k = pair_key(body.a, body.b)
+        if k not in keys:
+            keys.append(k)
+        st.store.kv_set(DISMISSED_KEY, keys[-MAX_DISMISSED:])
+        return len(keys)
+
+    return {"dismissed": await asyncio.to_thread(run)}
 
 
 class MergeIn(BaseModel):

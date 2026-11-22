@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { GroupManager } from '../components/GroupManager';
+import { MergeSuggestions } from '../components/MergeSuggestions';
 import { PeopleManager } from '../components/People';
 import { GroupStrip } from '../components/GroupStrip';
 import { ReserveCurrentButton } from '../components/DhcpReservations';
@@ -300,6 +301,7 @@ export function Devices() {
         )}
       </div>
       {status.data && <DiscoveryPanel status={status.data} refresh={status.refresh} />}
+      <MergeSuggestions onDone={reloadAll} />
       {suggestQ.data && suggestQ.data.length > 0 && <Suggestions items={suggestQ.data} onDone={reloadAll} />}
       {groups.length > 0 && <GroupStrip selected={groupFilter} onSelect={(id) => setFilter('group', id)} />}
       {status.error && <p className="text-rose-400">{status.error}</p>}

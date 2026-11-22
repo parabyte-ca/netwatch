@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.29.0-blue)
+![Version](https://img.shields.io/badge/version-0.30.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -66,6 +66,13 @@ per group or device (internet off at night, YouTube off during homework). See th
   address history, and online/last-seen. Phones' private (randomised) Wi-Fi MACs that report
   the same hostname are merged into one device; you can merge or split by hand, rename,
   override the type and add notes. The device list sorts by any column header.
+- **Replaced a network card?** A new card has its own MAC address, so the machine shows twice (the
+  new card online, the old one grey). A **Same machine?** card at the top of the Devices page
+  proposes the pair when they share a real hostname or an address and one is online now while the
+  other has gone quiet. **Merge** keeps the older entry (its name, group, tags, notes and
+  monitoring) and adds the new card to it; **Not the same** hides the pair for good. Nothing is
+  merged without your click, and two devices that are both online are never paired. If both are
+  monitored, stop monitoring one first (the same rule as a hand merge).
 - **Monitor this device:** one click creates a ping target that follows the device when its IP
   address changes.
 - **Anomaly alerts** on the timeline, each with the evidence and the usual cause: duplicate IP
