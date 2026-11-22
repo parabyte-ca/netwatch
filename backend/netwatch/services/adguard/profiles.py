@@ -41,6 +41,16 @@ FULL_SYNC_S = 300  # also re-check everything this often (drift)
 SCHEDULE_RULES_KEY = "adguard_schedule_rules"  # NetWatch's own $client lines (internet off, allow)
 ALLOW_KEY = "adguard_allow"  # {"device:12" | "group:3": [domains always allowed]}
 MAX_ALLOW = 50  # domains per device or group
+# Domains NetWatch itself allows for a client whose YouTube setting is "allowed" (no Restricted
+# Mode): filter lists often block some of them and YouTube then half-loads. ``||domain^`` covers
+# subdomains such as www., so only the parents are listed. Kept apart from the owner's own
+# always-allowed lists: not stored there, not shown there, not counted toward the limits.
+YOUTUBE_ALLOW_DOMAINS = (
+    "youtube-nocookie.com",
+    "youtube.com",
+    "youtube.googleapis.com",
+    "youtubei.googleapis.com",
+)
 COPY_ITEMS = ("allow", "apps", "filtering", "schedules")  # what a device copy can carry
 MAX_ALLOW_LINES = 500
 _ENGINES = ("bing", "duckduckgo", "ecosia", "google", "pixabay", "yandex", "youtube")
@@ -394,6 +404,10 @@ class ProfileSync:
                 out[f"group:{gid}"]["devices"].append(entry)
         for e in out.values():
             e["profile"], e["internet_off"] = overlay(e["base"], e.pop("fx"))
+            # A schedule that turns YouTube off takes these away for its window.
+            e["builtin_allow"] = (
+                list(YOUTUBE_ALLOW_DOMAINS) if e["profile"]["youtube"] == "allowed" else []
+            )
         # Names must be unique in AdGuard Home: a device sharing a name gets its id added.
         seen: set[str] = set()
         for key in sorted(out, key=lambda k: (not k.startswith("group:"), k)):
@@ -499,10 +513,15 @@ class ProfileSync:
             await asyncio.to_thread(self.store.kv_set, TRACKED_KEY, tracked)
             # 3. NetWatch's own $client rules: "internet off" while a schedule says so, and the
             # always-allowed domains of each client.
-            lines = sorted({internet_off_rule(want[k]["name"]) for k, d in desired.items()
-                            if d["internet_off"] and k in want}
-                           | {client_allow_rule(want[k]["name"], dom) for k, d in desired.items()
-                              if k in want for dom in d.get("allow", [])})  # fmt: skip
+            allowed = {
+                client_allow_rule(want[k]["name"], dom)
+                for k, d in desired.items()
+                if k in want
+                for dom in [*d.get("allow", []), *d.get("builtin_allow", [])]
+            }
+            off = {internet_off_rule(want[k]["name"]) for k, d in desired.items()
+                   if d["internet_off"] and k in want}  # fmt: skip
+            lines = sorted(off | allowed)
             changes += await self._sync_lines(client, lines, list(lines_had or []))
             await asyncio.to_thread(self._schedule_events, desired)
             self.conflicts, self.error = conflicts, None

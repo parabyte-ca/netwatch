@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.30.0-blue)
+![Version](https://img.shields.io/badge/version-0.30.1-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -494,7 +494,10 @@ AdGuard Home actions** to get a **Controls** section on the DNS page:
   around AdGuard Home.
 - **YouTube and apps per device and per group:** next to filtering, set **YouTube** to
   **Restricted Mode** (hides mature videos and comments), **Blocked**, or **Allowed** (no Restricted Mode,
-  even when YouTube is blocked or Safe Search is on for everyone else), and pick **apps to block** from AdGuard Home's own list
+  even when YouTube is blocked or Safe Search is on for everyone else; NetWatch also allows
+  YouTube's own domains for that device or group, such as `youtube.com`, `youtube-nocookie.com`,
+  `youtube.googleapis.com` and `youtubei.googleapis.com`, so a filter list cannot half-break it, and
+  takes them away again when you change the setting), and pick **apps to block** from AdGuard Home's own list
   (TikTok, Roblox, Fortnite, Discord and so on). With filtering left at Default, the devices keep
   AdGuard Home's global filtering, safe browsing and parental control (NetWatch copies them and
   refreshes them every 5 minutes), and apps you block for everyone stay blocked. Allowing only

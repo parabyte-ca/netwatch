@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.30.1] - 2026-11-22
+### Changed
+- **YouTube Allowed also allows YouTube's domains.** When a device or group's YouTube setting is
+  **Allowed** (no Restricted Mode), NetWatch now adds allow rules for `youtube.com`,
+  `youtube-nocookie.com`, `youtube.googleapis.com` and `youtubei.googleapis.com` for it (subdomains
+  such as `www.` are covered), and removes them when the setting changes or a schedule turns
+  YouTube off. They are kept apart from your own always-allowed list: not shown there and not
+  counted toward its limits. This fixes YouTube staying restricted or half-loading when a filter
+  list blocks one of those domains.
+
 ## [0.30.0] - 2026-11-22
 ### Added
 - **"Same machine?" suggestions.** After a network card swap (or any change of MAC on a wired

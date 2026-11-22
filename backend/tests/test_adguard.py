@@ -2050,3 +2050,81 @@ def test_copy_api_guards_preview_and_security_log(client):
     assert any(
         t.startswith("AdGuard Home: copied settings from Kid phone to Tablet (merge)") for t in log
     )
+
+
+# ── "YouTube allowed" silently allows YouTube's domains (0.30.1) ─────────────
+
+
+def _yt_rules(p, client):
+    from netwatch.services.adguard.profiles import YOUTUBE_ALLOW_DOMAINS, client_allow_rule
+
+    return [client_allow_rule(client, d) for d in YOUTUBE_ALLOW_DOMAINS]
+
+
+async def test_youtube_allowed_adds_and_removes_the_youtube_domains(sprof):
+    p = sprof
+    phone = _dev(p, "00:11:22:00:00:61", "Pixel", last_ip="192.168.2.61")
+    mine = "@@||youtube.com^$client='NetWatch: Pixel'"
+    await p.set_device(phone, {"filtering": "default", "youtube": "allowed", "services": []})
+    rules = p.fake.user_rules
+    assert all(r in rules for r in _yt_rules(p, "NetWatch: Pixel"))
+    assert len([r for r in rules if r.startswith("@@||")]) == 4
+    # Hidden: not in the owner's own lists, and not counted toward their limits.
+    assert p.allow_lists() == {}
+    assert (await p.reconcile())["changes"] == []  # stable
+    await p.set_device(phone, {"filtering": "default", "youtube": "restricted", "services": []})
+    assert not [r for r in p.fake.user_rules if r.startswith("@@||")]
+    # An allow rule the owner added by hand for the same domain stays when Allowed goes away.
+    await p.set_allow("device", phone, ["youtube.com"])
+    await p.set_device(phone, {"filtering": "default", "youtube": "allowed", "services": []})
+    await p.set_device(phone, {"filtering": "default", "youtube": "default", "services": []})
+    assert [r for r in p.fake.user_rules if r.startswith("@@||")] == [mine]
+
+
+async def test_a_group_set_to_youtube_allowed_covers_its_devices_and_own_settings_win(sprof):
+    p = sprof
+    kids = p.gs.create("Kids", "rose", "child")["id"]
+    a = _dev(p, "00:11:22:00:00:71", "Sam's iPad", last_ip="192.168.2.71")
+    b = _dev(p, "00:11:22:00:00:72", "Mia's tablet", last_ip="192.168.2.72")
+    p.gs.assign([a, b], kids)
+    await p.set_group(kids, {"filtering": "strict", "youtube": "allowed", "services": []})
+    assert all(r in p.fake.user_rules for r in _yt_rules(p, "NetWatch: Kids"))
+    # One device gets its own, restricted settings: it has its own client without the rules.
+    await p.set_device(b, {"filtering": "strict", "youtube": "restricted", "services": []})
+    rules = p.fake.user_rules
+    assert all(r in rules for r in _yt_rules(p, "NetWatch: Kids"))
+    assert not any("Mia" in r for r in rules if r.startswith("@@||"))
+
+
+async def test_a_schedule_that_turns_youtube_off_removes_the_domains_for_its_window(sprof):
+    p = sprof
+    phone = _dev(p, "00:11:22:00:00:81", "Pixel", last_ip="192.168.2.81")
+    await p.set_device(phone, {"filtering": "default", "youtube": "allowed", "services": []})
+    start, end = _window_now()
+    s = p.schedules.add({"name": "Homework", "target": {"kind": "device", "id": phone},
+                         "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "start": start,
+                         "end": end, "effects": {"youtube_off": True}}, "admin")  # fmt: skip
+    await p.reconcile()
+    assert not [r for r in p.fake.user_rules if r.startswith("@@||")]
+    p.schedules.delete(s["id"])
+    await p.reconcile()
+    assert len([r for r in p.fake.user_rules if r.startswith("@@||")]) == 4
+
+
+def test_the_hidden_youtube_domains_are_not_in_the_api_allow_lists(client):
+    st = client.app.state
+    fake = FakeAdGuard()
+    st.adguard.client_factory = lambda cfg, pw: client_for(fake, pw)
+    st.adguard.save(HOST, PORT, False, USER, True, PASSWORD)
+    now = int(time.time() * 1000)
+    phone = st.device_store.insert({"mac": "00:11:22:00:00:91", "first_seen_ms": 0,
+                                    "last_seen_ms": now, "name": "Pixel"})  # fmt: skip
+    client.put("/api/admin/settings", json={"changes": {"adguard_actions": True}})
+    st.discovery.inventory.forget()
+    r = client.put(f"/api/adguard/actions/profiles/device/{phone}",
+                   json={"filtering": "default", "youtube": "allowed", "services": []})  # fmt: skip
+    assert r.status_code == 200, r.text
+    assert "@@||youtube.com^$client='NetWatch: Pixel'" in fake.user_rules
+    prof = client.get("/api/adguard/actions/profiles").json()
+    assert prof["allow"] == {}
+    assert next(c for c in prof["managed"] if c["key"] == f"device:{phone}")["allow"] == []

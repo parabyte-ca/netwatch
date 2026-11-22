@@ -56,6 +56,7 @@ function settingsConfirm(target: string, s: AdGuardSettings, names: Record<strin
       <>
         <p>{off ? `It goes back to ${fallback ?? "AdGuard Home's global settings"}.` : FILTER_HELP[s.filtering]}</p>
         {s.youtube === 'restricted' && <p>YouTube hides mature videos and comments (Restricted Mode).</p>}
+        {s.youtube === 'allowed' && <p>NetWatch also allows YouTube's own domains for it, so videos load even when a filter list blocks them.</p>}
         <p className="text-xs text-slate-400">
           NetWatch keeps a client for this in AdGuard Home (named "NetWatch: …") and updates it when devices change.
           Your own AdGuard Home clients are never changed. The change is written to the security log.
