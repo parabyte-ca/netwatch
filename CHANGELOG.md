@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.30.0] - 2026-11-22
+### Added
+- **"Same machine?" suggestions.** After a network card swap (or any change of MAC on a wired
+  device) the machine appeared twice, the new card online and the old one grey. A **Same
+  machine?** card on the Devices page now proposes the pair when they share a real hostname or an
+  address and only one is online. **Merge** keeps the older entry's name, group, tags, notes and
+  monitoring; **Not the same** hides the pair for good. Nothing merges on its own.
+
 ## [0.29.0] - 2026-11-21
 ### Added
 - **Copy a device's DNS settings.** A device's AdGuard Home settings card has **Copy from another
