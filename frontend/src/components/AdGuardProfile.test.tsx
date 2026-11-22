@@ -58,6 +58,20 @@ describe('AdGuard Home settings', () => {
       body: { filtering: 'default', youtube: 'blocked', services: ['roblox'] } }));
   });
 
+  it('says YouTube Allowed also allows its domains, and not for the other choices', async () => {
+    mock(state());
+    render(<MemoryRouter><DeviceProfile d={{ id: 5, label: "Sam's iPad", group: { id: 3, name: 'Kids' } }} /></MemoryRouter>);
+    const card = await screen.findByRole('region', { name: 'AdGuard Home settings' });
+    fireEvent.change(within(card).getByLabelText('Device YouTube'), { target: { value: 'allowed' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Save' }));
+    const dlg = screen.getByRole('dialog');
+    expect(dlg).toHaveTextContent("NetWatch also allows YouTube's own domains for it");
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Cancel' }));
+    fireEvent.change(within(card).getByLabelText('Device YouTube'), { target: { value: 'blocked' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Save' }));
+    expect(screen.getByRole('dialog')).not.toHaveTextContent("YouTube's own domains");
+  });
+
   it('explains a device that is already in your own client', async () => {
     mock(state());
     render(<MemoryRouter><DeviceProfile d={{ id: 9, label: 'Living room TV', group: { id: 3, name: 'Kids' } }} /></MemoryRouter>);
