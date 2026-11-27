@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.32.1] - 2026-11-27
+### Changed
+- **Pin from either side.** The Home Hub and each Deco tile now list the devices pinned behind them
+  and let you pin more, just like a switch, and a device's **Connected through** card gains **The
+  Home Hub**. Both write the same pins.
+- A device last reported on Wi-Fi by a Deco can now be pinned behind a switch (with a note) instead
+  of being refused. After a network card swap the report can be out of date, which made it
+  impossible to attach a machine such as moogbox.
+
 ## [0.32.0] - 2026-11-27
 ### Added
 - **Switches on the map.** An unmanaged switch cannot be seen on the network, so you now draw it:
