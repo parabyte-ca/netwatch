@@ -52,14 +52,15 @@ const graph: NetworkMapResponse = {
   ],
 };
 
-function mockApi(calls: { url: string; method: string; body?: unknown }[], g = graph, positions = {}) {
+function mockApi(calls: { url: string; method: string; body?: unknown }[], g = graph, positions = {}, pins = {}) {
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
     calls.push({ url, method, body: init?.body });
     const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status });
     if (url === '/api/map/layout' && method === 'DELETE') return new Response(null, { status: 204 });
-    if (url === '/api/map/layout') return json({ positions });
+    if (url === '/api/map/layout' && method === 'PUT') return json({ positions, pins: JSON.parse(String(init?.body)).pins ?? pins });
+    if (url === '/api/map/layout') return json({ positions, pins });
     if (url === '/api/map/views') return json({ views: [] });
     if (url.startsWith('/api/map')) return json(g);
     if (url.startsWith('/api/diagnosis')) return json({ now_ms: Date.now(), topology: [], patterns: [], incidents: [] });
@@ -172,6 +173,37 @@ describe('NetworkMap', () => {
     expect(screen.getByText('Deco Office went offline')).toBeInTheDocument();
     expect(screen.getByLabelText('Replay slider')).toBeInTheDocument();
     await waitFor(() => expect(calls.some((c) => c.url === `/api/map?incident=i${start}`)).toBe(true));
+  });
+
+  it('pins the side a tile\'s links attach to from its details, and saves it', async () => {
+    const calls: { url: string; method: string; body?: unknown }[] = [];
+    mockApi(calls);
+    render(<MemoryRouter initialEntries={['/map']}><NetworkMap /></MemoryRouter>);
+    expect(await screen.findByText('Deco Office')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('node-internet'));
+    const panel = await screen.findByRole('complementary', { name: 'Node details' });
+    const pick = within(panel).getByLabelText('Links attach to') as HTMLSelectElement;
+    expect(pick.value).toBe('auto');
+    expect([...pick.options].map((o) => o.text)).toEqual(['Auto', 'Top', 'Bottom', 'Left', 'Right']);
+    fireEvent.change(pick, { target: { value: 'bottom' } });
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && (c.body as string).includes('"pins":{"internet":"bottom"}'))).toBe(true));
+    expect((within(panel).getByLabelText('Links attach to') as HTMLSelectElement).value).toBe('bottom');
+    fireEvent.change(within(panel).getByLabelText('Links attach to'), { target: { value: 'auto' } });
+    await waitFor(() => expect(calls.filter((c) => c.method === 'PUT' && (c.body as string).includes('"pins":{}')).length).toBe(1));
+  });
+
+  it('shows a saved pin and lets Reset layout clear it even with no dragged tiles', async () => {
+    const calls: { url: string; method: string; body?: unknown }[] = [];
+    mockApi(calls, graph, {}, { hub: 'left' });
+    render(<MemoryRouter initialEntries={['/map']}><NetworkMap /></MemoryRouter>);
+    const reset = await screen.findByRole('button', { name: 'Reset layout' });
+    await waitFor(() => expect(reset).toBeEnabled());
+    fireEvent.click(screen.getByTestId('node-hub'));
+    const panel = await screen.findByRole('complementary', { name: 'Node details' });
+    expect((within(panel).getByLabelText('Links attach to') as HTMLSelectElement).value).toBe('left');
+    fireEvent.click(reset);
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/map/layout' && c.method === 'DELETE')).toBe(true));
+    await waitFor(() => expect(reset).toBeDisabled());
   });
 
   it('resets a saved layout', async () => {

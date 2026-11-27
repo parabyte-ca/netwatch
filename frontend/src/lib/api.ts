@@ -1105,6 +1105,9 @@ export interface NetworkMapResponse {
 }
 
 export type MapPositions = Record<string, { x: number; y: number }>;
+/** Which side of a tile its links attach to. A tile not listed is automatic. */
+export type MapSide = 'top' | 'bottom' | 'left' | 'right';
+export type MapPins = Record<string, MapSide>;
 
 export interface DecoUnit {
   mac: string;
@@ -1528,10 +1531,11 @@ export const api = {
   trafficTop: (hours: number) => request<TrafficTop>(`/api/traffic/top?hours=${hours}`),
   deviceDns: (id: number, hours: number) => request<DeviceDns>(`/api/devices/${id}/dns?hours=${hours}`),
   deviceTraffic: (id: number, hours: number) => request<DeviceTraffic>(`/api/devices/${id}/traffic?hours=${hours}`),
-  mapLayout: () => request<{ positions: MapPositions; collapsed?: string[] }>('/api/map/layout'),
-  saveMapLayout: (positions: MapPositions, collapsed?: string[]) =>
-    request<{ positions: MapPositions; collapsed: string[] }>('/api/map/layout', {
-      method: 'PUT', body: JSON.stringify(collapsed === undefined ? { positions } : { positions, collapsed }),
+  mapLayout: () => request<{ positions: MapPositions; collapsed?: string[]; pins?: MapPins }>('/api/map/layout'),
+  saveMapLayout: (positions: MapPositions, collapsed?: string[], pins?: MapPins) =>
+    request<{ positions: MapPositions; collapsed: string[]; pins: MapPins }>('/api/map/layout', {
+      method: 'PUT',
+      body: JSON.stringify({ positions, ...(collapsed === undefined ? {} : { collapsed }), ...(pins === undefined ? {} : { pins }) }),
     }),
   mapViews: () => request<{ views: MapView[] }>('/api/map/views'),
   saveMapViews: (views: MapView[]) => request<{ views: MapView[] }>('/api/map/views', { method: 'PUT', body: JSON.stringify({ views }) }),

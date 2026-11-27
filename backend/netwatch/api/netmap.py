@@ -74,6 +74,9 @@ async def get_map(
     return graph
 
 
+Side = Literal["top", "bottom", "left", "right"]
+
+
 class Position(BaseModel):
     model_config = ConfigDict(extra="forbid")
     x: float
@@ -85,6 +88,9 @@ class LayoutIn(BaseModel):
     positions: dict[str, Position] = Field(max_length=MAX_NODES)
     # Groups shown as one node per parent (keys "<group id>@<parent node id>" or "<group id>").
     collapsed: list[str] | None = Field(default=None, max_length=MAX_NODES)
+    # Which side of a tile its links attach to (node id → side); a tile not listed is automatic.
+    # Omitted keeps what is stored; an empty object clears every pin.
+    pins: dict[str, Side] | None = Field(default=None, max_length=MAX_NODES)
 
 
 class MapView(BaseModel):
@@ -108,6 +114,7 @@ async def get_layout(request: Request) -> dict:
     return {
         "positions": (saved or {}).get("positions", {}),
         "collapsed": (saved or {}).get("collapsed", []),
+        "pins": (saved or {}).get("pins", {}),
     }
 
 
@@ -142,10 +149,16 @@ async def put_layout(body: LayoutIn, request: Request) -> dict:
         if body.collapsed is None
         else [c[:200] for c in body.collapsed if c]
     )
+    if body.pins is None:
+        pins = saved.get("pins", {})
+    else:
+        if any(not nid or len(nid) > 200 for nid in body.pins):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "bad node id")
+        pins = dict(body.pins)
     await asyncio.to_thread(
-        store.kv_set, LAYOUT_KEY, {"positions": positions, "collapsed": collapsed}
+        store.kv_set, LAYOUT_KEY, {"positions": positions, "collapsed": collapsed, "pins": pins}
     )
-    return {"positions": positions, "collapsed": collapsed}
+    return {"positions": positions, "collapsed": collapsed, "pins": pins}
 
 
 @router.delete("/layout", status_code=status.HTTP_204_NO_CONTENT)

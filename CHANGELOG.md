@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.31.0] - 2026-11-27
+### Fixed
+- **Map links no longer curl around tiles.** Links always left a tile's bottom edge and arrived at
+  the top edge, so where a tile sat above its parent (Internet above Bell network above the Home
+  Hub, a remote server above Internet, or any tile you dragged) the line looped out of the wrong
+  side. Each link now uses the sides that face the other tile, and re-routes as you drag.
+### Added
+- **Pin a tile's link side.** Tap a tile and set **Links attach to** to Top, Bottom, Left or Right
+  (or Auto). Saved with the layout; Reset layout clears it.
+
 ## [0.30.1] - 2026-11-22
 ### Changed
 - **YouTube Allowed also allows YouTube's domains.** When a device or group's YouTube setting is
