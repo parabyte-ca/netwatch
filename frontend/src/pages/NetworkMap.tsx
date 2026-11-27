@@ -1,5 +1,6 @@
 import {
   Background,
+  ConnectionMode,
   Controls,
   Handle,
   MarkerType,
@@ -14,11 +15,12 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, type Incident, type MapEdge, type MapHighlight, type MapNode, type MapPositions, type MapView, type NetworkMapResponse } from '../lib/api';
+import { api, type Incident, type MapEdge, type MapHighlight, type MapNode, type MapPins, type MapPositions, type MapSide, type MapView, type NetworkMapResponse } from '../lib/api';
 import { GroupIcon, colourOf } from '../lib/groups';
 import { shapeGraph, type ColourBy } from '../lib/mapGroups';
 import { TopTalkers } from '../components/TopTalkers';
 import { DEVICE_TYPE_LABEL, STATE_STYLE, fmtBps, fmtDurationMs, fmtMs, fmtPct, fmtTime, lossColour } from '../lib/format';
+import { edgeHandles } from '../lib/edgeSides';
 import { NODE_H, NODE_W, layoutMap } from '../lib/mapLayout';
 
 const btn = 'rounded-md px-3 py-1.5 text-sm font-medium disabled:opacity-50';
@@ -55,6 +57,9 @@ function subline(n: MapNode): string {
   return parts.filter(Boolean).join(' · ') || (n.inferred ? 'inferred' : '');
 }
 
+// Every tile has a connection point on each side; each link picks its own (see lib/edgeSides).
+const SIDES: [MapSide, Position][] = [['top', Position.Top], ['bottom', Position.Bottom], ['left', Position.Left], ['right', Position.Right]];
+
 function NetNode({ data, selected }: NodeProps<FlowNode>) {
   const { node: n, mark, accent, faded } = data;
   const group = n.info.group;
@@ -68,7 +73,6 @@ function NetNode({ data, selected }: NodeProps<FlowNode>) {
       style={{ width: NODE_W, height: NODE_H, ...(accent ? { borderLeft: `4px solid ${accent}` } : {}) }}
       data-testid={`node-${n.id}`}
     >
-      <Handle type="target" position={Position.Top} className="!h-1 !w-1 !border-0 !bg-slate-600" />
       {group && (n.kind === 'device' || n.kind === 'devgroup') ? (
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md" style={{ color: colourOf(group.colour).hex, background: `${colourOf(group.colour).hex}22` }} aria-hidden>
           <GroupIcon icon={group.icon} className="h-4 w-4" />
@@ -90,7 +94,9 @@ function NetNode({ data, selected }: NodeProps<FlowNode>) {
           {tags.length > 2 && <span className="rounded-full bg-slate-700 px-1.5 text-[9px] leading-4 text-slate-300">+{tags.length - 2}</span>}
         </span>
       )}
-      <Handle type="source" position={Position.Bottom} className="!h-1 !w-1 !border-0 !bg-slate-600" />
+      {SIDES.map(([id, position]) => (
+        <Handle key={id} id={id} type="source" position={position} isConnectable={false} className="!h-1 !w-1 !border-0 !bg-slate-600" />
+      ))}
     </div>
   );
 }
@@ -118,13 +124,10 @@ function toFlow(g: { nodes: MapNode[]; edges: MapEdge[] }, pos: MapPositions, hl
     const down = byId.get(e.target)?.state === 'down' || byId.get(e.source)?.state === 'down';
     const colour = down ? '#ef4444' : e.loss_pct != null ? lossColour(e.loss_pct) : '#475569';
     const flow = e.traffic ? e.traffic.down_bps + e.traffic.up_bps : 0;
-    // A remote server is drawn above the Internet node, so its link runs from the remote's
-    // bottom handle to Internet's top handle (no loop over the top of the tile).
-    const flip = byId.get(e.target)?.kind === 'remote';
     return {
       id: e.id,
-      source: flip ? e.target : e.source,
-      target: flip ? e.source : e.target,
+      source: e.source,
+      target: e.target,
       label: edgeLabel(e),
       labelStyle: { fill: '#cbd5e1', fontSize: 11 },
       labelBgStyle: { fill: '#0f172a' },
@@ -143,7 +146,9 @@ function toFlow(g: { nodes: MapNode[]; edges: MapEdge[] }, pos: MapPositions, hl
 
 const CHECK_LABEL: Record<string, string> = { icmp: 'Ping', tcp: 'Port check', http: 'Web page', dns: 'DNS query' };
 
-function Details({ n, onClose }: { n: MapNode; onClose: () => void }) {
+const SIDE_LABEL: Record<MapSide | 'auto', string> = { auto: 'Auto', top: 'Top', bottom: 'Bottom', left: 'Left', right: 'Right' };
+
+function Details({ n, pin, onPin, onClose }: { n: MapNode; pin?: MapSide; onPin: (side: MapSide | null) => void; onClose: () => void }) {
   const st = STATE_STYLE[n.state];
   const i = n.info;
   const rows: [string, React.ReactNode][] = [
@@ -181,6 +186,13 @@ function Details({ n, onClose }: { n: MapNode; onClose: () => void }) {
           </div>
         ))}
       </dl>
+      <label className="flex items-center justify-between gap-2 text-xs text-slate-400">
+        Links attach to
+        <select aria-label="Links attach to" className={input} value={pin ?? 'auto'}
+          onChange={(e) => onPin(e.target.value === 'auto' ? null : (e.target.value as MapSide))}>
+          {(Object.keys(SIDE_LABEL) as (MapSide | 'auto')[]).map((k) => <option key={k} value={k}>{SIDE_LABEL[k]}</option>)}
+        </select>
+      </label>
       {i.interfaces && i.interfaces.length > 0 && (
         <p className="text-xs text-slate-400">
           {i.interfaces.map((x) => `${x.name}: ${x.state ?? '?'}${x.speed ? ` @ ${x.speed} Mb/s` : ''}`).join(' · ')}
@@ -235,6 +247,7 @@ export function NetworkMap() {
   const [graph, setGraph] = useState<NetworkMapResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<MapPositions>({});
+  const [pins, setPins] = useState<MapPins>({});
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const [colourBy, setColourBy] = useState<ColourBy>('group');
   const [groupFilter, setGroupFilter] = useState<number[]>([]);
@@ -250,6 +263,8 @@ export function NetworkMap() {
   const flowRef = useRef<{ fitView: (o?: { padding?: number; duration?: number }) => unknown } | null>(null);
   const savedRef = useRef(saved);
   savedRef.current = saved;
+  const pinsRef = useRef(pins);
+  pinsRef.current = pins;
   // Full screen: the map fills the window (and the screen, where the browser allows it).
   // ?full=1 opens straight into it, for a wall tablet bookmark.
   const [full, setFull] = useState(params.get('full') === '1');
@@ -259,6 +274,7 @@ export function NetworkMap() {
   useEffect(() => {
     api.mapLayout().then((r) => {
       setSaved(r.positions);
+      setPins(r.pins ?? {});
       setCollapsed(r.collapsed ?? []);
     }, () => undefined).finally(() => setLayoutReady(true));
     api.mapViews().then((r) => setViews(r.views ?? []), () => undefined);
@@ -297,6 +313,18 @@ export function NetworkMap() {
     () => (shaped ? layoutMap(shaped.nodes, shaped.edges, saved) : {}),
     [shape, saved],
   );
+
+  // Which side each link uses, from where the tiles are right now (so it follows a drag) and
+  // the pins. Recomputed from the tiles' live positions, not from the saved layout.
+  const linked = useMemo(() => {
+    const at = new Map(nodes.map((n) => [n.id, n.position]));
+    return edges.map((e) => {
+      const a = at.get(e.source);
+      const b = at.get(e.target);
+      if (!a || !b) return e;
+      return { ...e, ...edgeHandles(a, b, pins[e.source], pins[e.target]) };
+    });
+  }, [nodes, edges, pins]);
 
   useEffect(() => {
     if (!graph || !shaped || !layoutReady) return;
@@ -388,9 +416,18 @@ export function NetworkMap() {
     api.saveMapLayout(next).catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
 
+  const setPin = useCallback((id: string, side: MapSide | null) => {
+    const next = { ...pinsRef.current };
+    if (side) next[id] = side;
+    else delete next[id];
+    setPins(next);
+    api.saveMapLayout(savedRef.current, undefined, next).catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+
   async function resetLayout() {
     await api.resetMapLayout().catch(() => undefined);
     setSaved({});
+    setPins({});
     setNodes([]);
   }
 
@@ -417,7 +454,7 @@ export function NetworkMap() {
               onClick={() => !replay && setReplay({ at: String(now - 3600_000) })} aria-pressed={replay}>Replay</button>
           </div>
           <button className={`${btn} text-slate-300 ring-1 ring-slate-700 hover:bg-slate-800`} onClick={() => void resetLayout()}
-            disabled={Object.keys(saved).length === 0} title="Forget dragged positions">Reset layout</button>
+            disabled={Object.keys(saved).length === 0 && Object.keys(pins).length === 0} title="Forget dragged positions and link sides">Reset layout</button>
         </div>
       </div>
 
@@ -522,7 +559,8 @@ export function NetworkMap() {
           {graph && layoutReady && (
             <ReactFlow
               nodes={nodes}
-              edges={edges}
+              edges={linked}
+              connectionMode={ConnectionMode.Loose}
               nodeTypes={nodeTypes}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
@@ -545,7 +583,7 @@ export function NetworkMap() {
         </div>
         <div className={full ? 'absolute right-2 top-2 z-10 max-h-[calc(100%-1rem)] w-[min(20rem,calc(100%-1rem))] overflow-y-auto' : 'space-y-3'}>
           {node ? (
-            <Details n={node} onClose={() => setSelected(null)} />
+            <Details n={node} pin={pins[node.id]} onPin={(side) => setPin(node.id, side)} onClose={() => setSelected(null)} />
           ) : full ? null : (
             <div className="rounded-lg bg-slate-900 p-4 text-sm text-slate-400 ring-1 ring-slate-800">
               {!replay && graph?.deco_api && <div className="mb-4"><TopTalkers limit={5} compact /></div>}
