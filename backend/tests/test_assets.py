@@ -375,7 +375,26 @@ def test_the_api_adds_changes_removes_and_logs(client):
     assert any(t.startswith("Map: removed the switch Office rack") for t in log)
 
 
-def test_the_api_assigns_devices_and_refuses_wifi_devices_behind_a_switch(client):
+def test_a_wifi_report_only_warns_and_a_device_can_be_pinned_to_the_hub(client):
+    st = client.app.state
+    phone = add_device(
+        st, "aa:00:00:00:00:62", "Moogbox", ip="192.168.2.62", details={"connection": "5 GHz"}
+    )
+    sw = client.post("/api/assets", json={"name": "Office"}).json()["asset"]["id"]
+    url = "/api/assets/assign"
+    r = client.post(url, json={"nodes": [f"dev:{phone}"], "parent": f"asset:{sw}"})
+    assert r.status_code == 200 and r.json()["pins"][f"dev:{phone}"] == f"asset:{sw}"
+    assert "Moogbox" in r.json()["warnings"][0] and "Wi-Fi" in r.json()["warnings"][0]
+    assert edge(graph(client), f"asset:{sw}", f"dev:{phone}")["medium"] == "wired"
+    r = client.post(url, json={"nodes": [f"dev:{phone}"], "parent": "hub"})
+    assert r.status_code == 200 and r.json()["pins"][f"dev:{phone}"] == "hub"
+    assert r.json()["warnings"] == []
+    assert edge(graph(client), "hub", f"dev:{phone}") is not None
+    r = client.post(url, json={"nodes": [f"dev:{phone}"], "parent": None})
+    assert f"dev:{phone}" not in r.json()["pins"]
+
+
+def test_the_api_assigns_devices_and_pins_wifi_reported_ones_with_a_warning(client):
     st = client.app.state
     nas = add_device(
         st, "aa:00:00:00:00:51", "NAS", ip="192.168.2.51", details={"connection": "wired"}
@@ -389,7 +408,7 @@ def test_the_api_assigns_devices_and_refuses_wifi_devices_behind_a_switch(client
     assert ok.status_code == 200, ok.text
     assert ok.json()["pins"][f"dev:{nas}"] == f"asset:{sw}"
     wifi = client.post(url, json={"nodes": [f"dev:{phone}"], "parent": f"asset:{sw}"})
-    assert wifi.status_code == 422 and "Wi-Fi" in wifi.json()["detail"]
+    assert wifi.status_code == 200 and "Wi-Fi" in wifi.json()["warnings"][0]
     assert (
         client.post(url, json={"nodes": ["dev:9999"], "parent": f"asset:{sw}"}).status_code == 404
     )

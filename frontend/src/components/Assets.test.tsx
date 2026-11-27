@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AssetsState } from '../lib/api';
 import { AssetEditor } from './AssetEditor';
 import { ConnectedThrough } from './ConnectedThrough';
+import { NodePins } from './PinnedDevices';
 import { SwitchTools } from './SwitchTools';
 
 afterEach(() => vi.restoreAllMocks());
@@ -58,14 +59,13 @@ describe('AssetEditor', () => {
     await waitFor(() => expect(calls).toContainEqual({ url: '/api/assets/assign', method: 'POST', body: { nodes: ['truenas'], parent: null } }));
   });
 
-  it('offers wired, unpinned devices (likely ones first), never a Wi-Fi device, and pins the ticked ones', async () => {
+  it('offers unpinned devices (likely ones first, a Wi-Fi report last but never hidden), and pins the ticked ones', async () => {
     const calls = mock(base());
     render(<AssetEditor id={2} onChanged={async () => undefined} />);
     const card = await screen.findByRole('region', { name: 'Switch settings' });
-    fireEvent.click(within(card).getByText('Pin devices behind this switch'));
+    fireEvent.click(within(card).getByText('Pin devices here'));
     const boxes = await within(card).findAllByRole('checkbox');
-    expect(boxes.map((b) => b.parentElement!.textContent?.trim())).toEqual(['Lonely NAS', 'Camera']);
-    expect(within(card).queryByText('Phone')).toBeNull();
+    expect(boxes.map((b) => b.parentElement!.textContent?.trim())).toEqual(['Lonely NAS', 'Camera', 'Phone (reported on Wi-Fi)']);
     expect(within(card).queryByText('Old')).toBeNull();
     expect(within(card).getByText(/Probably here/)).toBeInTheDocument();
     fireEvent.click(boxes[0]!);
@@ -129,6 +129,31 @@ describe('SwitchTools', () => {
   });
 });
 
+describe('NodePins', () => {
+  it('lists what is pinned behind the Hub, unpins one and pins another', async () => {
+    const calls = mock(base({ pins: { 'dev:13': 'hub', truenas: 'asset:1' } }));
+    render(<NodePins parent="hub" onChanged={async () => undefined} />);
+    const card = await screen.findByRole('region', { name: 'Pinned devices' });
+    expect(within(card).getByText('Camera')).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole('button', { name: 'Unpin Camera' }));
+    await waitFor(() => expect(calls).toContainEqual({ url: '/api/assets/assign', method: 'POST', body: { nodes: ['dev:13'], parent: null } }));
+    fireEvent.click(within(card).getByText('Pin devices here'));
+    fireEvent.click((await within(card).findAllByRole('checkbox'))[0]!);
+    fireEvent.click(within(card).getByRole('button', { name: 'Pin 1 device' }));
+    await waitFor(() => expect(calls).toContainEqual({ url: '/api/assets/assign', method: 'POST', body: { nodes: ['dev:11'], parent: 'hub' } }));
+  });
+
+  it('pins behind a Deco', async () => {
+    const calls = mock(base());
+    render(<NodePins parent={DECO} onChanged={async () => undefined} />);
+    const card = await screen.findByRole('region', { name: 'Pinned devices' });
+    fireEvent.click(within(card).getByText('Pin devices here'));
+    fireEvent.click((await within(card).findAllByRole('checkbox'))[0]!);
+    fireEvent.click(within(card).getByRole('button', { name: 'Pin 1 device' }));
+    await waitFor(() => expect(calls).toContainEqual({ url: '/api/assets/assign', method: 'POST', body: { nodes: ['dev:11'], parent: DECO } }));
+  });
+});
+
 describe('ConnectedThrough', () => {
   it('pins a wired device to a switch or a Deco, and back to automatic', async () => {
     const calls = mock(base());
@@ -141,14 +166,17 @@ describe('ConnectedThrough', () => {
     await waitFor(() => expect(calls).toContainEqual({ url: '/api/assets/assign', method: 'POST', body: { nodes: ['dev:13'], parent: null } }));
   });
 
-  it('greys out the switches for a Wi-Fi device, and shows a saved pin', async () => {
-    mock(base({ pins: { 'dev:12': DECO } }));
+  it('lets a device reported on Wi-Fi be pinned to a switch or the Hub, with a note, and shows a saved pin', async () => {
+    const calls = mock(base({ pins: { 'dev:12': DECO } }));
     render(<ConnectedThrough id={12} wifi />);
     const pick = (await screen.findByLabelText('Plugged into')) as HTMLSelectElement;
     expect(pick.value).toBe(DECO);
+    expect(screen.getByText(/last reported this device on Wi-Fi/)).toBeInTheDocument();
     const sw = [...pick.options].filter((o) => o.value.startsWith('asset:'));
     expect(sw.length).toBe(2);
-    expect(sw.every((o) => o.disabled)).toBe(true);
+    expect(sw.every((o) => !o.disabled)).toBe(true);
+    fireEvent.change(pick, { target: { value: 'hub' } });
+    await waitFor(() => expect(calls).toContainEqual({ url: '/api/assets/assign', method: 'POST', body: { nodes: ['dev:12'], parent: 'hub' } }));
   });
 
   it('is hidden when there are no switches and no Decos', async () => {
