@@ -264,6 +264,7 @@ export function NetworkMap() {
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const flowRef = useRef<{ fitView: (o?: { padding?: number; duration?: number }) => unknown } | null>(null);
+  const shapeRef = useRef('');
   const savedRef = useRef(saved);
   savedRef.current = saved;
   const pinsRef = useRef(pins);
@@ -332,12 +333,17 @@ export function NetworkMap() {
   useEffect(() => {
     if (!graph || !shaped || !layoutReady) return;
     const flow = toFlow(shaped, positions, graph.highlight, shaped.accent, shaped.faded);
+    // A poll must not undo a drag, so tiles keep where they are. When the shape changed (a tile or
+    // link was added, removed or re-parented) the tidy layout is applied afresh, honouring saved
+    // positions, so a new switch or a re-pinned device lands in its place instead of on top of others.
+    const reflow = shapeRef.current !== shape;
+    shapeRef.current = shape;
     setNodes((cur) => {
-      const where = new Map(cur.map((n) => [n.id, n.position]));
+      const where = reflow ? new Map<string, { x: number; y: number }>() : new Map(cur.map((n) => [n.id, n.position]));
       return flow.nodes.map((n) => ({ ...n, position: where.get(n.id) ?? n.position, selected: n.id === selected }));
     });
     setEdges(flow.edges);
-  }, [graph, shaped, positions, layoutReady, selected, setNodes, setEdges]);
+  }, [graph, shaped, positions, layoutReady, selected, shape, setNodes, setEdges]);
 
   const enterFull = useCallback(() => {
     setFull(true);

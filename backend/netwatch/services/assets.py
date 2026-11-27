@@ -241,7 +241,7 @@ def hints(rows: list[dict], decos: dict[str, dict], pins: dict[str, str]) -> dic
         {
             "deco_mac": mac,
             "deco": f"deco:{mac}",
-            "name": decos[mac].get("name") or mac,
+            "name": f"Deco {decos[mac].get('name') or mac}",
             "devices": sorted(ds, key=lambda x: x["label"].lower()),
         }
         for mac, ds in by_deco.items()

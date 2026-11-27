@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.31.0-blue)
+![Version](https://img.shields.io/badge/version-0.32.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -101,6 +101,16 @@ per group or device (internet off at night, YouTube off during homework). See th
   leaves from the side of a tile that faces the other tile, and follows as you drag; if you want it
   on a particular side, tap the tile and set **Links attach to** (Auto, Top, Bottom, Left or Right).
   Reset layout clears dragged positions and those choices.
+- **Switches on the map:** an unmanaged switch cannot be seen on the network (no address, nothing
+  it sends), so you draw it. **Add switch** above the map, give it a name and say what it plugs into
+  (the Home Hub, a Deco, or another switch). Tap its tile to pin devices behind it, or open a
+  device's page and use **Connected through** (Automatic, a Deco, or a switch). Automatic still
+  follows the Decos, which report whether each client is on a cable (its Ethernet ports) or Wi-Fi;
+  a Wi-Fi device cannot be put behind a switch. The old inferred "Switch" tile is now your first
+  switch, with TrueNAS pinned behind it. A switch is "up" when something behind it is up. NetWatch
+  suggests where one probably is (a Deco with three or more wired devices, and devices no Deco
+  reported) but never moves a device by itself. Switches are map only: the diagnosis, health score
+  and reports do not use them, and replay shows today's wiring.
 - **Device groups and tags:** put devices in groups you name (for example "Smart home",
   "Family", "Kids", or one child's phone, tablet and laptop), each with a colour and an icon,
   and give them tags (`upstairs`, `guest`, `work`). Assign one device on its page or many at

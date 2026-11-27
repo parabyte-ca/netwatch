@@ -232,7 +232,7 @@ def test_hints_list_unclaimed_devices_and_decos_with_several_wired_devices():
     # are claimed by their Deco.
     assert [d["label"] for d in h["unclaimed"]] == ["NAS"]
     assert [(w["name"], [d["label"] for d in w["devices"]]) for w in h["decos"]] == [
-        ("Office", ["Console", "Printer", "TV"])
+        ("Deco Office", ["Console", "Printer", "TV"])
     ]
     assert h["decos"][0]["deco"] == f"deco:{DECO}"
     few = hints(rows[:3], decos, {})
