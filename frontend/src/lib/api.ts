@@ -1049,6 +1049,9 @@ export interface MapNode {
     group?: GroupRef | null;
     tags?: string[];
     parent?: string;
+    asset_id?: number;
+    uplink?: string;
+    notes?: string | null;
     collapsed?: string[];
     /** a remote server: its address, how it is checked, and the target behind it */
     host?: string;
@@ -1102,6 +1105,28 @@ export interface NetworkMapResponse {
   nodes: MapNode[];
   edges: MapEdge[];
   highlight?: MapHighlight;
+}
+
+export interface Asset {
+  id: number;
+  kind: 'switch';
+  name: string;
+  /** what it plugs into: "hub", "deco:<mac>" or "asset:<id>" */
+  uplink: string;
+  notes: string | null;
+  members: { key: string; label: string }[];
+}
+export interface AssetHints {
+  unclaimed: { id: number; label: string }[];
+  decos: { deco_mac: string; deco: string; name: string; devices: { id: number; label: string }[] }[];
+}
+/** Switches you drew on the map, the Decos they can plug into, what is pinned, and where one probably is. */
+export interface AssetsState {
+  assets: Asset[];
+  decos: { id: string; name: string }[];
+  pins: Record<string, string>;
+  hints: AssetHints;
+  asset?: Asset;
 }
 
 export type MapPositions = Record<string, { x: number; y: number }>;
@@ -1537,6 +1562,12 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ positions, ...(collapsed === undefined ? {} : { collapsed }), ...(pins === undefined ? {} : { pins }) }),
     }),
+  assets: () => request<AssetsState>('/api/assets'),
+  addAsset: (body: { name: string; uplink: string; notes?: string }) => request<AssetsState>('/api/assets', post(body)),
+  saveAsset: (id: number, body: { name?: string; uplink?: string; notes?: string }) =>
+    request<AssetsState>(`/api/assets/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteAsset: (id: number) => request<AssetsState>(`/api/assets/${id}`, { method: 'DELETE' }),
+  assignAssets: (nodes: string[], parent: string | null) => request<AssetsState>('/api/assets/assign', post({ nodes, parent })),
   mapViews: () => request<{ views: MapView[] }>('/api/map/views'),
   saveMapViews: (views: MapView[]) => request<{ views: MapView[] }>('/api/map/views', { method: 'PUT', body: JSON.stringify({ views }) }),
   resetMapLayout: () => request<void>('/api/map/layout', { method: 'DELETE' }),
