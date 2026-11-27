@@ -798,14 +798,14 @@ def test_map_api_and_layout(client, fake):
     assert client.get("/api/map?at=99999999999999").status_code == 422
 
     # layout
-    assert client.get("/api/map/layout").json() == {"positions": {}, "collapsed": []}
+    assert client.get("/api/map/layout").json() == {"positions": {}, "collapsed": [], "pins": {}}
     r = client.put("/api/map/layout", json={"positions": {"hub": {"x": 10.04, "y": -5}}})
-    assert r.json() == {"positions": {"hub": {"x": 10.0, "y": -5.0}}, "collapsed": []}
+    assert r.json() == {"positions": {"hub": {"x": 10.0, "y": -5.0}}, "collapsed": [], "pins": {}}
     assert client.get("/api/map/layout").json()["positions"]["hub"]["x"] == 10.0
     bad = client.put("/api/map/layout", json={"positions": {"hub": {"x": 1e9, "y": 0}}})
     assert bad.status_code == 422
     assert client.delete("/api/map/layout").status_code == 204
-    assert client.get("/api/map/layout").json() == {"positions": {}, "collapsed": []}
+    assert client.get("/api/map/layout").json() == {"positions": {}, "collapsed": [], "pins": {}}
 
 
 def test_map_highlights_an_incident(client):
@@ -873,3 +873,26 @@ async def test_paused_state_is_reported(svc):
     svc.paused = "the Deco's sign-in key changed"
     st = svc.status()
     assert st["state"] == "paused" and st["paused"] == "the Deco's sign-in key changed"
+
+
+def test_map_layout_pins_round_trip_and_validation(client):
+    url = "/api/map/layout"
+    r = client.put(url, json={"positions": {}, "pins": {"internet": "bottom", "hub": "left"}})
+    assert r.status_code == 200, r.text
+    assert r.json()["pins"] == {"internet": "bottom", "hub": "left"}
+    assert client.get(url).json()["pins"] == {"internet": "bottom", "hub": "left"}
+    # Dragging a tile saves positions only: the pins stay.
+    r = client.put(url, json={"positions": {"hub": {"x": 1, "y": 2}}})
+    assert r.json()["pins"] == {"internet": "bottom", "hub": "left"}
+    # Folding a group keeps pins too.
+    assert (
+        client.put(url, json={"positions": {}, "collapsed": ["3"]}).json()["pins"]["hub"] == "left"
+    )
+    # An empty object clears them; a bad side or an empty id is refused and changes nothing.
+    assert client.put(url, json={"positions": {}, "pins": {"hub": "diagonal"}}).status_code == 422
+    assert client.put(url, json={"positions": {}, "pins": {"": "top"}}).status_code == 422
+    assert client.get(url).json()["pins"] == {"internet": "bottom", "hub": "left"}
+    assert client.put(url, json={"positions": {}, "pins": {}}).json()["pins"] == {}
+    client.put(url, json={"positions": {}, "pins": {"hub": "top"}})
+    assert client.delete(url).status_code == 204
+    assert client.get(url).json() == {"positions": {}, "collapsed": [], "pins": {}}
