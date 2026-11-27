@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.30.1-blue)
+![Version](https://img.shields.io/badge/version-0.31.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -97,7 +97,10 @@ per group or device (internet off at night, YouTube off during homework). See th
   setup can be saved as a named view. **Full screen** (or the F key, Esc to leave) fills the
   screen with the map; `/map?full=1` opens straight into it, for a wall tablet. Links show median latency and are coloured by packet loss,
   Wi-Fi links are dashed, and tapping a node opens its details. The layout is automatic; drag
-  nodes to tidy it (positions and folded groups are saved in NetWatch, with a reset).
+  nodes to tidy it (positions and folded groups are saved in NetWatch, with a reset). Each link
+  leaves from the side of a tile that faces the other tile, and follows as you drag; if you want it
+  on a particular side, tap the tile and set **Links attach to** (Auto, Top, Bottom, Left or Right).
+  Reset layout clears dragged positions and those choices.
 - **Device groups and tags:** put devices in groups you name (for example "Smart home",
   "Family", "Kids", or one child's phone, tablet and laptop), each with a colour and an icon,
   and give them tags (`upstairs`, `guest`, `work`). Assign one device on its page or many at
