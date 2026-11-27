@@ -151,10 +151,15 @@ async def remove_asset(asset_id: int, request: Request) -> dict:
 
 @router.post("/assign")
 async def assign(body: AssignIn, request: Request) -> dict:
-    """Pin devices (or the NetWatch host) behind a switch or a Deco, or unpin them."""
+    """Pin devices (or the NetWatch host) behind a switch, a Deco or the Hub, or unpin them.
+
+    A device last reported on Wi-Fi is still pinned (the report can be stale, for example after a
+    network card swap); the reply carries a ``warnings`` line for it.
+    """
     st = _st(request)
     _check_deco(request, body.parent)
     keys: list[str] = []
+    warnings: list[str] = []
     for k in body.nodes:
         m = re.fullmatch(r"dev:(\d{1,9})", k)
         if not m:
@@ -170,11 +175,8 @@ async def assign(body: AssignIn, request: Request) -> dict:
         prim = (await asyncio.to_thread(st.groups.primaries, [dev["id"]]))[0]
         if body.parent and body.parent.startswith("asset:"):
             conn = (dev.get("details") or {}).get("connection")
-            if conn and conn != "wired":
-                raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    f"{device_label(dev)} is on Wi-Fi, so it cannot be behind a switch",
-                )
+            if conn and conn != "wired":  # advice only: the report can be stale after a card swap
+                warnings.append(f"{device_label(dev)} was last reported on Wi-Fi ({conn})")
         keys.append(f"dev:{prim}")
     try:
         changed = await asyncio.to_thread(st.assets.assign, keys, body.parent)
@@ -188,4 +190,4 @@ async def assign(body: AssignIn, request: Request) -> dict:
             f"Map: {changed} device{'s' if changed != 1 else ''} {target}",
             {"action": "asset_assign", "count": changed, "parent": body.parent},
         )
-    return await _state(request)
+    return {**await _state(request), "warnings": warnings}

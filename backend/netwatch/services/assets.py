@@ -19,7 +19,7 @@ MAX_ASSETS = 30
 MAX_LINKS = 500
 MAX_DEPTH = 8
 _UPLINK = re.compile(r"^(hub|deco:[0-9a-fA-F:-]{11,17}|asset:\d{1,9})$")
-_PARENT = re.compile(r"^(deco:[0-9a-fA-F:-]{11,17}|asset:\d{1,9})$")
+_PARENT = re.compile(r"^(hub|deco:[0-9a-fA-F:-]{11,17}|asset:\d{1,9})$")
 _NODE = re.compile(r"^(truenas|dev:\d{1,9})$")
 
 
@@ -146,10 +146,10 @@ class AssetStore:
         return dict(row._mapping)
 
     def assign(self, node_keys: list[str], parent: str | None) -> int:
-        """Pin nodes behind a switch or a Deco (``parent``), or unpin them (``None``).
+        """Pin nodes behind a switch, a Deco or the Hub (``parent``), or unpin them (``None``).
 
-        ``parent`` is ``asset:<id>`` of an existing switch or ``deco:<mac>`` (the caller checks that
-        the Deco exists). Returns how many nodes changed.
+        ``parent`` is ``asset:<id>`` of an existing switch, ``deco:<mac>`` (the caller checks that
+        the Deco exists) or ``hub``. Returns how many nodes changed.
         """
         keys = list(dict.fromkeys(node_keys))
         if any(not _NODE.match(k) for k in keys):
@@ -158,7 +158,7 @@ class AssetStore:
         with self.engine.begin() as conn:
             if parent is not None:
                 if not _PARENT.match(parent):
-                    raise AssetError("pin behind a switch or a Deco")
+                    raise AssetError("pin behind a switch, a Deco or the Home Hub")
                 if (
                     parent.startswith("asset:")
                     and conn.execute(
