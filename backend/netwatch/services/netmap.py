@@ -175,13 +175,18 @@ class NetMap:
             if all(n.get("operstate") == "up" for n in nics)
             else "down"
         )
-        node(
-            "switch",
-            "switch",
-            "Switch",
-            inferred=True,
-            state="up" if h["state"] in ("up", "degraded") else h["state"],
-        )
+        # Switches you added (unmanaged, so inferred); with none, the fixed inferred one stays.
+        store = getattr(st, "assets", None)
+        asset_rows = store.list() if store else []
+        pins = store.links() if store else {}
+        if not asset_rows:
+            node(
+                "switch",
+                "switch",
+                "Switch",
+                inferred=True,
+                state="up" if h["state"] in ("up", "degraded") else h["state"],
+            )
         node(
             "truenas",
             "host",
@@ -197,8 +202,9 @@ class NetMap:
         edge("hub", "isp", "logical")
         edge("isp", "internet", "logical", median_ms=a["median_ms"], loss_pct=a["loss_pct"])
         edges[-1]["label"] = "internet"
-        edge("hub", "switch")
-        edge("switch", "truenas", median_ms=h["median_ms"], loss_pct=h["loss_pct"])
+        if not asset_rows:
+            edge("hub", "switch")
+            edge("switch", "truenas", median_ms=h["median_ms"], loss_pct=h["loss_pct"])
 
         # Servers of yours outside the network: beyond the Internet node, never part of the chain.
         for t in by_layer[REMOTE]:
@@ -284,8 +290,31 @@ class NetMap:
             )
             edge(main_id or "hub", nid, "logical", **self._edge_stats(t, tview))
 
+        # Switches you added: drawn under what they plug into, with TrueNAS behind its pin (else
+        # the Hub). Their state is worked out at the end, from what sits behind them.
+        for a in asset_rows:
+            node(
+                f"asset:{a['id']}",
+                "switch",
+                a["name"],
+                inferred=True,
+                info={"asset_id": a["id"], "uplink": a["uplink"], "notes": a["notes"]},
+            )
+        for a in asset_rows:
+            up = a["uplink"] if a["uplink"] in nodes else "hub"
+            edge(up, f"asset:{a['id']}", "wired")
+        if asset_rows:
+            parent = pins.get("truenas")
+            edge(
+                parent if parent in nodes else "hub",
+                "truenas",
+                median_ms=h["median_ms"],
+                loss_pct=h["loss_pct"],
+            )
+
         # Every device is its own node (online ones; recently seen offline ones on request),
-        # under the Deco it is connected to, or the Hub.
+        # under the Deco it is connected to, or the Hub, unless you pinned it behind a switch or
+        # a Deco.
         group_nodes: dict[int, dict] = {}
         for d in rows:
             det = d.get("details") or {}
@@ -300,6 +329,9 @@ class NetMap:
             ):
                 continue
             parent = deco_nodes.get(det.get("deco_mac") or "") or "hub"
+            pin = pins.get(f"dev:{d['id']}")
+            if pin in nodes:
+                parent = pin
             t = target_by_id.get(d["target_id"]) if d.get("target_id") else None
             v = tview.get(t["id"], {}) if t else {}
             state = v.get("state", "unknown") if t else "up" if d["online"] else "unknown"
@@ -328,7 +360,12 @@ class NetMap:
                 g = group_nodes.setdefault(group["id"], {**group, "nodes": []})
                 g["nodes"].append(nid)
             conn = det.get("connection")
-            medium = ("wired" if conn == "wired" else "wireless") if parent != "hub" else "logical"
+            if parent.startswith("asset:"):
+                medium = "wired"  # behind a switch means on a cable
+            else:
+                medium = (
+                    ("wired" if conn == "wired" else "wireless") if parent != "hub" else "logical"
+                )
             edge(
                 parent,
                 nid,
@@ -336,6 +373,32 @@ class NetMap:
                 **self._edge_stats(t, tview),
                 label=conn if medium == "wireless" else None,
             )
+
+        # A switch is "up" when anything behind it is, "down" when its own uplink is down and
+        # nothing behind it is up, and unknown otherwise (an unmanaged switch cannot be asked).
+        behind: dict[str, list[str]] = defaultdict(list)
+        uplink_of: dict[str, str] = {}
+        for e in edges:
+            behind[e["source"]].append(e["target"])
+            uplink_of[e["target"]] = e["source"]
+
+        def switch_state(nid: str, depth: int = 0) -> str:
+            kids = [
+                switch_state(k, depth + 1)
+                if k.startswith("asset:") and depth < 8
+                else nodes[k]["state"]
+                for k in behind.get(nid, [])
+            ]
+            if any(s in ("up", "degraded") for s in kids):
+                return "up"
+            return (
+                "down"
+                if nodes.get(uplink_of.get(nid, ""), {}).get("state") == "down"
+                else "unknown"
+            )
+
+        for a in asset_rows:
+            nodes[f"asset:{a['id']}"]["state"] = switch_state(f"asset:{a['id']}")
 
         if at_ms is None and st.deco and st.deco.clients:
             self._add_traffic(nodes, edges, rows)
@@ -444,7 +507,11 @@ class NetMap:
         cause_nodes: list[str] = []
         if cause:
             layer = cause["layer"]
-            if layer in LAYER_NODE and LAYER_NODE[layer] in ids:
+            if layer == LAN:  # the switch TrueNAS is behind (a pinned one, or the fixed one)
+                feeds = [e["source"] for e in graph["edges"] if e["target"] == "truenas"]
+                if feeds and feeds[0] in ids and feeds[0] != "hub":
+                    cause_nodes = [feeds[0]]
+            elif layer in LAYER_NODE and LAYER_NODE[layer] in ids:
                 cause_nodes = [LAYER_NODE[layer]]
             elif layer in (MESH, DEVICE):
                 by_id = {n["id"]: n for n in graph["nodes"]}

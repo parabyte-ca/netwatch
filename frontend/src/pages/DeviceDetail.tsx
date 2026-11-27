@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { ConnectedThrough } from '../components/ConnectedThrough';
 import { DeviceAccess } from '../components/DeviceAccess';
 import { DeviceDns } from '../components/DeviceDns';
 import { DeviceReservation } from '../components/DhcpReservations';
@@ -203,6 +204,8 @@ export function DeviceDetail() {
       <DeviceReservation d={d} />
 
       <DeviceProfile d={d} />
+
+      <ConnectedThrough id={d.id} wifi={!!d.details?.connection && d.details.connection !== 'wired'} />
 
       <DeviceAccess id={d.id} />
 

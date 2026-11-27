@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.32.0] - 2026-11-27
+### Added
+- **Switches on the map.** An unmanaged switch cannot be seen on the network, so you now draw it:
+  **Add switch** above the map, choose what it plugs into (the Home Hub, a Deco or another
+  switch), and pin devices behind it from its tile or from a device's new **Connected through**
+  card. Decos count as pin targets too (their wired clients are their Ethernet ports). A switch is
+  up when anything behind it is. NetWatch suggests a switch on a Deco with three or more wired
+  devices and lists devices no Deco reported, but never moves anything itself.
+### Changed
+- The fixed, inferred "Switch" tile becomes your first switch (TrueNAS pinned behind it, its saved
+  position kept). If you remove every switch, the inferred tile comes back.
+- Switches are map only: the diagnosis, health score and Bell report do not use them. A Wi-Fi
+  device cannot be pinned behind a switch. Replay shows today's wiring.
+- The map tidies itself again whenever a tile or link is added, removed or re-pinned, so a new
+  switch or a re-pinned device lands in its place (tiles you dragged keep their position).
+
 ## [0.31.0] - 2026-11-27
 ### Fixed
 - **Map links no longer curl around tiles.** Links always left a tile's bottom edge and arrived at

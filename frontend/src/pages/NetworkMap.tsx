@@ -18,6 +18,8 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { api, type Incident, type MapEdge, type MapHighlight, type MapNode, type MapPins, type MapPositions, type MapSide, type MapView, type NetworkMapResponse } from '../lib/api';
 import { GroupIcon, colourOf } from '../lib/groups';
 import { shapeGraph, type ColourBy } from '../lib/mapGroups';
+import { AssetEditor } from '../components/AssetEditor';
+import { SwitchTools } from '../components/SwitchTools';
 import { TopTalkers } from '../components/TopTalkers';
 import { DEVICE_TYPE_LABEL, STATE_STYLE, fmtBps, fmtDurationMs, fmtMs, fmtPct, fmtTime, lossColour } from '../lib/format';
 import { edgeHandles } from '../lib/edgeSides';
@@ -148,7 +150,7 @@ const CHECK_LABEL: Record<string, string> = { icmp: 'Ping', tcp: 'Port check', h
 
 const SIDE_LABEL: Record<MapSide | 'auto', string> = { auto: 'Auto', top: 'Top', bottom: 'Bottom', left: 'Left', right: 'Right' };
 
-function Details({ n, pin, onPin, onClose }: { n: MapNode; pin?: MapSide; onPin: (side: MapSide | null) => void; onClose: () => void }) {
+function Details({ n, pin, onPin, onClose, onChanged }: { n: MapNode; pin?: MapSide; onPin: (side: MapSide | null) => void; onClose: () => void; onChanged: () => Promise<void> }) {
   const st = STATE_STYLE[n.state];
   const i = n.info;
   const rows: [string, React.ReactNode][] = [
@@ -177,7 +179,7 @@ function Details({ n, pin, onPin, onClose }: { n: MapNode; pin?: MapSide; onPin:
         <h2 className="font-semibold text-white">{ICON[n.kind]} {n.label}</h2>
         <button className="text-slate-500 hover:text-slate-300" onClick={onClose} aria-label="Close details">✕</button>
       </div>
-      {n.inferred && <p className="text-xs text-slate-500">Not monitored directly: its state is inferred from what sits behind it.</p>}
+      {n.inferred && n.info.asset_id == null && <p className="text-xs text-slate-500">Not monitored directly: its state is inferred from what sits behind it.</p>}
       <dl className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-y-1">
         {rows.filter(([, v]) => v != null && v !== '').map(([k, v]) => (
           <div key={k} className="contents">
@@ -225,6 +227,7 @@ function Details({ n, pin, onPin, onClose }: { n: MapNode; pin?: MapSide; onPin:
       {i.device_id != null && (
         <Link to={`/devices/${i.device_id}`} className="inline-block text-sky-400 hover:underline">Open device</Link>
       )}
+      {n.kind === 'switch' && i.asset_id != null && <AssetEditor id={i.asset_id} onChanged={onChanged} />}
       {n.kind === 'remote' && i.target_id != null && (
         <Link to={`/targets/${i.target_id}`} className="inline-block text-sky-400 hover:underline">Open server page (history, SSH, admin page)</Link>
       )}
@@ -261,6 +264,7 @@ export function NetworkMap() {
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const flowRef = useRef<{ fitView: (o?: { padding?: number; duration?: number }) => unknown } | null>(null);
+  const shapeRef = useRef('');
   const savedRef = useRef(saved);
   savedRef.current = saved;
   const pinsRef = useRef(pins);
@@ -329,12 +333,17 @@ export function NetworkMap() {
   useEffect(() => {
     if (!graph || !shaped || !layoutReady) return;
     const flow = toFlow(shaped, positions, graph.highlight, shaped.accent, shaped.faded);
+    // A poll must not undo a drag, so tiles keep where they are. When the shape changed (a tile or
+    // link was added, removed or re-parented) the tidy layout is applied afresh, honouring saved
+    // positions, so a new switch or a re-pinned device lands in its place instead of on top of others.
+    const reflow = shapeRef.current !== shape;
+    shapeRef.current = shape;
     setNodes((cur) => {
-      const where = new Map(cur.map((n) => [n.id, n.position]));
+      const where = reflow ? new Map<string, { x: number; y: number }>() : new Map(cur.map((n) => [n.id, n.position]));
       return flow.nodes.map((n) => ({ ...n, position: where.get(n.id) ?? n.position, selected: n.id === selected }));
     });
     setEdges(flow.edges);
-  }, [graph, shaped, positions, layoutReady, selected, setNodes, setEdges]);
+  }, [graph, shaped, positions, layoutReady, selected, shape, setNodes, setEdges]);
 
   const enterFull = useCallback(() => {
     setFull(true);
@@ -457,6 +466,8 @@ export function NetworkMap() {
             disabled={Object.keys(saved).length === 0 && Object.keys(pins).length === 0} title="Forget dragged positions and link sides">Reset layout</button>
         </div>
       </div>
+
+      {!replay && <SwitchTools onChanged={load} refreshKey={graph?.generated_ms} />}
 
       <section className="flex flex-wrap items-center gap-2 text-sm" aria-label="Map options">
         <label className="flex items-center gap-1.5 text-slate-300">
@@ -583,7 +594,7 @@ export function NetworkMap() {
         </div>
         <div className={full ? 'absolute right-2 top-2 z-10 max-h-[calc(100%-1rem)] w-[min(20rem,calc(100%-1rem))] overflow-y-auto' : 'space-y-3'}>
           {node ? (
-            <Details n={node} pin={pins[node.id]} onPin={(side) => setPin(node.id, side)} onClose={() => setSelected(null)} />
+            <Details n={node} pin={pins[node.id]} onPin={(side) => setPin(node.id, side)} onClose={() => setSelected(null)} onChanged={load} />
           ) : full ? null : (
             <div className="rounded-lg bg-slate-900 p-4 text-sm text-slate-400 ring-1 ring-slate-800">
               {!replay && graph?.deco_api && <div className="mb-4"><TopTalkers limit={5} compact /></div>}
