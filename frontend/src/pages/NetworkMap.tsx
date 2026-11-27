@@ -19,6 +19,7 @@ import { api, type Incident, type MapEdge, type MapHighlight, type MapNode, type
 import { GroupIcon, colourOf } from '../lib/groups';
 import { shapeGraph, type ColourBy } from '../lib/mapGroups';
 import { AssetEditor } from '../components/AssetEditor';
+import { NodePins } from '../components/PinnedDevices';
 import { SwitchTools } from '../components/SwitchTools';
 import { TopTalkers } from '../components/TopTalkers';
 import { DEVICE_TYPE_LABEL, STATE_STYLE, fmtBps, fmtDurationMs, fmtMs, fmtPct, fmtTime, lossColour } from '../lib/format';
@@ -228,6 +229,7 @@ function Details({ n, pin, onPin, onClose, onChanged }: { n: MapNode; pin?: MapS
         <Link to={`/devices/${i.device_id}`} className="inline-block text-sky-400 hover:underline">Open device</Link>
       )}
       {n.kind === 'switch' && i.asset_id != null && <AssetEditor id={i.asset_id} onChanged={onChanged} />}
+      {(n.id === 'hub' || (n.kind === 'deco' && n.id.startsWith('deco:'))) && <NodePins parent={n.id} onChanged={onChanged} />}
       {n.kind === 'remote' && i.target_id != null && (
         <Link to={`/targets/${i.target_id}`} className="inline-block text-sky-400 hover:underline">Open server page (history, SSH, admin page)</Link>
       )}

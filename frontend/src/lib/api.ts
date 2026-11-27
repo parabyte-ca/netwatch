@@ -1127,6 +1127,8 @@ export interface AssetsState {
   pins: Record<string, string>;
   hints: AssetHints;
   asset?: Asset;
+  /** advice from the last pin (for example a device last reported on Wi-Fi) */
+  warnings?: string[];
 }
 
 export type MapPositions = Record<string, { x: number; y: number }>;
