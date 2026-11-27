@@ -763,13 +763,17 @@ def test_map_api_and_layout(client, fake):
     make_target(st.store, name="Cloudflare", host="1.1.1.1", group="public")
     g = client.get("/api/map").json()
     ids = {n["id"] for n in g["nodes"]}
-    assert {"internet", "isp", "hub", "switch", "truenas"} <= ids and not g["deco_api"]
+    assert {"internet", "isp", "hub", "asset:1", "truenas"} <= ids and not g["deco_api"]
     assert g["deco"] == {"state": "off", "paused": None}
     # Saved but polling unticked: the map says why every device is under the Hub.
     st.deco.save("192.168.2.10", False, PASSWORD)
     assert client.get("/api/map").json()["deco"]["state"] == "not_polling"
     assert client.get("/api/admin/deco").json()["state"] == "not_polling"
-    assert {(e["source"], e["target"]) for e in g["edges"]} >= {("hub", "isp"), ("hub", "switch")}
+    assert {(e["source"], e["target"]) for e in g["edges"]} >= {
+        ("hub", "isp"),
+        ("hub", "asset:1"),
+        ("asset:1", "truenas"),
+    }
 
     # with Deco data
     st.deco.client_factory = lambda host, pw: client_for(fake, pw)

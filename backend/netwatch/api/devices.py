@@ -210,6 +210,7 @@ async def merge_device(device_id: int, body: MergeIn, request: Request) -> dict:
         )
     for m in src_members:
         await asyncio.to_thread(st.device_store.update, m["id"], {"merged_into": dst["id"]})
+    await asyncio.to_thread(st.assets.move_pin, src["id"], dst["id"])
     if src["target_id"]:
         await asyncio.to_thread(st.device_store.update, src["id"], {"target_id": None})
         await asyncio.to_thread(st.device_store.update, dst["id"], {"target_id": src["target_id"]})
@@ -284,6 +285,7 @@ async def forget_device(device_id: int, request: Request) -> Response:
     if d["target_id"]:
         raise HTTPException(status.HTTP_409_CONFLICT, "stop monitoring the device first")
     await asyncio.to_thread(st.device_store.delete, device_id)
+    await asyncio.to_thread(st.assets.forget_device, device_id)
     st.discovery.inventory.forget()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

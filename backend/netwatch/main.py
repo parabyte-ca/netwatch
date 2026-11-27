@@ -36,6 +36,7 @@ from .api import (
     traffic,
     updates,
 )
+from .api import assets as assets_api
 from .api import auth as auth_api
 from .api import host_access as host_access_api
 from .api import people as people_api
@@ -50,6 +51,7 @@ from .services.adguard.profiles import ProfileSync
 from .services.adguard.schedules import ScheduleStore
 from .services.adguard.service import POLL_S as ADGUARD_POLL_S
 from .services.adguard.service import AdGuardService, AdGuardStore
+from .services.assets import AssetStore
 from .services.assistant import Assistant
 from .services.bufferbloat import BufferbloatStore, BufferbloatTester
 from .services.deco.service import POLL_S as DECO_POLL_S
@@ -417,6 +419,7 @@ def create_app(
             PeopleStore(engine), events, store.kv_get, store.kv_set, tz=lambda: settings.tz
         )
         app.state.access = AccessStore(engine)
+        app.state.assets = AssetStore(engine)
         app.state.access_checks = {}
         app.state.health = HealthService(
             engine,
@@ -583,6 +586,7 @@ def create_app(
     app.include_router(device_groups.router)
     app.include_router(people_api.router)
     app.include_router(host_access_api.router)
+    app.include_router(assets_api.router)
     app.include_router(host_access_api.targets_router)
     app.include_router(speed_api.router)
     app.include_router(netmap.router)

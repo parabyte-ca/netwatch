@@ -279,6 +279,30 @@ host_access = Table(
     CheckConstraint("(device_id IS NULL) != (target_id IS NULL)", name="ck_host_access_owner"),
 )
 
+# Network assets drawn on the map (v0.32): unmanaged switches (``kind`` leaves room for more).
+# ``uplink`` is what it plugs into: ``hub``, ``deco:<mac>`` or ``asset:<id>``. Map only: the
+# diagnosis never reads these.
+assets = Table(
+    "assets",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("kind", String(16), nullable=False, default="switch"),
+    Column("name", String(40), nullable=False, unique=True),
+    Column("uplink", String(80), nullable=False, default="hub"),
+    Column("notes", String(200)),
+    Column("created_ms", Integer, nullable=False),
+)
+
+# What a map node is pinned behind: ``node_key`` is ``truenas`` or ``dev:<primary device id>``,
+# ``parent`` is ``asset:<id>`` or ``deco:<mac>``. A node with no row keeps its automatic parent.
+node_parents = Table(
+    "node_parents",
+    metadata,
+    Column("node_key", String(40), primary_key=True),
+    Column("parent", String(80), nullable=False),
+    sqlite_with_rowid=False,
+)
+
 device_ips = Table(
     "device_ips",
     metadata,
