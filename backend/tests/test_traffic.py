@@ -66,6 +66,22 @@ def test_live_top_and_device_traffic_api(client):
     assert sat["down_bps"] == pytest.approx(4e6, rel=1e-3)
     edge = next(e for e in g["edges"] if e["target"] == "internet")
     assert edge["traffic"]["down_bps"] == pytest.approx(24e6, rel=1e-3)
+    # bytes moved in a window, rolled up the same way, instead of live rates
+    v = client.get("/api/map?traffic_hours=1").json()
+    vn = {n["id"]: n for n in v["nodes"]}
+    assert v["volume_hours"] == 1 and "traffic" not in vn["hub"]
+    one_minute = 24e6 * 60 / 8
+    assert vn["hub"]["volume"]["down_bytes"] == pytest.approx(one_minute, rel=1e-3)
+    assert vn["hub"]["volume"]["hours"] == 1
+    sat_v = vn["deco:aa:bb:cc:00:00:02"]["volume"]["down_bytes"]
+    assert sat_v == pytest.approx(4e6 * 60 / 8, rel=1e-3)
+    ev = next(e for e in v["edges"] if e["target"] == "internet")
+    assert ev["volume"]["down_bytes"] == vn["hub"]["volume"]["down_bytes"]
+    assert v["volume_note"] is None
+    assert client.get("/api/map?traffic_hours=720").json()["volume_hours"] == 720
+    assert client.get("/api/map?traffic_hours=5").status_code == 422
+    past = client.get(f"/api/map?traffic_hours=1&at={int(time.time() * 1000) - 1000}").json()
+    assert past["volume_hours"] is None and "volume" not in {k for n in past["nodes"] for k in n}
     assert PHONE and TV and time.time()
 
 

@@ -87,7 +87,12 @@ class NetMap:
     # ── build ────────────────────────────────────────────────────────────────
 
     def build(
-        self, *, at_ms: int | None = None, now_ms: int | None = None, show_offline: bool = False
+        self,
+        *,
+        at_ms: int | None = None,
+        now_ms: int | None = None,
+        show_offline: bool = False,
+        traffic_hours: int | None = None,
     ) -> dict:
         now = now_ms or int(time.time() * 1000)
         st = self.st
@@ -400,13 +405,16 @@ class NetMap:
         for a in asset_rows:
             nodes[f"asset:{a['id']}"]["state"] = switch_state(f"asset:{a['id']}")
 
-        if at_ms is None and st.deco and st.deco.clients:
-            self._add_traffic(nodes, edges, rows)
+        volume_note = None
+        if at_ms is None and st.deco and (st.deco.clients or traffic_hours):
+            volume_note = self._add_traffic(nodes, edges, rows, traffic_hours, now)
 
         return {
             "generated_ms": now,
             "at_ms": at_ms,
             "show_offline": show_offline,
+            "volume_hours": traffic_hours if at_ms is None else None,
+            "volume_note": volume_note,
             "groups": sorted(group_nodes.values(), key=lambda g: g["name"].lower()),
             "deco_api": bool(deco_state),
             # Why devices may all sit under the Hub: the Deco link's state, and why it paused.
@@ -418,8 +426,12 @@ class NetMap:
             "edges": edges,
         }
 
-    def _add_traffic(self, nodes: dict, edges: list, rows: list[dict]) -> None:
-        """Live rates from the Decos on every node, summed up the tree, and on each link."""
+    def _add_traffic(
+        self, nodes: dict, edges: list, rows: list[dict], hours: int | None = None, now_ms: int = 0
+    ) -> str | None:
+        """Live rates (or, with ``hours``, bytes moved in that window) from the Decos on every
+        node, summed up the tree, and on each link. Returns a note when history is shorter than
+        the window."""
         device_of = {m: d["id"] for d in rows for m in d["macs"]}
         own: dict[str, list[float]] = {}
 
@@ -434,12 +446,27 @@ class NetMap:
             if n["kind"] == "group"
             for dev in n["info"].get("devices", [])
         }
-        for mac, c in self.st.deco.clients.items():
+        note = None
+        if hours:
+            now_s = now_ms // 1000
+            settings = self.st.settings
+            floor = now_s - settings.traffic_retention_days * 86400
+            totals = self.st.traffic.totals(now_s - hours * 3600, now_s, minute_floor_s=floor)
+            if hours * 3600 > settings.rollup_retention_days * 86400:
+                note = f"Only {settings.rollup_retention_days} days of history are kept."
+            figures = [
+                (mac, t["down_bytes"], t["up_bytes"], self.st.deco.clients.get(mac))
+                for mac, t in totals.items()
+            ]
+        else:
+            figures = [(m, c["down_bps"], c["up_bps"], c) for m, c in self.st.deco.clients.items()]
+        for mac, down, up, c in figures:
             did = device_of.get(mac)
             nid = f"dev:{did}" if did is not None and f"dev:{did}" in nodes else groups.get(did)
             if nid is None:  # e.g. a device not in the inventory yet: count it on its Deco
-                nid = f"deco:{c['deco_mac']}" if f"deco:{c['deco_mac']}" in nodes else "hub"
-            add(nid, c["down_bps"], c["up_bps"])
+                dm = c["deco_mac"] if c else None
+                nid = f"deco:{dm}" if dm and f"deco:{dm}" in nodes else "hub"
+            add(nid, down, up)
         children: dict[str, list[str]] = {}
         for e in edges:
             if e["target"] not in ("isp", "internet"):
@@ -454,19 +481,27 @@ class NetMap:
                     t[1] += sub[1]
             return t
 
+        key = "volume" if hours else "traffic"
+
+        def figure(d: float, u: float) -> dict:
+            if hours:
+                return {"down_bytes": round(d), "up_bytes": round(u), "hours": hours}
+            return {"down_bps": round(d), "up_bps": round(u)}
+
         for nid, n in nodes.items():
             if n["kind"] in ("internet", "isp", "switch", "host"):
                 continue
             d, u = total(nid)
             if d or u:
-                n["traffic"] = {"down_bps": round(d), "up_bps": round(u)}
-        hub = nodes.get("hub", {}).get("traffic")
+                n[key] = figure(d, u)
+        hub = nodes.get("hub", {}).get(key)
         for e in edges:
-            t = nodes.get(e["target"], {}).get("traffic")
+            t = nodes.get(e["target"], {}).get(key)
             if e["target"] in ("isp", "internet") and hub:
                 t = hub  # everything the Decos carry goes through the Hub to Bell
             if t:
-                e["traffic"] = t
+                e[key] = t
+        return note
 
     def _hub_info(self) -> dict:
         """The Hub's own report (model, firmware, uptime, fibre levels), when connected."""
