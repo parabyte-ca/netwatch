@@ -52,9 +52,16 @@ async def get_map(
     incident: str | None = Query(default=None, description="incident id (i<start_ms>)"),
     event: int | None = Query(default=None, description="an event of the incident"),
     show_offline: bool = False,
+    traffic_hours: int | None = Query(
+        default=None, description="show bytes moved in this window (1, 24, 168 or 720 hours)"
+    ),
 ) -> dict:
     st = request.app.state
     now = int(time.time() * 1000)
+    if traffic_hours is not None and traffic_hours not in (1, 24, 168, 720):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "traffic_hours must be 1, 24, 168 or 720"
+        )
     if at is not None and not (0 < at <= now):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "at must be in the past")
     inc = None
@@ -67,7 +74,9 @@ async def get_map(
             end = inc.end_ms or now
             at = min(inc.start_ms + 30_000, (inc.start_ms + end) // 2) if inc.end_ms else None
     graph = await asyncio.to_thread(
-        lambda: st.netmap.build(at_ms=at, now_ms=now, show_offline=show_offline)
+        lambda: st.netmap.build(
+            at_ms=at, now_ms=now, show_offline=show_offline, traffic_hours=traffic_hours
+        )
     )
     if inc is not None:
         graph["highlight"] = st.netmap.highlight(inc.as_dict(now), graph)
