@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { EventRow } from '../components/EventRow';
 import { ConfirmDialog, type Confirm } from '../components/ConfirmDialog';
+import { DecoDailyRestart } from '../components/DecoDailyRestart';
 import { restartConfirm, restartNote } from '../components/DecoRestart';
 import { api, type AdGuardStatus, type AssistantStatus, type DecoStatus, type DecoTestResult, type HubStatus, type SettingField, type SettingsResponse } from '../lib/api';
 import { fmtAgo, fmtBytes, fmtDurationMs, fmtTime } from '../lib/format';
@@ -765,6 +766,7 @@ function DecoCard() {
             </p>
           )}
         </div>
+        <DecoDailyRestart />
         <NotPolling state={st.state} needs="The map (devices under their Deco), Wi-Fi events and diagnosis" busy={busy} onEnable={() => { setEnabled(true); void save({ enabled: true }); }} />
         {error && <p className="text-rose-400">{error}</p>}
         {test && (test.ok ? (
