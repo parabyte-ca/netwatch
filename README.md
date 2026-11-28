@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.32.1-blue)
+![Version](https://img.shields.io/badge/version-0.33.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -153,6 +153,10 @@ per group or device (internet off at night, YouTube off during homework). See th
   week ("top talkers" on the Overview and the map), live traffic on every map link (busy links
   are thicker and animated), and a bandwidth chart on each device page. Measured by the Decos,
   kept at 1-minute detail for 7 days (adjustable under Admin → settings), then as hourly totals.
+  The map's **Traffic** menu switches tiles and links from live rates to **bytes moved** over the
+  last hour, 24 hours, 7 days or 30 days (rolled up the same way, remembered in your browser; the
+  link thickness follows the average rate). It counts what the Decos see per device, which is
+  internet-bound traffic; device-to-device traffic on the LAN is not visible to NetWatch.
 - **Bufferbloat grade (A+ to F):** latency to 1.1.1.1 while the line is idle, then while it is
   saturated downloading and uploading, graded like Waveform's test. It explains the classic
   "video calls lag whenever someone downloads". Runs nightly after the update window (can be

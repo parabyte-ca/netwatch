@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.33.0] - 2026-11-28
+### Added
+- **Traffic volume on the network map.** A **Traffic** menu above the map switches every tile and
+  link from live rates to the bytes moved in the last hour, 24 hours, 7 days or 30 days (kept in
+  your browser). A tile's details show the figure and the link thickness follows the average rate.
+  `GET /api/map` takes `traffic_hours` (1, 24, 168 or 720). Volume comes from the Decos' per-device
+  counts, so it covers internet-bound traffic only, and it is not shown in replay.
+
 ## [0.32.1] - 2026-11-27
 ### Changed
 - **Pin from either side.** The Home Hub and each Deco tile now list the devices pinned behind them
