@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .. import __version__
 from ..auth import COOKIE_NAME, token_hash
+from ..services.deco.restart_schedule import ScheduleError
 from ..services.deco.service import DecoActionError
 from ..services.detector import DetectorConfig
 from ..services.events import SECURITY
@@ -414,6 +415,50 @@ async def reboot_all_decos(request: Request) -> dict:
 @router.post("/deco/{mac}/reboot")
 async def reboot_deco(mac: str, request: Request) -> dict:
     return await _deco_restart(request, f"Deco {mac}", request.app.state.deco.reboot(mac))
+
+
+class DecoScheduleIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    time: str = Field(max_length=5)
+    days: list[int] = Field(max_length=7)
+
+
+@router.get("/deco/restart-schedule")
+async def get_deco_restart_schedule(request: Request) -> dict:
+    """The daily Deco restart: when, which days, the next run and what the last one did."""
+    st = request.app.state
+    return {
+        **await asyncio.to_thread(st.deco.restart_schedule),
+        "actions": bool(getattr(st.settings, "deco_actions", False)),
+    }
+
+
+@router.put("/deco/restart-schedule")
+async def set_deco_restart_schedule(body: DecoScheduleIn, request: Request) -> dict:
+    """Save the daily restart. Turning it on needs Deco actions on; turning it off never does."""
+    st = request.app.state
+    actions = bool(getattr(st.settings, "deco_actions", False))
+    if body.enabled and not actions:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Deco actions are turned off in Admin")
+    try:
+        out = await asyncio.to_thread(
+            st.deco.set_restart_schedule,
+            body.enabled,
+            body.time,
+            body.days,
+            int(time.time() * 1000),
+        )
+    except ScheduleError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    what = f"on at {body.time}" if body.enabled else "off"
+    await security_event(
+        request,
+        "info",
+        f"Deco: daily restart turned {what}",
+        {"action": "deco_schedule", "enabled": body.enabled, "time": body.time},
+    )
+    return {**out, "actions": actions}
 
 
 class DecoTestIn(BaseModel):

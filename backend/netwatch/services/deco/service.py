@@ -19,6 +19,7 @@ from ..poll_state import poll_state
 from ..secrets import SecretBox
 from ..storage import Store
 from ..traffic import TrafficStore
+from . import restart_schedule as rs
 from .client import (
     DecoClient,
     DecoError,
@@ -39,6 +40,7 @@ _MAC = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
 DISCONNECT_AFTER_MS = 60_000
 RESULTS_KEY = "deco_reboot_result"  # newest first: what each restart request saw
 MAX_RESULTS = 6
+SCHEDULE_KEY = "deco_restart_schedule"  # the daily restart (see restart_schedule.py)
 REBOOT_KEY = "deco_reboot_last"  # {mac|"mesh": ms of the last restart NetWatch asked for}
 REBOOT_COOLDOWN_MS = 5 * 60_000  # one Deco
 MESH_COOLDOWN_MS = 15 * 60_000  # the whole mesh
@@ -188,6 +190,9 @@ class DecoService:
         self._awaiting: dict[str, tuple[int, bool]] = {}
         self._planned: set[str] = set()  # deco macs whose open outage event is a planned restart
         self._sleep = asyncio.sleep
+        # set by main: the NetWatch time zone and whether Deco actions are switched on
+        self.tz_name = "America/Toronto"
+        self.actions_on: Callable[[], bool] = lambda: False
         self.paused: str | None = None  # why polling stopped until the settings are saved
 
     # ── configuration ────────────────────────────────────────────────────────
@@ -265,6 +270,7 @@ class DecoService:
             try:
                 if self.config()["enabled"] and self.configured and not self.paused:
                     await self.poll()
+                    await self.scheduled_restart()
             except Exception:
                 log.exception("Deco poll failed")
             await asyncio.sleep(POLL_S)
@@ -655,6 +661,95 @@ class DecoService:
         for d in order:
             self._remember(d["mac"], now)
         return {"started_ms": now, "decos": done, "unconfirmed": quiet, "notes": notes}
+
+    # ── the daily restart ────────────────────────────────────────────────────
+
+    def _schedule(self) -> dict:
+        raw = self.store.kv_get(SCHEDULE_KEY, {}) or {}
+        out = {**rs.DEFAULT, **{k: v for k, v in raw.items() if k in rs.DEFAULT}}
+        for k in ("enabled_since_ms", "last_run_ms", "last_result", "missed_ms"):
+            out[k] = raw.get(k)
+        return out
+
+    def _save_schedule(self, **changes: object) -> None:
+        self.store.kv_set(SCHEDULE_KEY, {**self._schedule(), **changes})
+
+    def restart_schedule(self, now_ms: int | None = None) -> dict:
+        now = now_ms or int(time.time() * 1000)
+        s = self._schedule()
+        tz = rs.zone(self.tz_name)
+        return {
+            "enabled": s["enabled"],
+            "time": s["time"],
+            "days": s["days"],
+            "next_ms": rs.next_run(s, now, tz) if s["enabled"] else None,
+            "last": s["last_result"],
+        }
+
+    def set_restart_schedule(self, enabled: bool, hhmm: str, days: list[int], now_ms: int) -> dict:
+        """Save the daily restart. Raises ``rs.ScheduleError`` for a bad time or weekday list."""
+        values = rs.clean(enabled, hhmm, days)
+        old = self._schedule()
+        since = old["enabled_since_ms"]
+        if values["enabled"] and (not old["enabled"] or since is None):
+            since = now_ms  # a run that was due before this moment is not "missed"
+        self._save_schedule(**values, enabled_since_ms=since)
+        return self.restart_schedule(now_ms)
+
+    def _log_scheduled(self, now: int, severity: str, title: str) -> None:
+        self.events.instant(SECURITY, severity, now, title, details={"action": "deco_scheduled"})
+
+    async def scheduled_restart(self, now_ms: int | None = None) -> dict | None:
+        """Restart the whole mesh once a day at the chosen time (called from the poll loop).
+
+        Runs only inside a 30 minute window after the chosen time, only once per day, and only
+        while Deco actions are switched on. A run missed by more than the window is skipped and
+        noted, so the Wi-Fi never drops mid-morning because NetWatch was busy at 06:50.
+        """
+        now = now_ms or int(time.time() * 1000)
+        sched = self._schedule()
+        if not sched["enabled"] or not self.actions_on():
+            return None
+        tz = rs.zone(self.tz_name)
+        due = rs.due_start(sched, now, tz)
+        if due is None:
+            late = rs.missed_start(sched, now, tz)
+            if (
+                late is not None
+                and late >= (sched["enabled_since_ms"] or 0)
+                and (sched["last_run_ms"] or 0) < late
+                and sched["missed_ms"] != late
+            ):
+                result = {
+                    "ts_ms": now,
+                    "outcome": "skipped",
+                    "summary": f"skipped: NetWatch was not running at {sched['time']}",
+                }
+                self._save_schedule(missed_ms=late, last_result=result)
+                self._log_scheduled(now, "info", f"Deco: {result['summary']} (daily restart)")
+                return result
+            return None
+        if (sched["last_run_ms"] or 0) >= due:
+            return None
+        self._save_schedule(last_run_ms=now)  # before sending, so a crash never repeats it
+        try:
+            out = await self.reboot_mesh(now_ms)
+        except DecoActionError as exc:
+            outcome = "skipped" if exc.status == 429 else "failed"
+            result = {"ts_ms": now, "outcome": outcome, "summary": str(exc)}
+            self._save_schedule(last_result=result)
+            self._log_scheduled(now, "warning", f"Deco: daily restart {outcome}: {exc}")
+            return result
+        names = ", ".join(out["decos"])
+        quiet = bool(out.get("unconfirmed"))
+        result = {
+            "ts_ms": now,
+            "outcome": "unconfirmed" if quiet else "ran",
+            "summary": f"restart sent to {names}" + (" (no reply yet)" if quiet else ""),
+        }
+        self._save_schedule(last_result=result)
+        self._log_scheduled(now, "info", f"Deco: daily restart, {result['summary']}")
+        return result
 
     async def test(self, host: str, password: str, *, trust: bool = False) -> dict:
         """Try a sign-in. With ``trust`` (the owner typed the password for the saved Deco), a
