@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.34.0] - 2026-11-28
+### Added
+- **Daily Deco restart.** Admin → Deco mesh → Daily restart restarts the whole Wi-Fi network at a
+  set time (default 06:50) on chosen weekdays, in NetWatch's time zone. It needs Deco actions on,
+  runs once a day inside a 30 minute window (a missed run is skipped and noted, never done late),
+  respects the existing restart limits, is logged as a planned restart, and shows the next and last
+  run. `GET`/`PUT /api/admin/deco/restart-schedule`.
+
 ## [0.33.0] - 2026-11-28
 ### Added
 - **Traffic volume on the network map.** A **Traffic** menu above the map switches every tile and
