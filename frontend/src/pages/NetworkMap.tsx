@@ -15,14 +15,14 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, type Incident, type MapEdge, type MapHighlight, type MapNode, type MapPins, type MapPositions, type MapSide, type MapView, type NetworkMapResponse } from '../lib/api';
+import { api, type Incident, type MapEdge, type MapHighlight, type MapNode, type MapPins, type MapPositions, type MapSide, type MapView, type NetworkMapResponse, type Volume } from '../lib/api';
 import { GroupIcon, colourOf } from '../lib/groups';
 import { shapeGraph, type ColourBy } from '../lib/mapGroups';
 import { AssetEditor } from '../components/AssetEditor';
 import { NodePins } from '../components/PinnedDevices';
 import { SwitchTools } from '../components/SwitchTools';
 import { TopTalkers } from '../components/TopTalkers';
-import { DEVICE_TYPE_LABEL, STATE_STYLE, fmtBps, fmtDurationMs, fmtMs, fmtPct, fmtTime, lossColour } from '../lib/format';
+import { DEVICE_TYPE_LABEL, STATE_STYLE, fmtBps, fmtBytes, fmtDurationMs, fmtMs, fmtPct, fmtTime, lossColour } from '../lib/format';
 import { edgeHandles } from '../lib/edgeSides';
 import { NODE_H, NODE_W, layoutMap } from '../lib/mapLayout';
 
@@ -52,7 +52,16 @@ function rates(t: { down_bps: number; up_bps: number }): string {
   return `↓${fmtBps(t.down_bps)} ↑${fmtBps(t.up_bps)}`;
 }
 
+function volumeText(v: Volume): string {
+  return `↓${fmtBytes(v.down_bytes)} ↑${fmtBytes(v.up_bytes)}`;
+}
+
+const WINDOWS: [number, string][] = [[0, 'Live'], [1, 'Last hour'], [24, 'Last 24 h'], [168, 'Last 7 days'], [720, 'Last 30 days']];
+const WINDOW_KEY = 'netwatch.map.window';
+const windowLabel = (h: number) => WINDOWS.find(([v]) => v === h)?.[1]?.toLowerCase() ?? `${h} h`;
+
 function subline(n: MapNode): string {
+  if (n.volume) return volumeText(n.volume);
   if (n.traffic) return rates(n.traffic);
   if (n.kind === 'group' || n.kind === 'devgroup') return 'tap to list';
   const m = n.members.find((x) => x.median_ms != null);
@@ -108,7 +117,7 @@ const nodeTypes = { net: NetNode };
 
 function edgeLabel(e: MapEdge): string | undefined {
   const stats = [e.median_ms != null ? fmtMs(e.median_ms) : null, e.loss_pct ? `${fmtPct(e.loss_pct)} loss` : null].filter(Boolean);
-  const text = [e.label, ...stats, e.traffic && rates(e.traffic)].filter(Boolean).join(' · ');
+  const text = [e.label, ...stats, e.volume ? volumeText(e.volume) : e.traffic && rates(e.traffic)].filter(Boolean).join(' · ');
   return text || undefined;
 }
 
@@ -126,7 +135,9 @@ function toFlow(g: { nodes: MapNode[]; edges: MapEdge[] }, pos: MapPositions, hl
   const edges: Edge[] = g.edges.map((e) => {
     const down = byId.get(e.target)?.state === 'down' || byId.get(e.source)?.state === 'down';
     const colour = down ? '#ef4444' : e.loss_pct != null ? lossColour(e.loss_pct) : '#475569';
-    const flow = e.traffic ? e.traffic.down_bps + e.traffic.up_bps : 0;
+    // Live rate, or the average bits/s over the volume window, so thickness reads the same way.
+    const avg = e.volume && e.volume.hours > 0 ? ((e.volume.down_bytes + e.volume.up_bytes) * 8) / (e.volume.hours * 3600) : 0;
+    const flow = e.traffic ? e.traffic.down_bps + e.traffic.up_bps : avg;
     return {
       id: e.id,
       source: e.source,
@@ -135,7 +146,7 @@ function toFlow(g: { nodes: MapNode[]; edges: MapEdge[] }, pos: MapPositions, hl
       labelStyle: { fill: '#cbd5e1', fontSize: 11 },
       labelBgStyle: { fill: '#0f172a' },
       // Busy links move and get thicker (log scale: 1 Mb/s → 2 px, 1 Gb/s → 6 px).
-      animated: !down && (e.medium === 'wireless' || flow > 1e5),
+      animated: !down && (e.medium === 'wireless' || (!!e.traffic && flow > 1e5)),
       style: {
         stroke: colour,
         strokeWidth: flow > 1e5 ? Math.min(6, 2 + Math.log10(flow / 1e6) * (4 / 3)) : e.medium === 'logical' ? 1 : 2,
@@ -172,6 +183,7 @@ function Details({ n, pin, onPin, onClose, onChanged }: { n: MapNode; pin?: MapS
     ['Tags', i.tags && i.tags.length > 0 && i.tags.map((t) => `#${t}`).join(' ')],
     ['Uptime', i.uptime_s != null && fmtDurationMs(i.uptime_s * 1000)],
     ['Fibre signal', i.rx_dbm != null && `${i.rx_dbm} dBm received${i.tx_dbm != null ? `, ${i.tx_dbm} dBm sent` : ''}`],
+    ['Moved', n.volume && `${volumeText(n.volume)} in the ${windowLabel(n.volume.hours)}`],
     ['Internet', i.wan_up != null && (i.wan_up ? `up${i.wan_ip ? ` · ${i.wan_ip}` : ''}` : 'down')],
   ];
   return (
@@ -258,6 +270,14 @@ export function NetworkMap() {
   const [groupFilter, setGroupFilter] = useState<number[]>([]);
   const [tagFilter, setTagFilter] = useState('');
   const [showOffline, setShowOffline] = useState(false);
+  const [windowH, setWindowH] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem(WINDOW_KEY));
+      return WINDOWS.some(([h]) => h === v) ? v : 0;
+    } catch {
+      return 0;
+    }
+  });
   const [views, setViews] = useState<MapView[]>([]);
   const [viewName, setViewName] = useState('');
   const [layoutReady, setLayoutReady] = useState(false);
@@ -293,12 +313,12 @@ export function NetworkMap() {
 
   const load = useCallback(async () => {
     try {
-      setGraph(await api.map({ at: atParam, incident: incidentParam, event: eventParam, show_offline: showOffline }));
+      setGraph(await api.map({ at: atParam, incident: incidentParam, event: eventParam, show_offline: showOffline, traffic_hours: replay ? undefined : windowH || undefined }));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [atParam, incidentParam, eventParam, showOffline]);
+  }, [atParam, incidentParam, eventParam, showOffline, windowH, replay]);
 
   useEffect(() => {
     void load();
@@ -486,6 +506,19 @@ export function NetworkMap() {
             {mapTags.map((t) => <option key={t} value={t}>#{t}</option>)}
           </select>
         )}
+        {!replay && (
+          <label className="flex items-center gap-1.5 text-slate-300">
+            Traffic
+            <select aria-label="Traffic window" className={input} value={windowH}
+              onChange={(e) => {
+                const h = Number(e.target.value);
+                setWindowH(h);
+                try { localStorage.setItem(WINDOW_KEY, String(h)); } catch { /* private window */ }
+              }}>
+              {WINDOWS.map(([h, label]) => <option key={h} value={h}>{label}</option>)}
+            </select>
+          </label>
+        )}
         <label className="flex items-center gap-1.5 text-slate-300">
           <input type="checkbox" checked={showOffline} onChange={(e) => setShowOffline(e.target.checked)} />
           Show offline (24 h)
@@ -605,12 +638,18 @@ export function NetworkMap() {
                 <li><span className="inline-block w-8 border-t-2 border-slate-500 align-middle" /> wired</li>
                 <li><span className="inline-block w-8 border-t-2 border-dashed border-slate-500 align-middle" /> Wi-Fi</li>
                 <li><span className="inline-block w-8 border-t border-dotted border-slate-500 align-middle" /> logical (not measured)</li>
-                <li>Line colour: packet loss (green → red); labels show median latency and live traffic; busy links are thicker.</li>
+                <li>Line colour: packet loss (green → red); labels show median latency and live traffic (or bytes moved, from the Traffic menu); busy links are thicker.</li>
               </ul>
             </div>
           )}
         </div>
       </div>
+      {graph?.volume_hours ? (
+        <p className="text-xs text-slate-500">
+          Showing bytes moved in the {windowLabel(graph.volume_hours)}, as the Decos count each device (internet-bound traffic).
+          {graph.volume_note ? ` ${graph.volume_note}` : ''}
+        </p>
+      ) : null}
       {graph && !full && <p className="text-xs text-slate-500">Updated {fmtTime(graph.generated_ms)}</p>}
     </div>
   );

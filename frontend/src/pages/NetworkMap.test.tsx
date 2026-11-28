@@ -16,7 +16,10 @@ beforeAll(() => {
     m22 = 1;
   };
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  localStorage.clear();
+});
 
 const n = (id: string, kind: MapNode['kind'], label: string, over: Partial<MapNode> = {}): MapNode => ({
   id, kind, label, state: 'up', inferred: false, members: [], info: {}, ...over,
@@ -204,6 +207,36 @@ describe('NetworkMap', () => {
     fireEvent.click(reset);
     await waitFor(() => expect(calls.some((c) => c.url === '/api/map/layout' && c.method === 'DELETE')).toBe(true));
     await waitFor(() => expect(reset).toBeDisabled());
+  });
+
+  it('shows bytes moved for the chosen traffic window and remembers it', async () => {
+    const calls: { url: string; method: string; body?: unknown }[] = [];
+    const GB = 1024 ** 3;
+    const moved = {
+      ...graph,
+      volume_hours: 24,
+      nodes: graph.nodes.map((x) => (x.id === 'hub' ? { ...x, volume: { down_bytes: 1.5 * GB, up_bytes: 300 * 1024 ** 2, hours: 24 } } : x)),
+    };
+    mockApi(calls, moved);
+    render(<MemoryRouter initialEntries={['/map']}><NetworkMap /></MemoryRouter>);
+    const pick = (await screen.findByLabelText('Traffic window')) as HTMLSelectElement;
+    expect(pick.value).toBe('0');
+    expect(calls.some((c) => c.url === '/api/map')).toBe(true);
+    fireEvent.change(pick, { target: { value: '24' } });
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/map?traffic_hours=24')).toBe(true));
+    expect(await screen.findByText('↓1.5 GB ↑300.0 MB')).toBeInTheDocument();
+    expect(screen.getByText(/Showing bytes moved in the last 24 h/)).toBeInTheDocument();
+    expect(localStorage.getItem('netwatch.map.window')).toBe('24');
+    fireEvent.click(screen.getByTestId('node-hub'));
+    const panel = await screen.findByRole('complementary', { name: 'Node details' });
+    expect(panel).toHaveTextContent('in the last 24 h');
+  });
+
+  it('hides the traffic window in replay', async () => {
+    mockApi([]);
+    render(<MemoryRouter initialEntries={['/map?at=1700000000000']}><NetworkMap /></MemoryRouter>);
+    await screen.findByText('Bell Home Hub');
+    expect(screen.queryByLabelText('Traffic window')).toBeNull();
   });
 
   it('resets a saved layout', async () => {

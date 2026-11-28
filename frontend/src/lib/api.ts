@@ -722,6 +722,12 @@ export interface Rates {
   down_bps: number;
   up_bps: number;
 }
+/** Bytes moved in the map's chosen window (hours). */
+export interface Volume {
+  down_bytes: number;
+  up_bytes: number;
+  hours: number;
+}
 
 export interface TrafficDevice {
   device_id: number | null;
@@ -1025,6 +1031,7 @@ export interface MapNode {
   inferred: boolean;
   members: MapMember[];
   traffic?: Rates;
+  volume?: Volume;
   info: {
     ip?: string | null;
     mac?: string;
@@ -1082,6 +1089,7 @@ export interface MapEdge {
   loss_pct: number | null;
   label: string | null;
   traffic?: Rates;
+  volume?: Volume;
 }
 
 export interface MapHighlight {
@@ -1101,6 +1109,9 @@ export interface NetworkMapResponse {
   deco_api: boolean;
   deco?: { state: PollState; paused: string | null };
   show_offline?: boolean;
+  /** window of the volume figures (hours), or null for live rates */
+  volume_hours?: number | null;
+  volume_note?: string | null;
   groups?: MapGroup[];
   nodes: MapNode[];
   edges: MapEdge[];
@@ -1475,12 +1486,13 @@ export const api = {
   diagnosisForEvent: (eventId: number) => request<Incident>(`/api/diagnosis/event/${eventId}`),
   report: (start: number, scope: 'all' | 'isp') => request<Report>(`/api/report?start=${start}&scope=${scope}`),
   reportMarkdownUrl: (start: number, scope: 'all' | 'isp') => `/api/report?start=${start}&scope=${scope}&format=md`,
-  map: (params: { at?: number; incident?: string; event?: number; show_offline?: boolean } = {}) => {
+  map: (params: { at?: number; incident?: string; event?: number; show_offline?: boolean; traffic_hours?: number } = {}) => {
     const q = new URLSearchParams();
     if (params.show_offline) q.set('show_offline', 'true');
     if (params.at) q.set('at', String(params.at));
     if (params.incident) q.set('incident', params.incident);
     if (params.event) q.set('event', String(params.event));
+    if (params.traffic_hours) q.set('traffic_hours', String(params.traffic_hours));
     const qs = q.toString();
     return request<NetworkMapResponse>(`/api/map${qs ? `?${qs}` : ''}`);
   },

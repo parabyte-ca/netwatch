@@ -13,6 +13,13 @@ export interface MapOptions {
 const ORDER: State[] = ['down', 'degraded', 'unknown', 'up'];
 const worst = (states: State[]) => ORDER.find((s) => states.includes(s)) ?? 'unknown';
 
+/** Live bits/s, or the average over the volume window. */
+function avgBps(n: MapNode): number {
+  if (n.traffic) return n.traffic.down_bps + n.traffic.up_bps;
+  if (n.volume && n.volume.hours > 0) return ((n.volume.down_bytes + n.volume.up_bytes) * 8) / (n.volume.hours * 3600);
+  return 0;
+}
+
 /** Bandwidth colour: quiet slate, then sky, amber and rose as the device gets busier. */
 export function bandwidthHex(bps: number): string | null {
   if (bps < 1e5) return null;
@@ -45,6 +52,7 @@ export function shapeGraph(g: NetworkMapResponse, o: MapOptions): {
           id, kind: 'devgroup', label: gr.name, state: 'up', inferred: false, members: [],
           info: { group: gr, parent, count: 0, collapsed: [], devices: [] },
           traffic: { down_bps: 0, up_bps: 0 },
+          volume: { down_bytes: 0, up_bytes: 0, hours: 0 },
         };
         clusters.set(id, c);
         nodes.push(c);
@@ -58,6 +66,11 @@ export function shapeGraph(g: NetworkMapResponse, o: MapOptions): {
         c.traffic!.down_bps += n.traffic.down_bps;
         c.traffic!.up_bps += n.traffic.up_bps;
       }
+      if (n.volume) {
+        c.volume!.down_bytes += n.volume.down_bytes;
+        c.volume!.up_bytes += n.volume.up_bytes;
+        c.volume!.hours = n.volume.hours;
+      }
       hidden.add(n.id);
       continue;
     }
@@ -66,6 +79,7 @@ export function shapeGraph(g: NetworkMapResponse, o: MapOptions): {
   for (const c of clusters.values()) {
     c.label = `${c.info.group!.name} · ${c.info.count}`;
     if (!c.traffic!.down_bps && !c.traffic!.up_bps) delete c.traffic;
+    if (!c.volume!.down_bytes && !c.volume!.up_bytes) delete c.volume;
   }
   const clusterEdges = new Map<string, MapEdge>();
   for (const e of g.edges) {
@@ -76,7 +90,7 @@ export function shapeGraph(g: NetworkMapResponse, o: MapOptions): {
     const n = g.nodes.find((x) => x.id === e.target)!;
     const id = `grp:${n.info.group!.id}@${e.source}`;
     if (!clusterEdges.has(id)) {
-      const ce: MapEdge = { ...e, id: `${e.source}>${id}`, target: id, label: null, median_ms: null, loss_pct: null, traffic: undefined };
+      const ce: MapEdge = { ...e, id: `${e.source}>${id}`, target: id, label: null, median_ms: null, loss_pct: null, traffic: undefined, volume: undefined };
       clusterEdges.set(id, ce);
       edges.push(ce);
     } else if (e.medium === 'wired') {
@@ -91,7 +105,7 @@ export function shapeGraph(g: NetworkMapResponse, o: MapOptions): {
     const gr = n.info.group;
     if (n.kind === 'device' || n.kind === 'devgroup') {
       if (o.colourBy === 'group') accent.set(n.id, gr ? colourOf(gr.colour).hex : null);
-      else if (o.colourBy === 'bandwidth') accent.set(n.id, n.traffic ? bandwidthHex(n.traffic.down_bps + n.traffic.up_bps) : null);
+      else if (o.colourBy === 'bandwidth') accent.set(n.id, bandwidthHex(avgBps(n)));
       else accent.set(n.id, null);
       if (filtering) {
         const inGroup = o.groups.length === 0 || (!!gr && o.groups.includes(gr.id));
