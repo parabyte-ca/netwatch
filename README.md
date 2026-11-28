@@ -1,7 +1,7 @@
 # NetWatch
 > Self-hosted network diagnostics: find where and when connectivity fails, with evidence.
 
-![Version](https://img.shields.io/badge/version-0.33.0-blue)
+![Version](https://img.shields.io/badge/version-0.34.0-blue)
 
 ## Overview
 NetWatch continuously probes your gateway, mesh nodes, public anchors and chosen devices,
@@ -371,6 +371,15 @@ Decos** (satellites first, the main Deco last), and a diagnosis that blames one 
 **Restart <name>** beside it. Every restart asks first, names what will drop, and goes in the
 security log. Restarting the main Deco drops Wi-Fi for the whole network for a few minutes,
 and NetWatch itself may go quiet if it sits behind that Deco.
+
+**Daily restart (optional).** With Deco actions on, **Admin → Deco mesh → Daily restart** restarts
+the whole Wi-Fi network every day at a time you choose (for example 06:50), on the weekdays you
+pick, in NetWatch's time zone (`TZ`). It runs once a day, only within 30 minutes after that time:
+a run NetWatch misses (it was down or busy) is skipped and noted, never done mid-morning. It uses
+the same restart as the button (satellites first, main last), is logged as planned in the timeline
+and the security log, and the card shows the next run and what the last one did. If the manual
+restart does not work on your Decos, the daily one will not either; use the Deco app's own
+Reboot Schedule in that case.
 
 ### Remote servers
 Open **Targets**, add a target and choose the group **Remote server**; the check can be a ping, a TCP

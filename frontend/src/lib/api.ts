@@ -718,6 +718,15 @@ export interface Incident {
   causes: Cause[];
 }
 
+/** The daily Deco restart (days: Monday = 0). */
+export interface DecoSchedule {
+  enabled: boolean;
+  time: string;
+  days: number[];
+  next_ms: number | null;
+  last: { ts_ms: number; outcome: 'ran' | 'unconfirmed' | 'skipped' | 'failed'; summary: string } | null;
+  actions: boolean;
+}
 export interface Rates {
   down_bps: number;
   up_bps: number;
@@ -1591,6 +1600,9 @@ export const api = {
   rebootDeco: (mac: string) =>
     request<RestartResult>(`/api/admin/deco/${encodeURIComponent(mac)}/reboot`, post()),
   rebootAllDecos: () => request<RestartResult>('/api/admin/deco/reboot-all', post()),
+  decoSchedule: () => request<DecoSchedule>('/api/admin/deco/restart-schedule'),
+  saveDecoSchedule: (body: { enabled: boolean; time: string; days: number[] }) =>
+    request<DecoSchedule>('/api/admin/deco/restart-schedule', { method: 'PUT', body: JSON.stringify(body) }),
   testDeco: (host: string, password?: string) => request<DecoTestResult>('/api/admin/deco/test', post({ host, password })),
   adminSettings: () => request<SettingsResponse>('/api/admin/settings'),
   saveSettings: (changes: Record<string, unknown>) =>

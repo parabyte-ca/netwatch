@@ -400,6 +400,8 @@ def create_app(
             SecretBox(settings.data_dir),
             traffic=traffic_store,
         )
+        app.state.deco.tz_name = settings.tz
+        app.state.deco.actions_on = lambda: bool(getattr(settings, "deco_actions", False))
         exposure_store = ExposureStore(engine)
         app.state.exposure_store = exposure_store
         app.state.exposure = ExposureScanner(exposure_store, engine, events, hub=app.state.hub)

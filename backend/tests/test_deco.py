@@ -900,3 +900,115 @@ def test_map_layout_pins_round_trip_and_validation(client):
     client.put(url, json={"positions": {}, "pins": {"hub": "top"}})
     assert client.delete(url).status_code == 204
     assert client.get(url).json() == {"positions": {}, "collapsed": [], "pins": {}}
+
+
+# ── the daily restart ────────────────────────────────────────────────────────
+
+
+def _local_ms(y, mo, d, h, mi, name="America/Toronto") -> int:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    return int(datetime(y, mo, d, h, mi, tzinfo=ZoneInfo(name)).timestamp() * 1000)
+
+
+async def _daily(svc, fake, *, days=(0, 1, 2, 3, 4, 5, 6), actions=True, enabled_at=None):
+    """A schedule at 06:50 on Tuesday 2026-03-10 (daylight saving already started)."""
+
+    async def no_sleep(_):
+        return None
+
+    svc._sleep = no_sleep
+    svc.actions_on = lambda: actions
+    await svc.poll(_local_ms(2026, 3, 9, 20, 0))
+    svc.set_restart_schedule(True, "06:50", list(days), enabled_at or _local_ms(2026, 3, 9, 20, 0))
+
+
+async def test_daily_restart_runs_once_inside_its_window(svc, fake):
+    await _daily(svc, fake)
+    assert await svc.scheduled_restart(_local_ms(2026, 3, 10, 6, 49)) is None
+    out = await svc.scheduled_restart(_local_ms(2026, 3, 10, 6, 51))
+    assert out["outcome"] == "ran" and fake.reboots == [[SAT], [MAIN]]
+    assert await svc.scheduled_restart(_local_ms(2026, 3, 10, 6, 55)) is None  # not twice
+    assert len(fake.reboots) == 2
+    assert svc.restart_schedule(_local_ms(2026, 3, 10, 7, 0))["last"]["outcome"] == "ran"
+    nxt = svc.restart_schedule(_local_ms(2026, 3, 10, 7, 0))["next_ms"]
+    assert nxt == _local_ms(2026, 3, 11, 6, 50)
+
+
+async def test_daily_restart_skips_a_missed_window_and_never_runs_late(svc, fake):
+    await _daily(svc, fake)
+    late = _local_ms(2026, 3, 10, 7, 21)  # 31 minutes after 06:50
+    out = await svc.scheduled_restart(late)
+    assert out["outcome"] == "skipped" and "not running at 06:50" in out["summary"]
+    assert fake.reboots == []
+    assert await svc.scheduled_restart(late + 60_000) is None  # noted once
+
+
+async def test_enabling_after_the_time_is_not_a_missed_run(svc, fake):
+    await _daily(svc, fake, enabled_at=_local_ms(2026, 3, 10, 10, 0))
+    assert await svc.scheduled_restart(_local_ms(2026, 3, 10, 10, 1)) is None
+    assert fake.reboots == []
+
+
+async def test_daily_restart_stays_quiet_when_it_must(svc, fake):
+    t = _local_ms(2026, 3, 10, 6, 51)  # a Tuesday: weekday 1
+    await _daily(svc, fake, actions=False)
+    assert await svc.scheduled_restart(t) is None  # Deco actions off
+    svc.actions_on = lambda: True
+    svc.set_restart_schedule(True, "06:50", [0, 2], _local_ms(2026, 3, 9, 20, 0))
+    assert await svc.scheduled_restart(t) is None  # not a chosen day
+    assert fake.reboots == []
+    svc.set_restart_schedule(False, "06:50", [1], _local_ms(2026, 3, 9, 20, 0))
+    assert await svc.scheduled_restart(t) is None  # switched off
+
+
+async def test_daily_restart_respects_a_manual_restart_just_before(svc, fake):
+    await _daily(svc, fake)
+    await svc.reboot_mesh(_local_ms(2026, 3, 10, 6, 45))
+    n = len(fake.reboots)
+    out = await svc.scheduled_restart(_local_ms(2026, 3, 10, 6, 51))
+    assert out["outcome"] == "skipped" and "a moment ago" in out["summary"]
+    assert len(fake.reboots) == n
+
+
+def test_the_schedule_follows_local_time_across_daylight_saving():
+    from datetime import datetime
+
+    from netwatch.services.deco import restart_schedule as rs
+
+    tz = rs.zone("America/Toronto")
+    sched = {"time": "06:50", "days": [0, 1, 2, 3, 4, 5, 6]}
+    for day in (7, 9):  # March 8, 2026 is when the clocks go forward
+        ms = _local_ms(2026, 3, day, 6, 50)
+        assert rs.due_start(sched, ms + 1000, tz) == ms
+        local = datetime.fromtimestamp(ms / 1000, tz)
+        assert (local.hour, local.minute) == (6, 50)
+    assert rs.zone("Not/AZone").key == "America/Toronto"
+    with pytest.raises(rs.ScheduleError):
+        rs.clean(True, "6:50", [1])
+    with pytest.raises(rs.ScheduleError):
+        rs.clean(True, "06:50", [])
+    with pytest.raises(rs.ScheduleError):
+        rs.clean(True, "06:50", [7])
+
+
+def test_daily_restart_api_guards_and_reads(client):
+    url = "/api/admin/deco/restart-schedule"
+    body = {"enabled": True, "time": "06:50", "days": [0, 1, 2, 3, 4, 5, 6]}
+    got = client.get(url).json()
+    assert got["enabled"] is False and got["time"] == "06:50" and got["actions"] is False
+    assert client.put(url, json=body).status_code == 403  # Deco actions are off
+    assert client.put(url, json={**body, "enabled": False}).status_code == 200  # off always works
+    client.put("/api/admin/settings", json={"changes": {"deco_actions": True}})
+    assert client.put(url, json={**body, "time": "25:00"}).status_code == 422
+    assert client.put(url, json={**body, "days": []}).status_code == 422
+    assert client.put(url, json={**body, "extra": 1}).status_code == 422
+    assert client.put(url, json=body, headers={"X-Requested-With": ""}).status_code == 403
+    r = client.put(url, json={**body, "time": "07:05", "days": [5, 6]})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["enabled"] and out["time"] == "07:05" and out["days"] == [5, 6]
+    assert out["next_ms"] and out["actions"] is True
+    log = [e["title"] for e in client.app.state.events.list(0, 10**14, kinds=["security"])]
+    assert "Deco: daily restart turned on at 07:05" in log

@@ -56,7 +56,8 @@ over always-allowed domains. A device not matched to its NetWatch client (for ex
 the user's own AdGuard Home client, listed as a conflict) gets AdGuard Home's global settings. \
 When a Deco looks at fault you may suggest restarting it: the diagnosis cause offers a \
 Restart button and Admin, Deco mesh lists each Deco, but only when \"Deco actions (restart)\" \
-is turned on in Admin settings. \
+is turned on in Admin settings. A daily restart of the whole Wi-Fi network can be scheduled \
+there too; a Deco going offline at that time is a planned restart, not a fault. \
 NetWatch also tracks who is home, speed tests against the internet plan, and whether each \
 integration is still reading.
 
